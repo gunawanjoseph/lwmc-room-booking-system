@@ -1,0 +1,25 @@
+node_modules
+.next
+.env
+.env.local
+.env.*.local
+!.env.local.example
+coverage
+dist
+*.log
+*.tsbuildinfo
+.DS_Store
+*.orig
+*.rej
+test.patch
+
+# Google credentials and deployment-specific calendar maps must never be
+# committed. Store their JSON contents in Convex environment variables.
+service-account.json
+production-service-account.json
+google-calendar-map.json
+production-google-calendar-map.json
+service-account.json
+service-account.json
+service-account.json
+google-calendar-map.json

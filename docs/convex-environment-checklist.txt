@@ -1,0 +1,170 @@
+# ROOMOPS CONVEX ENVIRONMENT CHECKLIST (v0.5.0)
+#
+# Set each variable in both deployments:
+#   Development: npx convex env set NAME
+#   Production:  npx convex env --prod set NAME
+#
+# Never commit secret values.
+
+# Clerk Frontend API URL for the matching Clerk instance.
+CLERK_JWT_ISSUER_DOMAIN=
+
+# Exact matching Clerk user_... subject for the sole Head Administrator.
+HEAD_ADMIN_CLERK_USER_ID=
+
+# Only accepted Jotform form.
+JOTFORM_FORM_ID=261740998492068
+
+# Standard, EU, or HIPAA API origin as applicable.
+JOTFORM_API_BASE_URL=https://api.jotform.com
+
+# Server-only read key for form questions and submissions.
+JOTFORM_API_KEY=
+
+# Distinct random URL secret for this deployment's webhook.
+JOTFORM_WEBHOOK_SECRET=
+
+# Stable qid mapping generated at /admin/integrations.
+JOTFORM_FIELD_MAP_JSON=
+
+# IANA zone for Jotform answers without an explicit offset.
+BOOKING_TIME_ZONE=Asia/Singapore
+
+# Keep false until the API, service account, calendar sharing, and map are ready.
+GOOGLE_CALENDAR_ENABLED=false
+
+# Base64 of the complete Google Calendar service-account JSON. Keep in Convex.
+# Do not put the key file or encoded value in .env.local, Vercel, or git.
+GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON_B64=
+
+# JSON object mapping all ten individual venue names to real Calendar IDs.
+# Required keys: Board Room; Counselling / Music Room; L1 Ministry Space;
+# Ministry Centre A; Ministry Centre B; Ministry Centre C; Office L2 Main Area;
+# Pastor Office; PIC Office; Shema Space.
+# Do not add Ministry Centre A & B or ABC; RoomOps fans those out itself.
+GOOGLE_CALENDAR_VENUE_MAP_JSON=
+
+# Used only when a repeating answer has neither count nor repeat-until.
+# Whole number from 2 through 120. Omit to use the code default of 12.
+BOOKING_RECURRENCE_DEFAULT_COUNT=12
+
+# Public application origin used in no-login approval links.
+# Use http://localhost:3000 only for same-computer development tests.
+APP_BASE_URL=
+
+# Gmail OAuth web-client credentials and offline refresh token for the
+# dedicated sending mailbox. Keep all values in Convex, never in Vercel.
+GMAIL_CLIENT_ID=
+GMAIL_CLIENT_SECRET=
+GMAIL_REFRESH_TOKEN=
+GMAIL_FROM_EMAIL=
+
+# [ ] Keep GOOGLE_CALENDAR_ENABLED=false while deploying v0.5.0.
+# [ ] As Head Administrator, run Normalize reservation claims at
+#     /admin/integrations until it reports Finished.
+# [ ] Change GOOGLE_CALENDAR_ENABLED to true and run the configuration check.
+#     Compare each returned Google calendar name with its RoomOps venue and
+#     confirm the effective access role is writer or owner.
+# [ ] If the check fails, set GOOGLE_CALENDAR_ENABLED=false while correcting
+#     the configuration. Repeat the setup and check separately in production.
+
+# No Google Sheet, spreadsheet-ID, worksheet-GID, range, or header-mapping
+# variable is required for a new v0.5.0 installation. Google Calendar uses
+# the four variables above; it does not use the retired Sheets variables.
+
+# JOTFORM FIELD-MAP TIMING MODES
+#
+# Same-day split fields:
+# {"requesterName":"3","requesterEmail":"4","room":"5","date":"6","startTime":"7","endTime":"8"}
+#
+# Split fields that can cross midnight:
+# {"requesterName":"3","requesterEmail":"4","room":"5","date":"6","startTime":"7","endDate":"8","endTime":"9"}
+#
+# Complete date-time fields:
+# {"requesterName":"3","requesterEmail":"4","room":"5","start":"6","end":"7"}
+#
+# Calendar title and recurrence fields (example qids only):
+# {"requesterName":"3","requesterEmail":"4","room":"5","eventName":"6","purpose":"7","ministry":"8","recurrence":"9","recurrenceCount":"10","recurrenceUntil":"11","date":"12","startTime":"13","endTime":"14"}
+#
+# Core questions use stable qids. Reordering or relabeling is safe. Deleting
+# and recreating a mapped core question can change its qid and needs remapping.
+# Non-core response questions require no mapping: Convex stores bounded text
+# (including explicit blanks) keyed by qid, and /sheet renders the columns.
+# Snapshot caps: 80 fields, 4,000 characters per answer, and 50,000 answer
+# characters total. Capped submissions are marked in /sheet and system logs.
+#
+# Supported recurrence choices:
+#   none
+#   daily
+#   weekly on the same day
+#   monthly on the same day (same ordinal weekday, such as third Friday)
+#   monthly on the same date (same numerical date)
+# Count includes the first occurrence. repeat-until is inclusive. If both are
+# supplied, the earlier bound wins. Monthly rules skip nonexistent dates or
+# ordinal weekdays. See docs/GOOGLE_CALENDAR_SETUP.md for the full semantics.
+
+# LOCAL .env.local VARIABLES (not Convex server variables)
+#
+# CONVEX_DEPLOYMENT
+# NEXT_PUBLIC_CONVEX_URL
+# NEXT_PUBLIC_CONVEX_SITE_URL
+# NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+# CLERK_SECRET_KEY
+# NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+# NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+# NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/home
+# NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/register
+#
+# Do not copy Calendar service-account values or Gmail OAuth values into
+# .env.local.
+
+# VERCEL PRODUCTION VARIABLES (not Convex server variables)
+#
+# CONVEX_DEPLOY_KEY
+# NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+# CLERK_SECRET_KEY
+# NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+# NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+# NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/home
+# NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/register
+# NEXT_PUBLIC_CONVEX_SITE_URL=https://YOUR-PRODUCTION-DEPLOYMENT.convex.site
+#
+# Do not manually set NEXT_PUBLIC_CONVEX_URL when the Vercel build runs
+# `npx convex deploy --cmd 'npm run build'`.
+
+# CONVEX DATA-TABLE AUTHORIZATION
+#
+# All active roles that can open /sheet can download its .xlsx export.
+# Table editing:
+#   Head Administrator -> Yes
+#   Data Editor         -> Yes
+#   Booking Manager     -> Yes
+#   Booking Viewer      -> No
+#   Booking Approver    -> No
+#
+# Table edits cover requester name, requester email, event name, purpose,
+# ministry, and non-core response values. Approved requester edits reconcile
+# the Calendar description; title-field edits reconcile title and description.
+# Room, time, status, and approve/reject remain in /bookings.
+
+# v0.2 GOOGLE SHEETS MIRROR -> v0.5.0 CONVEX TABLE CUTOVER
+#
+# This is for upgrades only; new installations skip it.
+#
+# [ ] Set GOOGLE_SHEETS_AUTO_SYNC=false in development and production.
+# [ ] Wait at least 11 minutes for legacy leases to drain.
+# [ ] Deploy v0.5.0 frontend and Convex functions.
+# [ ] Verify /sheet, /bookings, /admin/integrations, and a test submission.
+# [ ] Remove GOOGLE_SERVICE_ACCOUNT_JSON_B64.
+# [ ] Remove GOOGLE_SHEETS_SPREADSHEET_ID.
+# [ ] Remove GOOGLE_SHEETS_BOOKINGS_RANGE.
+# [ ] Remove GOOGLE_SHEETS_AUTO_SYNC.
+# [ ] Revoke the former service account's Sheet access and retire its key.
+#
+# GOOGLE_SERVICE_ACCOUNT_JSON_B64 is the retired Sheets key.
+# GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON_B64 is the new Calendar key.
+# Do not remove the Calendar key during the Sheets cutover.
+#
+# One-release compatibility handlers accept old records and terminate already
+# scheduled legacy jobs. They do not call Google, feed the UI, or schedule
+# another synchronization retry.

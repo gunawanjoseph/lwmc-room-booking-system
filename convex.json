@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/convex/schemas/convex.schema.json",
+  "codegen": {
+    "fileType": "ts"
+  },
+  "node": {
+    "nodeVersion": "22"
+  }
+}
