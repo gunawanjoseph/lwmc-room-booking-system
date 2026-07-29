@@ -24,6 +24,7 @@ export type JotformFieldMap = {
   purpose?: string;
   ministry?: string;
   recurrence?: string;
+  recurrenceHasEndDate?: string;
   recurrenceCount?: string;
   recurrenceUntil?: string;
   start?: string;
@@ -42,6 +43,7 @@ export type MappedBooking = {
   purpose?: string;
   ministry?: string;
   recurrenceFrequency: RecurrenceFrequency;
+  recurrenceHasEndDate?: boolean;
   recurrenceCount?: number;
   recurrenceUntilAt?: number;
   startAt: number;
@@ -57,6 +59,7 @@ export const JOTFORM_CANONICAL_FIELDS = [
   "purpose",
   "ministry",
   "recurrence",
+  "recurrenceHasEndDate",
   "recurrenceCount",
   "recurrenceUntil",
   "start",
@@ -137,47 +140,177 @@ function findOptionalAnswer(
   }
 }
 
-function objectString(value: Record<string, unknown>): string {
-  const preferredKeys = [
-    "first",
-    "middle",
-    "last",
-    "prefix",
-    "suffix",
-  ];
-  const preferred = preferredKeys
-    .map((key) => value[key])
-    .filter(
-      (part): part is string | number =>
-        typeof part === "string" || typeof part === "number",
-    )
-    .map(String)
-    .filter(Boolean);
+const MAX_SERIALIZED_ANSWER_DEPTH = 6;
+const MAX_SERIALIZED_ANSWER_VALUES = 200;
+const MAX_SERIALIZED_ANSWER_CHARS = 20_000;
+const NAME_PART_ORDER = [
+  "prefix",
+  "first",
+  "middle",
+  "last",
+  "suffix",
+] as const;
+const NAME_PART_KEYS = new Set<string>(NAME_PART_ORDER);
+const STRUCTURAL_JOTFORM_TYPES = new Set([
+  "control_button",
+  "control_collapse",
+  "control_divider",
+  "control_head",
+  "control_image",
+  "control_pagebreak",
+  "control_text",
+]);
 
-  if (preferred.length > 0) return preferred.join(" ");
+type SerializedAnswer = {
+  text: string;
+  truncated: boolean;
+};
 
-  return Object.values(value)
-    .filter(
-      (part): part is string | number =>
-        typeof part === "string" || typeof part === "number",
-    )
-    .map(String)
-    .filter(Boolean)
-    .join(" ");
+type AnswerSerializationState = {
+  visitedValues: number;
+  truncated: boolean;
+};
+
+function capSerializedText(
+  value: string,
+  state: AnswerSerializationState,
+): string {
+  if (value.length > MAX_SERIALIZED_ANSWER_CHARS) {
+    state.truncated = true;
+    return value.slice(0, MAX_SERIALIZED_ANSWER_CHARS);
+  }
+  return value;
+}
+
+function humanizeObjectKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim();
+}
+
+function serializeAnswerValue(
+  value: unknown,
+  state: AnswerSerializationState,
+  depth: number,
+): string {
+  state.visitedValues += 1;
+  if (state.visitedValues > MAX_SERIALIZED_ANSWER_VALUES) {
+    state.truncated = true;
+    return "";
+  }
+  if (depth > MAX_SERIALIZED_ANSWER_DEPTH) {
+    state.truncated = true;
+    return "…";
+  }
+  if (typeof value === "string") {
+    return capSerializedText(value, state);
+  }
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (value === null || value === undefined) return "";
+
+  if (Array.isArray(value)) {
+    const parts: string[] = [];
+    for (const item of value) {
+      const part = serializeAnswerValue(item, state, depth + 1).trim();
+      if (part) parts.push(part);
+      if (state.visitedValues >= MAX_SERIALIZED_ANSWER_VALUES) {
+        if (parts.length < value.length) state.truncated = true;
+        break;
+      }
+    }
+    return capSerializedText(parts.join(", "), state);
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    const isNameObject =
+      entries.length > 0 &&
+      entries.every(([key]) => NAME_PART_KEYS.has(key));
+    if (isNameObject) {
+      const record = value as Record<string, unknown>;
+      return capSerializedText(
+        NAME_PART_ORDER
+          .filter((key) =>
+            Object.prototype.hasOwnProperty.call(record, key),
+          )
+          .map((key) =>
+            serializeAnswerValue(
+              record[key],
+              state,
+              depth + 1,
+            ).trim(),
+          )
+          .filter(Boolean)
+          .join(" "),
+        state,
+      );
+    }
+
+    const parts: string[] = [];
+    for (const [key, nestedValue] of entries) {
+      const nested = serializeAnswerValue(
+        nestedValue,
+        state,
+        depth + 1,
+      ).trim();
+      if (nested) {
+        const label = humanizeObjectKey(key);
+        parts.push(label ? `${label}: ${nested}` : nested);
+      }
+      if (state.visitedValues >= MAX_SERIALIZED_ANSWER_VALUES) {
+        if (parts.length < entries.length) state.truncated = true;
+        break;
+      }
+    }
+    return capSerializedText(parts.join("; "), state);
+  }
+
+  return "";
+}
+
+function serializeAnswer(answer: JotformAnswer): SerializedAnswer {
+  const state: AnswerSerializationState = {
+    visitedValues: 0,
+    truncated: false,
+  };
+  const serialized = serializeAnswerValue(answer.answer, state, 0).trim();
+  const prettyFormat = answer.prettyFormat?.trim() ?? "";
+  const text = serialized || prettyFormat;
+  return {
+    text: capSerializedText(text, state),
+    truncated: state.truncated,
+  };
+}
+
+function isStructuralJotformAnswer(answer: JotformAnswer): boolean {
+  return STRUCTURAL_JOTFORM_TYPES.has(
+    answer.type?.trim().toLocaleLowerCase("en") ?? "",
+  );
 }
 
 export function answerAsText(answer: JotformAnswer): string {
-  const value = answer.answer;
-  if (typeof value === "string" || typeof value === "number") {
-    return String(value).trim();
-  }
-  if (Array.isArray(value)) {
-    return value.map(String).join(", ").trim();
-  }
-  if (value && typeof value === "object") {
-    return objectString(value as Record<string, unknown>).trim();
-  }
-  return answer.prettyFormat?.trim() ?? "";
+  return serializeAnswer(answer).text;
+}
+
+function answerAsOptionalBoolean(
+  answer: JotformAnswer | undefined,
+): boolean | undefined {
+  if (!answer) return undefined;
+  if (typeof answer.answer === "boolean") return answer.answer;
+  if (answer.answer === 1) return true;
+  if (answer.answer === 0) return false;
+
+  const value = answerAsText(answer)
+    .trim()
+    .toLocaleLowerCase("en")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  if (!value) return undefined;
+  if (["yes", "y", "true", "1"].includes(value)) return true;
+  if (["no", "n", "false", "0"].includes(value)) return false;
+  throw new Error("JOTFORM_RECURRENCE_END_DATE_CHOICE_INVALID");
 }
 
 function compactSingleLine(value: string, maxLength: number): string {
@@ -216,12 +349,20 @@ export function snapshotJotformAnswers(
       // Jotform question IDs are numeric. Restricting the key here keeps
       // arbitrary object properties from becoming application column IDs.
       if (!/^\d{1,20}$/.test(qid)) return [];
-      // Optional questions arrive with an explicit empty `answer`. Preserve
-      // mapped core fields defensively even if Jotform represents one through
-      // prettyFormat alone; other entries without `answer` are structural.
+      // Optional questions usually arrive with an explicit empty `answer`.
+      // Some widgets expose only `prettyFormat`; retain that display value
+      // while excluding known headings, page breaks, and other structural
+      // controls. A configured core field remains eligible defensively so a
+      // malformed mapping fails in the canonical parser instead of silently
+      // disappearing from the response snapshot.
+      const canonicalField = canonicalByAnswer.get(answer);
+      if (!canonicalField && isStructuralJotformAnswer(answer)) {
+        return [];
+      }
       if (
         !Object.prototype.hasOwnProperty.call(answer, "answer") &&
-        !canonicalByAnswer.has(answer)
+        !answer.prettyFormat?.trim() &&
+        !canonicalField
       ) {
         return [];
       }
@@ -229,7 +370,7 @@ export function snapshotJotformAnswers(
         {
           qid,
           answer,
-          canonicalField: canonicalByAnswer.get(answer),
+          canonicalField,
         },
       ];
     })
@@ -263,7 +404,11 @@ export function snapshotJotformAnswers(
     answer,
     canonicalField,
   } of eligible.slice(0, MAX_SNAPSHOT_FIELDS)) {
-    const fullValue = cleanResponseValue(answerAsText(answer));
+    const serializedAnswer = serializeAnswer(answer);
+    const fullValue = cleanResponseValue(serializedAnswer.text);
+    if (serializedAnswer.truncated) {
+      truncated = true;
+    }
     const perFieldValue = fullValue.slice(
       0,
       MAX_SNAPSHOT_VALUE_CHARS,
@@ -499,6 +644,22 @@ export function parseFieldMap(json: string): JotformFieldMap {
   if (!hasFullDateTimes && !hasSplitDateTimes) {
     throw new Error("JOTFORM_FIELD_MAP_MISSING:date/time");
   }
+  if (
+    !normalizedMap.recurrence &&
+    (normalizedMap.recurrenceHasEndDate ||
+      normalizedMap.recurrenceCount ||
+      normalizedMap.recurrenceUntil)
+  ) {
+    throw new Error("JOTFORM_FIELD_MAP_MISSING:recurrence");
+  }
+  if (
+    normalizedMap.recurrenceHasEndDate &&
+    !normalizedMap.recurrenceUntil
+  ) {
+    throw new Error(
+      "JOTFORM_FIELD_MAP_MISSING:recurrenceUntil",
+    );
+  }
 
   const selectorOwners = new Map<string, JotformCanonicalField>();
   for (const [field, selector] of Object.entries(normalizedMap) as Array<
@@ -550,6 +711,10 @@ export function mapJotformBooking(
     answers,
     fieldMap.recurrenceCount,
   );
+  const recurrenceHasEndDateAnswer = findOptionalAnswer(
+    answers,
+    fieldMap.recurrenceHasEndDate,
+  );
   const recurrenceUntilAnswer = findOptionalAnswer(
     answers,
     fieldMap.recurrenceUntil,
@@ -567,52 +732,75 @@ export function mapJotformBooking(
     recurrenceAnswer ? answerAsText(recurrenceAnswer) : undefined,
   );
 
+  let recurrenceHasEndDate: boolean | undefined;
   let recurrenceCount: number | undefined;
-  if (recurrenceCountAnswer) {
-    const countText = answerAsText(recurrenceCountAnswer);
-    if (countText) {
-      if (!/^\d{1,3}$/.test(countText)) {
-        throw new Error("JOTFORM_RECURRENCE_COUNT_INVALID");
-      }
-      recurrenceCount = Number(countText);
-      if (
-        recurrenceCount < 1 ||
-        recurrenceCount > MAX_RECURRENCE_OCCURRENCES
-      ) {
-        throw new Error("JOTFORM_RECURRENCE_COUNT_INVALID");
-      }
-    }
-  }
-
   let recurrenceUntilAt: number | undefined;
-  if (
-    recurrenceUntilAnswer &&
-    answerAsText(recurrenceUntilAnswer)
-  ) {
-    recurrenceUntilAt = parseDateAnswer(
-      recurrenceUntilAnswer,
-      timezone,
-    )
-      .endOf("day")
-      .toMillis();
-  }
-
   if (recurrenceFrequency === "none") {
+    // Conditional Jotform controls can retain hidden stale values. They are
+    // irrelevant for a one-time request and must not make intake fail.
+    recurrenceHasEndDate = false;
     recurrenceCount = 1;
-    recurrenceUntilAt = undefined;
-  } else if (
-    recurrenceCount === undefined &&
-    recurrenceUntilAt === undefined
-  ) {
-    const defaultCount = options.defaultRecurrenceCount ?? 12;
-    if (
-      !Number.isInteger(defaultCount) ||
-      defaultCount < 2 ||
-      defaultCount > MAX_RECURRENCE_OCCURRENCES
-    ) {
-      throw new Error("BOOKING_RECURRENCE_DEFAULT_COUNT_INVALID");
+  } else {
+    recurrenceHasEndDate = answerAsOptionalBoolean(
+      recurrenceHasEndDateAnswer,
+    );
+
+    // Kept for compatibility with older forms that asked for an explicit
+    // count. Once the new Yes/No field is mapped it is authoritative: Yes is
+    // bounded by the last date and No uses the configured safe default, even
+    // if an obsolete count question remains in the environment mapping.
+    if (!fieldMap.recurrenceHasEndDate && recurrenceCountAnswer) {
+      const countText = answerAsText(recurrenceCountAnswer);
+      if (countText) {
+        if (!/^\d{1,3}$/.test(countText)) {
+          throw new Error("JOTFORM_RECURRENCE_COUNT_INVALID");
+        }
+        recurrenceCount = Number(countText);
+        if (
+          recurrenceCount < 1 ||
+          recurrenceCount > MAX_RECURRENCE_OCCURRENCES
+        ) {
+          throw new Error("JOTFORM_RECURRENCE_COUNT_INVALID");
+        }
+      }
     }
-    recurrenceCount = defaultCount;
+
+    const recurrenceUntilText = recurrenceUntilAnswer
+      ? answerAsText(recurrenceUntilAnswer)
+      : "";
+    if (recurrenceHasEndDate === true && !recurrenceUntilText) {
+      throw new Error("JOTFORM_RECURRENCE_UNTIL_REQUIRED");
+    }
+    if (
+      recurrenceHasEndDate !== false &&
+      recurrenceUntilAnswer &&
+      recurrenceUntilText
+    ) {
+      recurrenceUntilAt = parseDateAnswer(
+        recurrenceUntilAnswer,
+        timezone,
+      )
+        .endOf("day")
+        .toMillis();
+      // A deployment whose map predates the Yes/No question keeps the old
+      // behavior: a supplied last date is treated as an explicit end.
+      recurrenceHasEndDate ??= true;
+    }
+
+    if (
+      recurrenceCount === undefined &&
+      recurrenceUntilAt === undefined
+    ) {
+      const defaultCount = options.defaultRecurrenceCount ?? 12;
+      if (
+        !Number.isInteger(defaultCount) ||
+        defaultCount < 2 ||
+        defaultCount > MAX_RECURRENCE_OCCURRENCES
+      ) {
+        throw new Error("BOOKING_RECURRENCE_DEFAULT_COUNT_INVALID");
+      }
+      recurrenceCount = defaultCount;
+    }
   }
 
   let start: DateTime;
@@ -662,6 +850,7 @@ export function mapJotformBooking(
     purpose: purpose || undefined,
     ministry: ministry || undefined,
     recurrenceFrequency,
+    recurrenceHasEndDate,
     recurrenceCount,
     recurrenceUntilAt,
     startAt: start.toMillis(),

@@ -7,16 +7,21 @@ import { useAction, useQuery } from "convex/react";
 import { Check, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { PublicEmailDecisionView } from "@/convex/lib/emailDecisionView";
-import { formatDateTime, messageFromError } from "@/lib/ui";
+import {
+  formatDate,
+  formatDateTime,
+  messageFromError,
+} from "@/lib/ui";
 
 type DecisionInfo = PublicEmailDecisionView;
 
 const recurrenceLabels = {
   none: "Does not repeat",
   daily: "Daily",
-  weekly_same_day: "Weekly on the same day",
-  monthly_same_day: "Monthly on the same ordinal weekday",
-  monthly_same_date: "Monthly on the same date",
+  weekly_same_day: "Every week",
+  biweekly_same_day: "Every 2 weeks",
+  monthly_same_day: "Every month on the same day",
+  monthly_same_date: "Every month on the same date",
 } as const;
 
 export default function EmailDecisionPage() {
@@ -120,6 +125,15 @@ export default function EmailDecisionPage() {
                     }{" "}
                     · {info.booking.recurrenceCount} occurrences
                   </small>
+                  {info.booking.recurrenceUntilAt !== undefined && (
+                    <small>
+                      Requested last date:{" "}
+                      {formatDate(
+                        info.booking.recurrenceUntilAt,
+                        info.booking.timezone,
+                      )}
+                    </small>
+                  )}
                   {info.booking.occurrences.length > 1 && (
                     <small>
                       Final occurrence:{" "}

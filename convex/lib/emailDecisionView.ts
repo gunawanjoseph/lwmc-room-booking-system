@@ -28,6 +28,7 @@ export type EmailDecisionBooking = {
     | "none"
     | "daily"
     | "weekly_same_day"
+    | "biweekly_same_day"
     | "monthly_same_day"
     | "monthly_same_date";
   recurrenceCount?: number;
@@ -63,6 +64,7 @@ export type PublicEmailDecisionView =
           | "none"
           | "daily"
           | "weekly_same_day"
+          | "biweekly_same_day"
           | "monthly_same_day"
           | "monthly_same_date";
         recurrenceCount: number;

@@ -64,8 +64,18 @@ const commonFields = [
   ["purpose", "Purpose (optional)"],
   ["ministry", "Ministry (optional)"],
   ["recurrence", "Repeat option (optional)"],
-  ["recurrenceCount", "Number of occurrences (optional)"],
-  ["recurrenceUntil", "Repeat-until date (optional)"],
+  [
+    "recurrenceHasEndDate",
+    "Does the recurring booking have an end date? (optional pair)",
+  ],
+  [
+    "recurrenceCount",
+    "Legacy number of occurrences (ignored with the Yes/No question)",
+  ],
+  [
+    "recurrenceUntil",
+    "Last date required (map with the end-date question)",
+  ],
 ] as const;
 
 const optionalMappingFields = new Set([
@@ -73,6 +83,7 @@ const optionalMappingFields = new Set([
   "purpose",
   "ministry",
   "recurrence",
+  "recurrenceHasEndDate",
   "recurrenceCount",
   "recurrenceUntil",
   "endDate",
@@ -159,6 +170,20 @@ export default function IntegrationsPage() {
     );
     if (missing.length > 0) {
       return `Choose all required questions: ${missing.join(", ")}.`;
+    }
+    if (
+      !selections.recurrence &&
+      (selections.recurrenceHasEndDate ||
+        selections.recurrenceCount ||
+        selections.recurrenceUntil)
+    ) {
+      return "Map the repeat-option question whenever any recurrence end-date or legacy count question is mapped.";
+    }
+    if (
+      selections.recurrenceHasEndDate &&
+      !selections.recurrenceUntil
+    ) {
+      return "Map “What is the LAST date required for the booking?” whenever the recurring-booking end-date question is mapped.";
     }
     const owners = new Map<string, string>();
     for (const [key] of mappingFields) {
@@ -300,7 +325,7 @@ export default function IntegrationsPage() {
       for (let page = 0; page < 50; page += 1) {
         const result = await rebuildActiveClaimsPage({
           paginationOpts: {
-            numItems: 25,
+            numItems: 2,
             cursor,
           },
         });
@@ -371,7 +396,7 @@ export default function IntegrationsPage() {
               <dt>Form</dt>
               <dd>
                 <a
-                  href="https://form.jotform.com/261740998492068"
+                  href="https://submit.jotform.com/261740998492068"
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -487,7 +512,10 @@ export default function IntegrationsPage() {
             </div>
             <div>
               <dt>Recurring series</dt>
-              <dd>Daily, weekly, ordinal weekday, or same date</dd>
+              <dd>
+                Daily, every week, every 2 weeks, ordinal weekday, or
+                same date
+              </dd>
             </div>
           </dl>
           <button

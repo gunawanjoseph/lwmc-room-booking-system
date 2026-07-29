@@ -4,6 +4,7 @@ export const RECURRENCE_FREQUENCIES = [
   "none",
   "daily",
   "weekly_same_day",
+  "biweekly_same_day",
   "monthly_same_day",
   "monthly_same_date",
 ] as const;
@@ -39,17 +40,57 @@ export type ExpandRecurrenceInput = {
  * Keeps a single request from creating an unexpectedly large number of
  * database records, conflict checks, or downstream calendar events.
  */
-export const MAX_RECURRENCE_OCCURRENCES = 120;
+export const MAX_RECURRENCE_OCCURRENCES = 10000;
 
 /**
  * An until-only rule needs both an occurrence cap and a calendar horizon so
  * sparse monthly patterns cannot scan indefinitely.
  */
-export const MAX_RECURRENCE_HORIZON_YEARS = 5;
+export const MAX_RECURRENCE_HORIZON_YEARS = 20;
 
 const RECURRENCE_FREQUENCY_SET = new Set<string>(
   RECURRENCE_FREQUENCIES,
 );
+
+/**
+ * Keeps metadata-only booking edits from silently changing the concrete
+ * length of an existing series when the deployment's default count changes.
+ */
+export function recurrenceCountForAdminEdit(input: {
+  frequency: RecurrenceFrequency;
+  hasEndDate: boolean;
+  definitionChanged: boolean;
+  existingOccurrenceCount?: number;
+  defaultOccurrenceCount: () => number;
+}): number | undefined {
+  if (input.frequency === "none") return 1;
+  if (
+    !input.definitionChanged &&
+    input.existingOccurrenceCount !== undefined
+  ) {
+    return input.existingOccurrenceCount;
+  }
+  if (input.hasEndDate) return undefined;
+  return input.defaultOccurrenceCount();
+}
+
+export function recurrenceDefinitionChanged(input: {
+  currentFrequency: RecurrenceFrequency;
+  currentHasEndDate: boolean;
+  currentStartAt: number;
+  currentUntilAt?: number;
+  nextFrequency: RecurrenceFrequency;
+  nextHasEndDate: boolean;
+  nextStartAt: number;
+  nextUntilAt?: number;
+}): boolean {
+  return (
+    input.nextFrequency !== input.currentFrequency ||
+    input.nextHasEndDate !== input.currentHasEndDate ||
+    input.nextStartAt !== input.currentStartAt ||
+    input.nextUntilAt !== input.currentUntilAt
+  );
+}
 
 function recurrenceError(code: string): never {
   throw new Error(code);
@@ -95,15 +136,28 @@ export function parseRecurrenceFrequency(
     once: "none",
     daily: "daily",
     every_day: "daily",
+    every_week: "weekly_same_day",
     weekly_same_day: "weekly_same_day",
     weekly_on_same_day: "weekly_same_day",
     weekly_on_the_same_day: "weekly_same_day",
+    biweekly: "biweekly_same_day",
+    fortnightly: "biweekly_same_day",
+    every_2_weeks: "biweekly_same_day",
+    every_two_weeks: "biweekly_same_day",
+    every_other_week: "biweekly_same_day",
+    biweekly_same_day: "biweekly_same_day",
+    biweekly_on_same_day: "biweekly_same_day",
+    biweekly_on_the_same_day: "biweekly_same_day",
+    every_month_on_same_day: "monthly_same_day",
+    every_month_on_the_same_day: "monthly_same_day",
     monthly_same_day: "monthly_same_day",
     monthly_same_weekday: "monthly_same_day",
     monthly_on_same_day: "monthly_same_day",
     monthly_on_the_same_day: "monthly_same_day",
     monthly_on_same_weekday: "monthly_same_day",
     monthly_on_the_same_weekday: "monthly_same_day",
+    every_month_on_same_date: "monthly_same_date",
+    every_month_on_the_same_date: "monthly_same_date",
     monthly_same_date: "monthly_same_date",
     monthly_on_same_date: "monthly_same_date",
     monthly_on_the_same_date: "monthly_same_date",
@@ -179,6 +233,9 @@ function occurrenceAtStep(
     case "weekly_same_day":
       dayShift = step * 7;
       break;
+    case "biweekly_same_day":
+      dayShift = step * 14;
+      break;
     case "monthly_same_date": {
       const target = monthlySameDateTarget(baseStart, step);
       if (!target) return null;
@@ -210,6 +267,51 @@ function occurrenceAtStep(
     startAt: start.toMillis(),
     endAt: end.toMillis(),
   };
+}
+
+/**
+ * Google expands RRULE start times in the event timezone but applies the
+ * first event's exact DTSTART/DTEND duration to every generated instance.
+ * That can diverge from RoomOps' wall-clock start/end expansion at a UTC
+ * offset transition. Reject new expansions before they reserve divergent
+ * intervals, and reject legacy stored occurrence sets before Calendar can
+ * emit a divergent RRULE.
+ */
+export function assertRecurrenceOccurrencesHaveStableUtcOffset(
+  occurrences: readonly Pick<
+    RecurrenceOccurrence,
+    "startAt" | "endAt"
+  >[],
+  timezone: string,
+): void {
+  if (occurrences.length < 2) return;
+
+  const initialStart = DateTime.fromMillis(occurrences[0].startAt, {
+    zone: timezone,
+  });
+  if (!initialStart.isValid) {
+    recurrenceError("RECURRENCE_TIMEZONE_INVALID");
+  }
+  const initialOffset = initialStart.offset;
+  for (const occurrence of occurrences) {
+    const start = DateTime.fromMillis(occurrence.startAt, {
+      zone: timezone,
+    });
+    const end = DateTime.fromMillis(occurrence.endAt, {
+      zone: timezone,
+    });
+    if (!start.isValid || !end.isValid) {
+      recurrenceError("RECURRENCE_TIMEZONE_INVALID");
+    }
+    if (
+      start.offset !== initialOffset ||
+      end.offset !== initialOffset
+    ) {
+      recurrenceError(
+        "RECURRENCE_TIMEZONE_OFFSET_TRANSITION_UNSUPPORTED",
+      );
+    }
+  }
 }
 
 function validateInput(input: ExpandRecurrenceInput): {
@@ -346,6 +448,10 @@ export function expandRecurrence(
   if (occurrences.length === 0) {
     recurrenceError("RECURRENCE_HAS_NO_OCCURRENCES");
   }
+  assertRecurrenceOccurrencesHaveStableUtcOffset(
+    occurrences,
+    input.timezone,
+  );
   return occurrences;
 }
 
@@ -397,6 +503,8 @@ export function buildGoogleRecurrenceRule(input: {
       return `RRULE:FREQ=DAILY;${count}`;
     case "weekly_same_day":
       return `RRULE:FREQ=WEEKLY;BYDAY=${GOOGLE_WEEKDAYS[start.weekday]};${count}`;
+    case "biweekly_same_day":
+      return `RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=${GOOGLE_WEEKDAYS[start.weekday]};${count}`;
     case "monthly_same_day": {
       const ordinal = Math.floor((start.day - 1) / 7) + 1;
       return `RRULE:FREQ=MONTHLY;BYDAY=${ordinal}${GOOGLE_WEEKDAYS[start.weekday]};${count}`;

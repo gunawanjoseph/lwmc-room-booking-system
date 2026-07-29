@@ -1,7 +1,8 @@
 # RoomOps integration setup
 
-This guide connects RoomOps to Clerk, Convex, Jotform form
-`261740998492068`, Google Calendar, and Vercel.
+This guide connects RoomOps to Clerk, Convex,
+[Jotform form 261740998492068](https://submit.jotform.com/261740998492068),
+Google Calendar, and Vercel.
 
 RoomOps uses one booking-data path:
 
@@ -197,8 +198,8 @@ key and the production deployment's settings.
 2. Open `/admin/integrations`.
 3. Select **Inspect configured form**.
 4. Map requester name, requester email, room, optional event name,
-   purpose, ministry, recurrence fields, and the required date/time
-   fields.
+   purpose, ministry, recurrence fields (including the new end-date
+   Yes/No and last-date questions), and the required date/time fields.
 5. Copy the generated JSON.
 6. Set it:
 
@@ -209,7 +210,7 @@ npx convex env set JOTFORM_FIELD_MAP_JSON
 Example for one date and separate start/end times:
 
 ```json
-{"requesterName":"3","requesterEmail":"4","room":"5","eventName":"9","purpose":"10","ministry":"11","recurrence":"12","recurrenceCount":"13","recurrenceUntil":"14","date":"6","startTime":"7","endTime":"8"}
+{"requesterName":"3","requesterEmail":"4","room":"5","eventName":"9","purpose":"10","ministry":"11","recurrence":"12","recurrenceHasEndDate":"13","recurrenceUntil":"14","date":"6","startTime":"7","endTime":"8"}
 ```
 
 Example for a booking that can cross midnight:
@@ -221,13 +222,36 @@ Example for a booking that can cross midnight:
 Use the qids from the inspector, not the example numbers. The optional
 recurrence keys are:
 
-- `recurrence` — no repeat, daily, weekly on the same day, monthly on the
-  same day, or monthly on the same date;
-- `recurrenceCount` — total occurrences, including the first; and
-- `recurrenceUntil` — inclusive final local date.
+- `recurrence` — **No repeat**, **Daily**, **Every week**,
+  **Every 2 weeks**, **Every month on the same day**, or
+  **Every month on the same date**;
+- `recurrenceHasEndDate` — the answer to
+  **Does this recurring booking have an end date?**;
+- `recurrenceUntil` — the answer to
+  **What is the LAST date required for the booking?**; and
+- `recurrenceCount` — optional compatibility mapping for an older form
+  that supplied a total occurrence count.
 
-If a repeating request supplies neither count nor until date, RoomOps
-uses `BOOKING_RECURRENCE_DEFAULT_COUNT`.
+For a repeating request, **Yes** requires a nonblank last date and that
+date is inclusive in `BOOKING_TIME_ZONE`. **No** deliberately ignores
+any stale hidden last-date value and uses
+`BOOKING_RECURRENCE_DEFAULT_COUNT`. If
+`recurrenceHasEndDate` is absent from an older deployment's mapping,
+RoomOps preserves the earlier behavior: it honors a supplied
+`recurrenceUntil`, otherwise it uses the configured default count.
+If an upgraded environment still maps the retired
+`recurrenceCount` question together with `recurrenceHasEndDate`, the new
+Yes/No answer is authoritative: **Yes** uses the last date and **No**
+uses `BOOKING_RECURRENCE_DEFAULT_COUNT`. Remove the obsolete count
+mapping after confirming the new questions.
+Multi-occurrence series may not cross a daylight-saving or other
+UTC-offset transition in `BOOKING_TIME_ZONE`; split those requests into
+series on one side of the transition or use one-time bookings for the
+affected dates. Conflict checks globally deduplicate current and legacy
+claim-room aliases before querying. If the unique-alias count multiplied
+by all UTC dates touched across the occurrences exceeds the conservative
+3,000-range transaction budget, RoomOps rejects the request with
+`BOOKING_CONFLICT_LOOKUP_RANGE_LIMIT_EXCEEDED`.
 
 The core mapping is deliberately qid-based:
 
@@ -305,7 +329,10 @@ complete setup and test procedure. In summary:
 8. As Head Administrator, open `/admin/integrations` and run
    **Normalize reservation claims → Rebuild active claims**. Select
    **Continue** until it reports **Finished**. If it reports skipped
-   bookings, resolve them and run the normalization again.
+   bookings, resolve them and run the normalization again. The migration
+   intentionally rebuilds at most two bookings per Convex mutation so
+   removing old claims plus inserting new claims stays safely below the
+   transaction write limit.
 9. Set `GOOGLE_CALENDAR_ENABLED=true`, then immediately run the
    configuration check. Confirm every returned Google calendar name
    matches its RoomOps venue and every access role is `writer` or
@@ -343,13 +370,13 @@ checks and books A, B, and C. Every occurrence and physical venue must be
 available. Approval performs a second availability check before writing
 events.
 
-The supported repeat modes are daily, weekly on the same day, monthly on
-the same ordinal weekday, and monthly on the same numerical date. Monthly
-rules skip a month when the requested date or ordinal weekday does not
-exist. Occurrences within one request cannot overlap. A request is also
-limited to 2,000 claim slots, counted across the UTC dates touched by
-every occurrence and every physical venue. See the detailed guide for
-count/until rules and test cases.
+The supported repeat modes are no repeat, daily, every week, every two
+weeks, monthly on the same ordinal weekday, and monthly on the same
+numerical date. Monthly rules skip a month when the requested date or
+ordinal weekday does not exist. Occurrences within one request cannot
+overlap. A request is also limited to 2,000 claim slots, counted across
+the UTC dates touched by every occurrence and every physical venue. See
+the detailed guide for end-date rules and test cases.
 
 ## 6. Use the Convex booking-data table
 
@@ -371,13 +398,13 @@ or canonical question IDs.
 
 ### Role behavior
 
-| Role | View data table | Download XLSX | Approve/reject | Edit table data | Edit canonical booking | Manage users/integrations |
-|---|---:|---:|---:|---:|---:|---:|
-| Head Administrator | Yes | Yes | Yes | Yes | Yes | Yes |
-| Booking Viewer | Yes | Yes | No | No | No | No |
-| Booking Approver | Yes | Yes | Yes | No | No | No |
-| Data Editor | Yes | Yes | No | Yes | No | No |
-| Booking Manager | Yes | Yes | Yes | Yes | Yes | No |
+| Role | View data table | Download XLSX | Approve/reject | Edit table data | Edit canonical booking | Delete booking | Manage users/integrations |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Head Administrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Booking Viewer | Yes | Yes | No | No | No | No | No |
+| Booking Approver | Yes | Yes | Yes | No | No | No | No |
+| Data Editor | Yes | Yes | No | Yes | No | Yes | No |
+| Booking Manager | Yes | Yes | Yes | Yes | Yes | Yes | No |
 
 All table viewers may download the authorized booking data as `.xlsx`.
 The workbook includes canonical columns and qid-keyed dynamic columns.
@@ -408,6 +435,21 @@ the browser. A table save uses record revisions so one administrator does
 not silently overwrite another administrator's newer change. Reload the
 data and reapply the intended edit if a conflict is reported.
 
+Head Administrator, Data Editor, and Booking Manager may also delete a
+booking from Booking data; Head Administrator and Booking Manager also
+see the same action in Bookings. This is a coordinated deletion, not a
+raw row removal. RoomOps acquires a per-booking lease, verifies the
+ownership metadata and ETag of every stored managed or attempted Google
+Calendar event, removes those events, and only then atomically deletes
+the Convex booking, claims, and decision links while cancelling
+outstanding email work. If Google cleanup fails, the row and event
+references remain available for a safe retry. Booking Approver and
+Booking Viewer cannot invoke this action, even by calling Convex
+directly. The same action may remove an intake row stranded during its
+availability check: it invalidates the receipt and prevents a late
+worker from finalizing or sending new workflow messages for the removed
+booking.
+
 ## 7. Upgrade from the v0.2 Google Sheets API mirror
 
 This section applies only to an installation that previously configured
@@ -424,7 +466,7 @@ npx convex env --prod set GOOGLE_SHEETS_AUTO_SYNC false
 
 2. Wait at least **11 minutes** for the longest legacy sync lease to
    drain.
-3. Deploy v0.5.0. Its compatibility handlers terminate any
+3. Deploy v0.7.0. Its compatibility handlers terminate any
    remaining scheduled legacy jobs without calling Google or scheduling
    another retry.
 4. Before normal traffic resumes, sign in as Head Administrator, open
@@ -452,7 +494,7 @@ npx convex env --prod remove GOOGLE_SHEETS_AUTO_SYNC
 
 Legacy schema fields and worker entry points remain for one release so an
 in-place deployment accepts old records and already scheduled jobs. They
-do not drive the v0.5.0 UI, table, or export path. New installations
+do not drive the v0.7.0 UI, table, or export path. New installations
 should not set any of these legacy variables.
 
 The retired Sheets key is named `GOOGLE_SERVICE_ACCOUNT_JSON_B64`. It is
@@ -483,8 +525,9 @@ Manual checks:
 6. Approve it and confirm the event appears on the correct venue calendar.
 7. Create an existing busy Calendar event, submit an overlapping request,
    and confirm RoomOps marks it unavailable.
-8. Submit and approve short daily, weekly, monthly-same-day, and
-   monthly-same-date series.
+8. Submit and approve short daily, weekly, every-two-weeks,
+   monthly-same-day, and monthly-same-date series. Test both **Yes** with
+   a last date and **No** with a deliberately stale hidden date value.
 9. Confirm a self-overlapping recurrence and a request exceeding 2,000
    claim slots are rejected before approval.
 10. Submit Ministry Centre A & B and Ministry Centre ABC tests; confirm
@@ -504,11 +547,15 @@ Manual checks:
 16. In development, force an approved reconciliation failure, restore
     Calendar access, and use the circular-arrow retry action as Head
     Administrator or Booking Manager.
-17. Confirm room, time, status, and approval are not editable in the data
+17. As a Booking Manager, edit the recurrence and last date of a pending
+    booking. Confirm claims and the concrete final occurrence are rebuilt.
+    Confirm recurrence remains locked after a decision.
+18. Confirm room, time, status, and approval are not editable in the data
     table.
-17. Download `.xlsx` as each role that can view the table.
-18. Sign in with each administrator role and verify the matrix above.
-19. Review the audit log for the intake, Calendar, edit, retry, and export
+19. Download `.xlsx` as each role that can view the table and confirm the
+    requested last date and concrete final occurrence columns.
+20. Sign in with each administrator role and verify the matrix above.
+21. Review the audit log for the intake, Calendar, edit, retry, and export
     events.
 
 ## 9. Deploy to Vercel and production Convex
@@ -616,8 +663,16 @@ and match the structured error code in `/logs`. In particular:
   venue became busy.
 - `BOOKING_OCCURRENCES_SELF_OVERLAP` means occurrences within the same
   recurrence overlap each other.
+- `RECURRENCE_TIMEZONE_OFFSET_TRANSITION_UNSUPPORTED` means the series
+  crosses a daylight-saving or other UTC-offset change and must be split
+  into offset-stable series or one-time bookings.
 - `BOOKING_CLAIM_SLOT_LIMIT_EXCEEDED` means the request would create more
   than 2,000 UTC-day-by-physical-venue reservation claims.
+- `BOOKING_CONFLICT_LOOKUP_RANGE_LIMIT_EXCEEDED` means the unique
+  current/legacy claim-room aliases multiplied by all occurrence UTC
+  dates would require more than the conservative 3,000 indexed lookups
+  reserved for one transaction. Shorten the series or duration, or split
+  the request.
 
 Development and production Convex variables are independent. A working
 development check does not configure production.
@@ -642,12 +697,14 @@ replacement event.
 Wait for active Calendar synchronization to finish and inspect `/logs`
 for invalid legacy booking data. Then select **Rebuild active claims**
 again and continue until a full pass finishes without unexpected skips.
-The operation is idempotent.
+The operation is idempotent. Each mutation handles at most two bookings
+to leave room for both old-claim deletions and rebuilt-claim inserts; the
+page runs multiple mutations automatically.
 
 ### The browser still reports a Google Sheets configuration error
 
 The frontend and Convex deployment are on different code versions, or a
-stale client is still open. Deploy both v0.5.0 frontend and Convex
+stale client is still open. Deploy both v0.7.0 frontend and Convex
 functions, then reload. The current `/sheet` route does not require any
 Google Sheets variable.
 

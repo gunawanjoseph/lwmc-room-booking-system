@@ -34,7 +34,7 @@ export default function LandingPage() {
         <div className="landing-actions">
           <a
             className="text-link hide-mobile"
-            href="https://form.jotform.com/261740998492068"
+            href="https://submit.jotform.com/261740998492068"
             target="_blank"
             rel="noreferrer"
           >
@@ -66,7 +66,7 @@ export default function LandingPage() {
               Open admin workspace <ArrowRight size={17} />
             </Link>
             <a
-              href="https://form.jotform.com/261740998492068"
+              href="https://submit.jotform.com/261740998492068"
               target="_blank"
               rel="noreferrer"
               className="button button-secondary"

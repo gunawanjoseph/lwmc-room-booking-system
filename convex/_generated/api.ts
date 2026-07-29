@@ -18,6 +18,7 @@ import type * as http from "../http.js";
 import type * as jotform from "../jotform.js";
 import type * as lib_actionAuth from "../lib/actionAuth.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_bookingDeletion from "../lib/bookingDeletion.js";
 import type * as lib_bookingOverview from "../lib/bookingOverview.js";
 import type * as lib_bookingRules from "../lib/bookingRules.js";
 import type * as lib_calendarTransition from "../lib/calendarTransition.js";
@@ -50,6 +51,7 @@ const fullApi: ApiFromModules<{
   jotform: typeof jotform;
   "lib/actionAuth": typeof lib_actionAuth;
   "lib/auth": typeof lib_auth;
+  "lib/bookingDeletion": typeof lib_bookingDeletion;
   "lib/bookingOverview": typeof lib_bookingOverview;
   "lib/bookingRules": typeof lib_bookingRules;
   "lib/calendarTransition": typeof lib_calendarTransition;

@@ -21,9 +21,14 @@ import {
   type VenueCalendarTarget,
 } from "./lib/googleCalendar";
 import {
+  assertRecurrenceOccurrencesHaveStableUtcOffset,
   buildGoogleRecurrenceRule,
   type RecurrenceFrequency,
 } from "./lib/recurrence";
+import {
+  managedCalendarEventsExcluding,
+  type ManagedCalendarEventReference,
+} from "./lib/bookingDeletion";
 
 type Booking = Doc<"bookings">;
 type CalendarApprovalStart =
@@ -79,10 +84,17 @@ function recurrenceForBooking(
   booking: Booking,
   occurrences: readonly GoogleCalendarOccurrence[],
 ): readonly string[] | undefined {
+  const frequency =
+    (booking.recurrenceFrequency as RecurrenceFrequency | undefined) ??
+    "none";
+  if (frequency !== "none" && occurrences.length > 1) {
+    assertRecurrenceOccurrencesHaveStableUtcOffset(
+      occurrences,
+      booking.timezone,
+    );
+  }
   const rule = buildGoogleRecurrenceRule({
-    frequency:
-      (booking.recurrenceFrequency as RecurrenceFrequency | undefined) ??
-      "none",
+    frequency,
     occurrenceCount: occurrences.length,
     startAt: booking.startAt,
     timezone: booking.timezone,
@@ -258,6 +270,86 @@ export const inspectConfiguration = action({
         venue,
       })),
     };
+  },
+});
+
+export const deleteBooking = action({
+  args: {
+    bookingId: v.id("bookings"),
+    expectedRevision: v.number(),
+  },
+  handler: async (ctx, args): Promise<{ deleted: boolean }> => {
+    const user = await requireActionCapability(ctx, "table.edit");
+    const deletionToken = crypto.randomUUID();
+    let started = false;
+    try {
+      const deletion = (await ctx.runMutation(
+        internal.bookings.beginBookingDeletion,
+        {
+          bookingId: args.bookingId,
+          expectedRevision: args.expectedRevision,
+          actorId: user.clerkUserId,
+          deletionToken,
+        },
+      )) as
+        | {
+            booking: Booking;
+            events: Array<{
+              calendarId: string;
+              eventId: string;
+              targetVenue: string;
+            }>;
+          }
+        | null;
+      if (!deletion) return { deleted: false };
+      started = true;
+
+      if (deletion.events.length > 0) {
+        await cleanupManagedEvents(
+          requiredRuntime(),
+          String(deletion.booking._id),
+          deletion.events,
+        );
+      }
+      return (await ctx.runMutation(
+        internal.bookings.completeBookingDeletion,
+        {
+          bookingId: deletion.booking._id,
+          actorId: user.clerkUserId,
+          deletionToken,
+        },
+      )) as { deleted: boolean };
+    } catch (error) {
+      if (!started) throw error;
+      if (started) {
+        // A Convex mutation response can be lost after its transaction
+        // commits. A missing row is authoritative evidence that cleanup and
+        // deletion completed; never turn that success into a false failure.
+        try {
+          const current = (await ctx.runQuery(
+            internal.bookings.getInternal,
+            { bookingId: args.bookingId },
+          )) as Booking | null;
+          if (!current) return { deleted: true };
+          await ctx.runMutation(
+            internal.bookings.failBookingDeletion,
+            {
+              bookingId: args.bookingId,
+              actorId: user.clerkUserId,
+              deletionToken,
+              errorMessage: errorMessage(error),
+            },
+          );
+        } catch {
+          // The durable 31-minute lease recovery remains the final safety net
+          // if Convex is temporarily unavailable while recording the error.
+        }
+      }
+      calendarError(
+        "BOOKING_DELETE_FAILED",
+        `The booking was kept because RoomOps could not safely remove all managed Calendar events. Retry deletion. ${errorMessage(error)}`,
+      );
+    }
   },
 });
 
@@ -847,15 +939,49 @@ export const reconcileApprovedBooking = internalAction({
           "GOOGLE_CALENDAR_EVENT_REFERENCE_MISSING:This approved booking has no managed Google Calendar event.",
         );
       }
-      const reconciledEvents: NonNullable<
-        Booking["calendarEvents"]
-      > = [];
-      for (const event of booking.calendarEvents) {
+      const managedEvents: Array<
+        NonNullable<Booking["calendarEvents"]>[number] & {
+          targetVenue: GoogleCalendarVenue;
+        }
+      > = booking.calendarEvents.map((event) => {
         if (!isGoogleCalendarVenue(event.targetVenue)) {
           throw new Error(
             "GOOGLE_CALENDAR_VENUE_UNKNOWN:Stored event venue is invalid.",
           );
         }
+        return {
+          ...event,
+          targetVenue: event.targetVenue,
+        };
+      });
+      const replacementCandidates = await Promise.all(
+        managedEvents.map(async (event) => ({
+          calendarId: event.calendarId,
+          eventId: await deterministicGoogleCalendarEventId({
+            bookingId: String(booking._id),
+            calendarId: event.calendarId,
+            venue: event.targetVenue,
+            generation: `repair-${event.eventId}`,
+          }),
+          targetVenue: event.targetVenue,
+        })),
+      );
+      // Persist every deterministic replacement before the first external
+      // PATCH/POST. If this worker dies after Google creates a repair, safe
+      // deletion and later retries retain a durable cleanup candidate.
+      const reconciliationCandidates = (await ctx.runMutation(
+        internal.bookings.recordCalendarReconciliationTargets,
+        {
+          bookingId: booking._id,
+          expectedRevision: args.expectedRevision,
+          syncToken: args.syncToken,
+          events: replacementCandidates,
+        },
+      )) as ManagedCalendarEventReference[];
+      const reconciledEvents: NonNullable<
+        Booking["calendarEvents"]
+      > = [];
+      for (const event of managedEvents) {
         const reconciled = await runtime.client.updateEvent(
           event.eventId,
           eventInput(
@@ -879,6 +1005,17 @@ export const reconcileApprovedBooking = internalAction({
           htmlLink: reconciled.htmlLink,
           targetVenue: event.targetVenue,
         });
+      }
+      const supersededCandidates = managedCalendarEventsExcluding(
+        reconciliationCandidates,
+        reconciledEvents,
+      );
+      if (supersededCandidates.length > 0) {
+        await cleanupManagedEvents(
+          runtime,
+          String(booking._id),
+          supersededCandidates,
+        );
       }
       await ctx.runMutation(
         internal.bookings.recordCalendarReconcileResult,

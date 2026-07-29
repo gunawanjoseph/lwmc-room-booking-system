@@ -1,5 +1,10 @@
 export const DAY_MS = 86_400_000;
 export const MAX_BOOKING_DAYS = 32;
+// Convex currently permits at most 4,096 index ranges per transaction.
+// Leave headroom for point reads and other indexed work in the mutations that
+// use the conflict query plan.
+export const MAX_CONFLICT_LOOKUP_RANGES = 3_000;
+export const MAX_CLAIM_MIGRATION_PAGE_SIZE = 2;
 
 export type Interval = {
   startAt: number;
@@ -13,6 +18,10 @@ export const BOOKING_RULE_ERROR_CODES = {
   venueCountInvalid: "BOOKING_VENUE_COUNT_INVALID",
   claimSlotLimitInvalid: "BOOKING_CLAIM_SLOT_LIMIT_INVALID",
   claimSlotLimitExceeded: "BOOKING_CLAIM_SLOT_LIMIT_EXCEEDED",
+  conflictLookupAliasCountInvalid:
+    "BOOKING_CONFLICT_LOOKUP_ALIAS_COUNT_INVALID",
+  conflictLookupRangeLimitExceeded:
+    "BOOKING_CONFLICT_LOOKUP_RANGE_LIMIT_EXCEEDED",
 } as const;
 
 export type BookingRuleErrorCode =
@@ -44,6 +53,44 @@ export function intervalsOverlap(
 
 export function normalizeRoomKey(room: string): string {
   return room.trim().replace(/\s+/g, " ").toLocaleLowerCase("en");
+}
+
+export function isClaimMigrationPageSizeValid(
+  numItems: number,
+): boolean {
+  return (
+    Number.isInteger(numItems) &&
+    numItems >= 1 &&
+    numItems <= MAX_CLAIM_MIGRATION_PAGE_SIZE
+  );
+}
+
+export type ConflictClaimRoomTarget = {
+  roomKey: string;
+  targetVenue: string;
+};
+
+/**
+ * Produces one database-query target per normalized claim-room alias while
+ * retaining the first physical venue responsible for user-facing conflict
+ * attribution.
+ */
+export function uniqueConflictClaimRoomTargets(
+  targets: readonly ConflictClaimRoomTarget[],
+): ConflictClaimRoomTarget[] {
+  const uniqueTargets = new Map<string, ConflictClaimRoomTarget>();
+
+  for (const target of targets) {
+    const roomKey = normalizeRoomKey(target.roomKey);
+    if (!uniqueTargets.has(roomKey)) {
+      uniqueTargets.set(roomKey, {
+        roomKey,
+        targetVenue: target.targetVenue,
+      });
+    }
+  }
+
+  return [...uniqueTargets.values()];
 }
 
 export function utcDaysForInterval(
@@ -172,4 +219,63 @@ export function assertTotalClaimSlotsWithinLimit(
   }
 
   return totalClaimSlots;
+}
+
+/**
+ * Counts the indexed range queries required by the conflict lookup plan. Each
+ * unique current or legacy claim-room alias is queried once for every UTC day
+ * touched by every occurrence.
+ */
+export function conflictLookupRangeCount(
+  occurrences: readonly Interval[],
+  uniqueRoomAliasCount: number,
+): number {
+  if (
+    !Number.isSafeInteger(uniqueRoomAliasCount) ||
+    uniqueRoomAliasCount < 1
+  ) {
+    bookingRuleError(
+      BOOKING_RULE_ERROR_CODES.conflictLookupAliasCountInvalid,
+      "Unique conflict-lookup room alias count must be a positive safe integer.",
+    );
+  }
+
+  const utcDayTotal = occurrences.reduce(
+    (total, occurrence) =>
+      total +
+      utcDaysForInterval(occurrence.startAt, occurrence.endAt).length,
+    0,
+  );
+  const totalRanges = utcDayTotal * uniqueRoomAliasCount;
+
+  if (!Number.isSafeInteger(totalRanges)) {
+    bookingRuleError(
+      BOOKING_RULE_ERROR_CODES.conflictLookupRangeLimitExceeded,
+      `The booking conflict check requires too many indexed lookup ranges, exceeding the safe limit of ${MAX_CONFLICT_LOOKUP_RANGES}. Shorten or split the booking request.`,
+    );
+  }
+
+  return totalRanges;
+}
+
+/**
+ * Rejects a conflict query before any database loop starts if the complete
+ * plan would exceed the conservative transaction-safe range budget.
+ */
+export function assertConflictLookupRangesWithinLimit(
+  occurrences: readonly Interval[],
+  uniqueRoomAliasCount: number,
+): number {
+  const totalRanges = conflictLookupRangeCount(
+    occurrences,
+    uniqueRoomAliasCount,
+  );
+  if (totalRanges > MAX_CONFLICT_LOOKUP_RANGES) {
+    bookingRuleError(
+      BOOKING_RULE_ERROR_CODES.conflictLookupRangeLimitExceeded,
+      `The booking conflict check requires ${totalRanges} indexed lookup ranges, exceeding the safe limit of ${MAX_CONFLICT_LOOKUP_RANGES}. Shorten or split the booking request.`,
+    );
+  }
+
+  return totalRanges;
 }

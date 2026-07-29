@@ -3,11 +3,17 @@ import {
   BOOKING_RULE_ERROR_CODES,
   BookingRuleError,
   DAY_MS,
+  MAX_CLAIM_MIGRATION_PAGE_SIZE,
+  MAX_CONFLICT_LOOKUP_RANGES,
+  assertConflictLookupRangesWithinLimit,
   assertSortedNonOverlappingOccurrences,
   assertTotalClaimSlotsWithinLimit,
+  conflictLookupRangeCount,
   intervalsOverlap,
+  isClaimMigrationPageSizeValid,
   normalizeRoomKey,
   totalClaimSlotsForOccurrences,
+  uniqueConflictClaimRoomTargets,
   utcDaysForInterval,
 } from "./bookingRules";
 
@@ -41,6 +47,43 @@ describe("booking overlap rules", () => {
 
   it("normalizes equivalent room names", () => {
     expect(normalizeRoomKey("  Board   Room ")).toBe("board room");
+  });
+
+  it("limits claim migration mutations to two bookings", () => {
+    expect(MAX_CLAIM_MIGRATION_PAGE_SIZE).toBe(2);
+    expect(isClaimMigrationPageSizeValid(1)).toBe(true);
+    expect(isClaimMigrationPageSizeValid(2)).toBe(true);
+    expect(isClaimMigrationPageSizeValid(0)).toBe(false);
+    expect(isClaimMigrationPageSizeValid(3)).toBe(false);
+    expect(isClaimMigrationPageSizeValid(1.5)).toBe(false);
+  });
+
+  it("globally deduplicates conflict aliases and retains first venue attribution", () => {
+    expect(
+      uniqueConflictClaimRoomTargets([
+        {
+          roomKey: " Ministry Centre A&B ",
+          targetVenue: "Ministry Centre A",
+        },
+        {
+          roomKey: "ministry   centre a&b",
+          targetVenue: "Ministry Centre B",
+        },
+        {
+          roomKey: "Ministry Centre B",
+          targetVenue: "Ministry Centre B",
+        },
+      ]),
+    ).toEqual([
+      {
+        roomKey: "ministry centre a&b",
+        targetVenue: "Ministry Centre A",
+      },
+      {
+        roomKey: "ministry centre b",
+        targetVenue: "Ministry Centre B",
+      },
+    ]);
   });
 
   it("allows sorted adjacent recurrence occurrences", () => {
@@ -128,6 +171,53 @@ describe("booking overlap rules", () => {
     ).toThrowError(
       expect.objectContaining({
         code: BOOKING_RULE_ERROR_CODES.claimSlotLimitInvalid,
+      }),
+    );
+  });
+
+  it("counts conflict lookup ranges from unique aliases and touched UTC days", () => {
+    expect(
+      conflictLookupRangeCount(
+        [
+          { startAt: 1_000, endAt: 2_000 },
+          { startAt: DAY_MS - 1, endAt: DAY_MS + 1 },
+        ],
+        11,
+      ),
+    ).toBe(33);
+  });
+
+  it("allows the safe conflict range cap and rejects plans above it with a stable error", () => {
+    const occurrences = Array.from({ length: 120 }, (_, index) => ({
+      startAt: index * DAY_MS,
+      endAt: (index + 1) * DAY_MS,
+    }));
+
+    expect(
+      assertConflictLookupRangesWithinLimit(occurrences, 25),
+    ).toBe(MAX_CONFLICT_LOOKUP_RANGES);
+    expect(() =>
+      assertConflictLookupRangesWithinLimit(occurrences, 26),
+    ).toThrowError(
+      expect.objectContaining({
+        code:
+          BOOKING_RULE_ERROR_CODES.conflictLookupRangeLimitExceeded,
+        message:
+          "The booking conflict check requires 3120 indexed lookup ranges, exceeding the safe limit of 3000. Shorten or split the booking request.",
+      }),
+    );
+  });
+
+  it("rejects an invalid unique conflict alias count", () => {
+    expect(() =>
+      conflictLookupRangeCount(
+        [{ startAt: 1_000, endAt: 2_000 }],
+        0,
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code:
+          BOOKING_RULE_ERROR_CODES.conflictLookupAliasCountInvalid,
       }),
     );
   });

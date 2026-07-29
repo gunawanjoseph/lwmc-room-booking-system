@@ -8,7 +8,7 @@ describe("role capability matrix", () => {
     }
   });
 
-  it("keeps table editing separate from reservation editing", () => {
+  it("limits table editing and safe row deletion to data roles", () => {
     for (const role of ROLES) {
       expect(roleHasCapability(role, "table.edit")).toBe(
         role === "head_admin" ||

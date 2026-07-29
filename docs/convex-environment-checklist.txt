@@ -1,4 +1,4 @@
-# ROOMOPS CONVEX ENVIRONMENT CHECKLIST (v0.5.0)
+# ROOMOPS CONVEX ENVIRONMENT CHECKLIST (v0.7.0)
 #
 # Set each variable in both deployments:
 #   Development: npx convex env set NAME
@@ -59,7 +59,7 @@ GMAIL_CLIENT_SECRET=
 GMAIL_REFRESH_TOKEN=
 GMAIL_FROM_EMAIL=
 
-# [ ] Keep GOOGLE_CALENDAR_ENABLED=false while deploying v0.5.0.
+# [ ] Keep GOOGLE_CALENDAR_ENABLED=false while deploying v0.7.0.
 # [ ] As Head Administrator, run Normalize reservation claims at
 #     /admin/integrations until it reports Finished.
 # [ ] Change GOOGLE_CALENDAR_ENABLED to true and run the configuration check.
@@ -69,7 +69,7 @@ GMAIL_FROM_EMAIL=
 #     the configuration. Repeat the setup and check separately in production.
 
 # No Google Sheet, spreadsheet-ID, worksheet-GID, range, or header-mapping
-# variable is required for a new v0.5.0 installation. Google Calendar uses
+# variable is required for a new v0.7.0 installation. Google Calendar uses
 # the four variables above; it does not use the retired Sheets variables.
 
 # JOTFORM FIELD-MAP TIMING MODES
@@ -84,7 +84,7 @@ GMAIL_FROM_EMAIL=
 # {"requesterName":"3","requesterEmail":"4","room":"5","start":"6","end":"7"}
 #
 # Calendar title and recurrence fields (example qids only):
-# {"requesterName":"3","requesterEmail":"4","room":"5","eventName":"6","purpose":"7","ministry":"8","recurrence":"9","recurrenceCount":"10","recurrenceUntil":"11","date":"12","startTime":"13","endTime":"14"}
+# {"requesterName":"3","requesterEmail":"4","room":"5","eventName":"6","purpose":"7","ministry":"8","recurrence":"9","recurrenceHasEndDate":"10","recurrenceUntil":"11","date":"12","startTime":"13","endTime":"14"}
 #
 # Core questions use stable qids. Reordering or relabeling is safe. Deleting
 # and recreating a mapped core question can change its qid and needs remapping.
@@ -94,14 +94,21 @@ GMAIL_FROM_EMAIL=
 # characters total. Capped submissions are marked in /sheet and system logs.
 #
 # Supported recurrence choices:
-#   none
-#   daily
-#   weekly on the same day
-#   monthly on the same day (same ordinal weekday, such as third Friday)
-#   monthly on the same date (same numerical date)
-# Count includes the first occurrence. repeat-until is inclusive. If both are
-# supplied, the earlier bound wins. Monthly rules skip nonexistent dates or
-# ordinal weekdays. See docs/GOOGLE_CALENDAR_SETUP.md for the full semantics.
+#   No repeat
+#   Daily
+#   Every week
+#   Every 2 weeks
+#   Every month on the same day (same ordinal weekday, such as third Friday)
+#   Every month on the same date (same numerical date)
+# If recurrenceHasEndDate is Yes, recurrenceUntil is required. A No answer
+# ignores any stale hidden date value and uses BOOKING_RECURRENCE_DEFAULT_COUNT.
+# When the Yes/No field is mapped, it overrides an obsolete count mapping.
+# For legacy maps without the Yes/No field, count includes the first occurrence,
+# repeat-until is inclusive, and the earlier bound wins if both are supplied.
+# Monthly rules skip nonexistent dates or ordinal weekdays. A multi-occurrence
+# series cannot cross a daylight-saving or other UTC-offset transition; split
+# it into offset-stable series or one-time bookings. See
+# docs/GOOGLE_CALENDAR_SETUP.md for the full semantics.
 
 # LOCAL .env.local VARIABLES (not Convex server variables)
 #
@@ -147,13 +154,13 @@ GMAIL_FROM_EMAIL=
 # the Calendar description; title-field edits reconcile title and description.
 # Room, time, status, and approve/reject remain in /bookings.
 
-# v0.2 GOOGLE SHEETS MIRROR -> v0.5.0 CONVEX TABLE CUTOVER
+# v0.2 GOOGLE SHEETS MIRROR -> v0.7.0 CONVEX TABLE CUTOVER
 #
 # This is for upgrades only; new installations skip it.
 #
 # [ ] Set GOOGLE_SHEETS_AUTO_SYNC=false in development and production.
 # [ ] Wait at least 11 minutes for legacy leases to drain.
-# [ ] Deploy v0.5.0 frontend and Convex functions.
+# [ ] Deploy v0.7.0 frontend and Convex functions.
 # [ ] Verify /sheet, /bookings, /admin/integrations, and a test submission.
 # [ ] Remove GOOGLE_SERVICE_ACCOUNT_JSON_B64.
 # [ ] Remove GOOGLE_SHEETS_SPREADSHEET_ID.

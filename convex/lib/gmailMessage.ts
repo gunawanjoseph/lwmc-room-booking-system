@@ -1,3 +1,5 @@
+import { bookingDeletionInProgress } from "./bookingDeletion";
+
 export function cleanEmailLine(
   value: string | undefined,
   fallback = "",
@@ -159,6 +161,65 @@ export type BookingEmailKind =
   | "requester_approved"
   | "requester_rejected"
   | "approver_conflict_urgent";
+
+export type ConflictAlertBookingState = {
+  id: string;
+  status: "pending" | "approved" | "rejected" | "unavailable";
+  availabilityCheckPending?: boolean;
+  calendarAvailabilityStatus?: "unchecked" | "available" | "conflict";
+  conflictBookingId?: string;
+  conflictWarningBookingIds?: readonly string[];
+  deletionToken?: string;
+  deletionLeaseExpiresAt?: number;
+};
+
+/**
+ * Conflict-alert deliveries are durable and can run after either booking has
+ * changed. Only persisted, current RoomOps conflict edges are safe to include.
+ */
+export function isCurrentConflictAlertPair(
+  primary: ConflictAlertBookingState,
+  related: ConflictAlertBookingState,
+  now: number,
+): boolean {
+  if (
+    primary.id === related.id ||
+    primary.availabilityCheckPending === true ||
+    related.availabilityCheckPending === true ||
+    bookingDeletionInProgress(primary, now) ||
+    bookingDeletionInProgress(related, now)
+  ) {
+    return false;
+  }
+
+  const pendingWarning =
+    primary.status === "pending" &&
+    related.status === "pending" &&
+    (primary.conflictWarningBookingIds ?? []).includes(related.id) &&
+    (related.conflictWarningBookingIds ?? []).includes(primary.id);
+  const decidedConflict =
+    (primary.status === "unavailable" &&
+      related.status === "approved" &&
+      primary.conflictBookingId === related.id) ||
+    (primary.status === "approved" &&
+      related.status === "unavailable" &&
+      related.conflictBookingId === primary.id);
+
+  return pendingWarning || decidedConflict;
+}
+
+export function isCurrentStandaloneCalendarConflict(
+  booking: ConflictAlertBookingState,
+  now: number,
+): boolean {
+  return (
+    booking.availabilityCheckPending !== true &&
+    !bookingDeletionInProgress(booking, now) &&
+    booking.status === "unavailable" &&
+    booking.calendarAvailabilityStatus === "conflict" &&
+    booking.conflictBookingId === undefined
+  );
+}
 
 export function availabilityFollowupKind(input: {
   availabilityCheckPending?: boolean;

@@ -34,6 +34,7 @@ export const recurrenceFrequencyValidator = v.union(
   v.literal("none"),
   v.literal("daily"),
   v.literal("weekly_same_day"),
+  v.literal("biweekly_same_day"),
   v.literal("monthly_same_day"),
   v.literal("monthly_same_date"),
 );
@@ -68,6 +69,7 @@ export const jotformCanonicalFieldValidator = v.union(
   v.literal("purpose"),
   v.literal("ministry"),
   v.literal("recurrence"),
+  v.literal("recurrenceHasEndDate"),
   v.literal("recurrenceCount"),
   v.literal("recurrenceUntil"),
   v.literal("start"),
@@ -129,6 +131,7 @@ export default defineSchema({
     purpose: v.optional(v.string()),
     ministry: v.optional(v.string()),
     recurrenceFrequency: v.optional(recurrenceFrequencyValidator),
+    recurrenceHasEndDate: v.optional(v.boolean()),
     recurrenceCount: v.optional(v.number()),
     recurrenceUntilAt: v.optional(v.number()),
     occurrences: v.optional(v.array(bookingOccurrenceValidator)),
@@ -170,6 +173,12 @@ export default defineSchema({
     ),
     calendarEvents: v.optional(v.array(calendarEventRefValidator)),
     calendarSyncedAt: v.optional(v.number()),
+    // A public deletion action owns this lease while it removes every
+    // RoomOps-managed Google Calendar event before deleting the Convex row.
+    deletionToken: v.optional(v.string()),
+    deletionLeaseExpiresAt: v.optional(v.number()),
+    deletionAttempts: v.optional(v.number()),
+    deletionError: v.optional(v.string()),
     // v0.2 Sheets API mirror state. Kept for an in-place v0.3 rollout;
     // all current writes set this to "disabled".
     sheetSyncStatus: v.union(
@@ -196,6 +205,7 @@ export default defineSchema({
     .index("by_submission_id", ["jotformSubmissionId"])
     .index("by_room_start", ["roomKey", "startAt"])
     .index("by_status", ["status"])
+    .index("by_conflict_booking", ["conflictBookingId"])
     .index("by_created_at", ["createdAt"]),
 
   // Form-level metadata lets an editor add a value for a known optional

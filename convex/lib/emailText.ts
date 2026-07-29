@@ -8,3 +8,13 @@ export function formatLocalDateTime(
     timeZone,
   }).format(new Date(timestamp));
 }
+
+export function formatLocalDate(
+  timestamp: number,
+  timeZone: string,
+): string {
+  return new Intl.DateTimeFormat("en-SG", {
+    dateStyle: "long",
+    timeZone,
+  }).format(new Date(timestamp));
+}

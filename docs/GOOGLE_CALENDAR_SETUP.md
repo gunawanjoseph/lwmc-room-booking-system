@@ -1,6 +1,6 @@
 # Google Calendar setup for RoomOps
 
-This guide configures the RoomOps v0.5.0 Google Calendar integration.
+This guide configures the RoomOps v0.7.0 Google Calendar integration.
 RoomOps checks every requested occurrence against Google Calendar during
 Jotform processing, checks again immediately before approval, and creates
 the approved event on the calendar for each physical venue.
@@ -266,9 +266,10 @@ The Calendar and recurrence-related mapping keys are:
 | `eventName` | Event name | No |
 | `purpose` | Purpose of booking | No |
 | `ministry` | Ministry | No |
-| `recurrence` | Repeat option | No |
-| `recurrenceCount` | Total number of occurrences | No |
-| `recurrenceUntil` | Last local date on which an occurrence may start | No |
+| `recurrence` | Repeat option | When any recurrence bound is mapped |
+| `recurrenceHasEndDate` | Does this recurring booking have an end date? | No |
+| `recurrenceCount` | Legacy total number of occurrences | No |
+| `recurrenceUntil` | What is the LAST date required for the booking? | With the end-date question |
 
 The required requester, room, and timing fields remain unchanged. A
 complete split-date example resembles:
@@ -282,7 +283,7 @@ complete split-date example resembles:
   "purpose": "7",
   "ministry": "8",
   "recurrence": "9",
-  "recurrenceCount": "10",
+  "recurrenceHasEndDate": "10",
   "recurrenceUntil": "11",
   "date": "12",
   "startTime": "13",
@@ -322,18 +323,28 @@ RoomOps recognizes these form choices:
 |---|---|
 | No repeat | One occurrence |
 | Daily | Every local calendar day |
-| Weekly on the same day | Every week on the starting weekday |
-| Monthly on the same day | The same ordinal weekday, such as the third Friday |
-| Monthly on the same date | The same numerical date, such as the 16th |
+| Every week | Every week on the starting weekday |
+| Every 2 weeks | Every other week on the starting weekday |
+| Every month on the same day | The same ordinal weekday, such as the third Friday |
+| Every month on the same date | The same numerical date, such as the 16th |
 
 The original booking is occurrence 1, so a count of 4 means the original
 date plus three later occurrences.
 
 Additional rules:
 
-- `recurrenceUntil` is inclusive through the end of that date in
-  `BOOKING_TIME_ZONE`.
-- If count and repeat-until are both supplied, the earlier bound wins.
+- When `recurrenceHasEndDate` is **Yes**, `recurrenceUntil` is required
+  and inclusive through the end of that date in `BOOKING_TIME_ZONE`.
+- When `recurrenceHasEndDate` is **No**, a stale hidden
+  `recurrenceUntil` answer is ignored and
+  `BOOKING_RECURRENCE_DEFAULT_COUNT` is used.
+- An older field map without `recurrenceHasEndDate` remains compatible:
+  a supplied `recurrenceUntil` is honored.
+- With the new Yes/No field mapped, it is authoritative even if an
+  obsolete count mapping remains: **Yes** uses the last date and **No**
+  uses the configured default count.
+- In a legacy map without the Yes/No field, if count and repeat-until are
+  both supplied, the earlier bound wins.
 - If neither is supplied for a repeating booking,
   `BOOKING_RECURRENCE_DEFAULT_COUNT` is used.
 - A series may contain at most 120 concrete occurrences.
@@ -344,6 +355,12 @@ Additional rules:
 - Monthly same-day bookings on a fifth weekday skip months without that
   fifth weekday.
 - Recurrences preserve the venue's local wall-clock start and end times.
+  A multi-occurrence series that reaches a UTC-offset transition is
+  rejected with
+  `RECURRENCE_TIMEZONE_OFFSET_TRANSITION_UNSUPPORTED`. Google applies a
+  recurring event's initial exact duration to later instances, which can
+  otherwise disagree with RoomOps' wall-clock reservation intervals
+  around daylight-saving or other offset changes.
 - Occurrences in one request must not overlap each other. Exact adjacency
   is allowed, but a daily request whose individual booking lasts longer
   than 24 hours is rejected with
@@ -353,6 +370,12 @@ Additional rules:
   venue. A long A & B or ABC series therefore consumes more slots than a
   short single-room series. An oversized request is rejected with
   `BOOKING_CLAIM_SLOT_LIMIT_EXCEEDED`.
+- Before conflict lookup begins, RoomOps globally deduplicates current
+  and legacy claim-room aliases, then budgets one indexed lookup for
+  every unique alias and UTC date touched by the occurrences. A plan
+  above the conservative 3,000-range transaction budget is rejected with
+  `BOOKING_CONFLICT_LOOKUP_RANGE_LIMIT_EXCEEDED`; shorten the series or
+  duration, or split the request.
 
 Convex stores the accepted occurrence set and reserves every occurrence.
 Google Calendar receives a bounded recurring event whose count matches
@@ -399,7 +422,10 @@ npm run dev
    claims**. Select **Continue** until the result says **Finished**.
    This idempotent, one-time upgrade rewrites existing pending and
    approved bookings against their physical venue claims, including A&B
-   and ABC fan-out.
+   and ABC fan-out. Each Convex mutation processes at most two bookings
+   so deleting old claims and inserting rebuilt claims remains safely
+   below the transaction write limit; the page advances through multiple
+   mutations automatically before asking you to continue.
 5. If the result reports skipped bookings, inspect `/logs`. Wait for any
    active Calendar synchronization to finish, fix any invalid legacy
    booking, then run **Rebuild active claims** again from the beginning
@@ -469,9 +495,10 @@ normal pending or unavailable follow-up be created.
 Submit short test series for:
 
 - daily, count 3;
-- weekly on the same day, count 3;
-- monthly on the same day beginning on a third Friday; and
-- monthly on the same date, preferably using a date that demonstrates
+- every week, count 3;
+- every 2 weeks, count 3;
+- every month on the same day beginning on a third Friday; and
+- every month on the same date, preferably using a date that demonstrates
   shorter-month behavior.
 
 For each series, verify the occurrence count in RoomOps and the recurring
@@ -599,12 +626,29 @@ the individual booking duration, choose a less frequent repeat rule, or
 split the request into separate non-overlapping bookings. Occurrences
 that touch at an endpoint without overlapping are allowed.
 
+### `RECURRENCE_TIMEZONE_OFFSET_TRANSITION_UNSUPPORTED`
+
+The multi-occurrence series reaches a daylight-saving or other UTC-offset
+change in `BOOKING_TIME_ZONE`. Split the request into series that remain
+on one side of the transition, or submit the affected dates as one-time
+bookings. This safeguard keeps Convex reservation intervals identical to
+the instances generated by Google Calendar.
+
 ### `BOOKING_CLAIM_SLOT_LIMIT_EXCEEDED`
 
 The request would exceed 2,000 Convex reservation claim rows. The total
 is the number of UTC dates touched across all occurrences multiplied by
 the number of physical venues. Shorten the series or duration, or split
 it into smaller requests.
+
+### `BOOKING_CONFLICT_LOOKUP_RANGE_LIMIT_EXCEEDED`
+
+The conflict query would require more than the conservative 3,000
+indexed lookup ranges reserved for one Convex transaction. RoomOps
+calculates this before querying by multiplying the number of globally
+unique current/legacy claim-room aliases by the total UTC dates touched
+across all occurrences. Shorten the series or duration, or split it into
+smaller requests.
 
 ### `JOTFORM_RECURRENCE_COUNT_INVALID`
 

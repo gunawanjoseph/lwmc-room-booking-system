@@ -6,10 +6,13 @@ import {
   emailDependencyGate,
   encodeGmailMime,
   initialBookingEmailDelay,
+  isCurrentConflictAlertPair,
+  isCurrentStandaloneCalendarConflict,
   isRetryableGmailStatus,
   normalizeEmailAddress,
   requiresRequesterReceipt,
   type BookingEmailKind,
+  type ConflictAlertBookingState,
 } from "./gmailMessage";
 
 function decodeRaw(raw: string): string {
@@ -204,5 +207,126 @@ describe("Gmail message safety", () => {
     expect(
       bookingEmailDependencyGate(kind, "booking-1", null),
     ).toBe("block");
+  });
+
+  it("accepts only live reciprocal pending conflict warnings", () => {
+    const primary: ConflictAlertBookingState = {
+      id: "booking-1",
+      status: "pending",
+      conflictWarningBookingIds: ["booking-2"],
+    };
+    const related: ConflictAlertBookingState = {
+      id: "booking-2",
+      status: "pending",
+      conflictWarningBookingIds: ["booking-1"],
+    };
+
+    expect(
+      isCurrentConflictAlertPair(primary, related, 1_000),
+    ).toBe(true);
+    expect(
+      isCurrentConflictAlertPair(
+        primary,
+        { ...related, conflictWarningBookingIds: [] },
+        1_000,
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts both orientations of a current decided conflict", () => {
+    const approved: ConflictAlertBookingState = {
+      id: "approved",
+      status: "approved",
+    };
+    const unavailable: ConflictAlertBookingState = {
+      id: "unavailable",
+      status: "unavailable",
+      conflictBookingId: "approved",
+    };
+
+    expect(
+      isCurrentConflictAlertPair(unavailable, approved, 1_000),
+    ).toBe(true);
+    expect(
+      isCurrentConflictAlertPair(approved, unavailable, 1_000),
+    ).toBe(true);
+  });
+
+  it("rejects obsolete, staged, and deleting conflict pairs", () => {
+    const primary: ConflictAlertBookingState = {
+      id: "booking-1",
+      status: "pending",
+      conflictWarningBookingIds: ["booking-2"],
+    };
+    const related: ConflictAlertBookingState = {
+      id: "booking-2",
+      status: "pending",
+      conflictWarningBookingIds: ["booking-1"],
+    };
+
+    expect(
+      isCurrentConflictAlertPair(
+        primary,
+        { ...related, status: "rejected" },
+        1_000,
+      ),
+    ).toBe(false);
+    expect(
+      isCurrentConflictAlertPair(
+        { ...primary, availabilityCheckPending: true },
+        related,
+        1_000,
+      ),
+    ).toBe(false);
+    expect(
+      isCurrentConflictAlertPair(
+        primary,
+        {
+          ...related,
+          deletionToken: "delete",
+          deletionLeaseExpiresAt: 1_001,
+        },
+        1_000,
+      ),
+    ).toBe(false);
+    expect(
+      isCurrentConflictAlertPair(
+        primary,
+        {
+          ...related,
+          deletionToken: "expired",
+          deletionLeaseExpiresAt: 1_000,
+        },
+        1_000,
+      ),
+    ).toBe(true);
+  });
+
+  it("recognizes a live Google-only Calendar conflict", () => {
+    const conflict: ConflictAlertBookingState = {
+      id: "booking-1",
+      status: "unavailable",
+      calendarAvailabilityStatus: "conflict",
+    };
+
+    expect(
+      isCurrentStandaloneCalendarConflict(conflict, 1_000),
+    ).toBe(true);
+    expect(
+      isCurrentStandaloneCalendarConflict(
+        { ...conflict, conflictBookingId: "booking-2" },
+        1_000,
+      ),
+    ).toBe(false);
+    expect(
+      isCurrentStandaloneCalendarConflict(
+        {
+          ...conflict,
+          deletionToken: "delete",
+          deletionLeaseExpiresAt: 2_000,
+        },
+        1_000,
+      ),
+    ).toBe(false);
   });
 });

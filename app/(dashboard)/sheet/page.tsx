@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  useAction,
   useConvex,
   useMutation,
   usePaginatedQuery,
@@ -22,8 +23,13 @@ import {
   collectDynamicColumns,
   type BookingExportRow,
   type BookingFormResponse,
+  type DynamicJotformColumn,
 } from "@/lib/booking-export";
-import { formatDateTime, messageFromError } from "@/lib/ui";
+import {
+  formatDate,
+  formatDateTime,
+  messageFromError,
+} from "@/lib/ui";
 import type { Capability } from "@/shared/roles";
 import { StatusBadge } from "@/components/status-badge";
 
@@ -31,6 +37,8 @@ type BookingRow = BookingExportRow & {
   _id: Id<"bookings">;
   revision: number;
   formResponses?: BookingFormResponse[];
+  deletionInProgress?: boolean;
+  deletionError?: string;
 };
 
 type EditableValues = {
@@ -57,7 +65,67 @@ type ExportPageResult = {
 const MAX_SAVE_ROWS = 50;
 const MAX_EXPORT_ROWS = 10_000;
 const EXPORT_PAGE_SIZE = 100;
+const MAX_VISIBLE_DYNAMIC_COLUMNS = 150;
 const JOTFORM_QID_PATTERN = /^\d{1,20}$/;
+
+function compareDynamicQids(
+  left: DynamicJotformColumn,
+  right: DynamicJotformColumn,
+): number {
+  const leftQid = BigInt(left.qid);
+  const rightQid = BigInt(right.qid);
+  if (leftQid < rightQid) return -1;
+  if (leftQid > rightQid) return 1;
+  return left.qid.localeCompare(right.qid);
+}
+
+function selectVisibleDynamicColumns(
+  rows: readonly BookingRow[],
+  columns: readonly DynamicJotformColumn[],
+): DynamicJotformColumn[] {
+  if (columns.length <= MAX_VISIBLE_DYNAMIC_COLUMNS) {
+    return [...columns];
+  }
+
+  const candidateQids = new Set(columns.map((column) => column.qid));
+  const mostRecentlySeen = new Map<string, number>();
+  for (const booking of rows) {
+    for (const response of booking.formResponses ?? []) {
+      const qid = response.qid.trim();
+      if (response.canonicalField || !candidateQids.has(qid)) {
+        continue;
+      }
+      const previous = mostRecentlySeen.get(qid);
+      if (previous === undefined || booking.createdAt > previous) {
+        mostRecentlySeen.set(qid, booking.createdAt);
+      }
+    }
+  }
+
+  return [...columns]
+    .sort((left, right) => {
+      const leftSeen = mostRecentlySeen.get(left.qid) ?? -Infinity;
+      const rightSeen = mostRecentlySeen.get(right.qid) ?? -Infinity;
+      if (leftSeen !== rightSeen) return rightSeen - leftSeen;
+      return compareDynamicQids(right, left);
+    })
+    .slice(0, MAX_VISIBLE_DYNAMIC_COLUMNS)
+    .sort(compareDynamicQids);
+}
+
+function recurrenceLabel(
+  frequency: BookingExportRow["recurrenceFrequency"],
+): string {
+  const labels = {
+    none: "No repeat",
+    daily: "Daily",
+    weekly_same_day: "Every week",
+    biweekly_same_day: "Every 2 weeks",
+    monthly_same_day: "Every month on the same day",
+    monthly_same_date: "Every month on the same date",
+  } as const;
+  return labels[frequency ?? "none"];
+}
 
 function editableValues(booking: BookingRow): EditableValues {
   const responseValues: Record<string, string> = Object.create(null);
@@ -131,7 +199,7 @@ export default function BookingDataPage() {
     { initialNumItems: 50 },
   );
   const saveTableEdits = useMutation(api.bookings.saveTableEdits);
-  const deleteTableRow = useMutation(api.bookings.deleteTableRow);
+  const deleteBooking = useAction(api.googleCalendar.deleteBooking);
   const recordXlsxExport = useMutation(api.bookings.recordXlsxExport);
 
   const rows = results as BookingRow[];
@@ -152,10 +220,16 @@ export default function BookingDataPage() {
   const canExport =
     profile?.capabilities.includes("bookings.export") ?? false;
 
-  const dynamicColumns = useMemo(
+  const allDynamicColumns = useMemo(
     () => collectDynamicColumns(rows),
     [rows],
   );
+  const dynamicColumns = useMemo(
+    () => selectVisibleDynamicColumns(rows, allDynamicColumns),
+    [allDynamicColumns, rows],
+  );
+  const omittedDynamicColumnCount =
+    allDynamicColumns.length - dynamicColumns.length;
   const dirtyDrafts = useMemo(
     () =>
       Object.entries(drafts).filter(([, draft]) =>
@@ -211,6 +285,61 @@ export default function BookingDataPage() {
     window.addEventListener("beforeunload", warnBeforeUnload);
     return () =>
       window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [dirtyCount]);
+
+  useEffect(() => {
+    if (dirtyCount === 0) return;
+    const warnBeforeClientNavigation = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const target =
+        event.target instanceof Element
+          ? event.target.closest<HTMLAnchorElement>("a[href]")
+          : null;
+      if (
+        !target ||
+        target.target === "_blank" ||
+        target.hasAttribute("download")
+      ) {
+        return;
+      }
+      const destination = new URL(target.href, window.location.href);
+      if (
+        destination.origin !== window.location.origin ||
+        (destination.pathname === window.location.pathname &&
+          destination.search === window.location.search)
+      ) {
+        return;
+      }
+      if (
+        window.confirm(
+          "Leave this page and discard all unsaved booking-table changes?",
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener(
+      "click",
+      warnBeforeClientNavigation,
+      true,
+    );
+    return () =>
+      document.removeEventListener(
+        "click",
+        warnBeforeClientNavigation,
+        true,
+      );
   }, [dirtyCount]);
 
   function updateDraft(
@@ -382,14 +511,9 @@ export default function BookingDataPage() {
 
   async function deleteRow(booking: BookingRow) {
     if (!canEdit || editMode || deletingRowId) return;
-    const calendarWarning =
-      booking.status === "approved" &&
-      booking.calendarSyncStatus === "synced"
-        ? "\n\nThis removes the row from Convex, but does not delete the existing Google Calendar event. Cancel/reject workflows should be used when you want to cancel a real approved booking."
-        : "";
     if (
       !window.confirm(
-        `Delete booking row ${booking.jotformSubmissionId} from Convex? This cannot be undone.${calendarWarning}`,
+        `Permanently delete booking ${booking.jotformSubmissionId}? RoomOps will first remove every managed Google Calendar event, then delete the Convex row. This cannot be undone.`,
       )
     ) {
       return;
@@ -398,13 +522,13 @@ export default function BookingDataPage() {
     setNotice("");
     setSaveError("");
     try {
-      const result = await deleteTableRow({
+      const result = await deleteBooking({
         bookingId: booking._id,
         expectedRevision: booking.revision,
       });
       setNotice(
         result.deleted
-          ? `Booking row ${booking.jotformSubmissionId} was deleted from Convex.`
+          ? `Booking ${booking.jotformSubmissionId} and its managed Calendar events were deleted.`
           : "That booking row was already gone.",
       );
     } catch (caught) {
@@ -487,16 +611,27 @@ export default function BookingDataPage() {
         <div className="sheet-feedback sheet-feedback-warning" role="status">
           {cappedSnapshotCount} loaded booking
           {cappedSnapshotCount === 1 ? " has" : "s have"} a capped
-          Jotform response snapshot. Core booking data is intact; see
+          Jotform answer snapshot. Core booking data is intact; see
           System logs for the capture details.
+        </div>
+      )}
+
+      {omittedDynamicColumnCount > 0 && (
+        <div className="sheet-feedback sheet-feedback-warning" role="status">
+          Showing the {MAX_VISIBLE_DYNAMIC_COLUMNS} most recently seen
+          additional Jotform fields for the loaded bookings.{" "}
+          {omittedDynamicColumnCount} older field
+          {omittedDynamicColumnCount === 1 ? " is" : "s are"} hidden
+          in this table to keep it responsive. Their answers remain in
+          Convex, and search still checks the hidden values.
         </div>
       )}
 
       {unknownSnapshotCount > 0 && (
         <div className="sheet-feedback sheet-feedback-warning" role="status">
           {unknownSnapshotCount} loaded booking
-          {unknownSnapshotCount === 1 ? " predates" : "s predate"} response
-          completeness tracking.{" "}
+          {unknownSnapshotCount === 1 ? " predates" : "s predate"} submitted-answer
+          capture tracking.{" "}
           {unknownSnapshotCount === 1 ? "Its" : "Their"} core booking
           data is intact, but historical non-core responses may be
           incomplete.
@@ -558,11 +693,12 @@ export default function BookingDataPage() {
 
       <section className="toolbar panel sheet-toolbar">
         <label className="search-field">
-          <Search size={17} />
+          <Search size={17} aria-hidden="true" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search loaded booking data"
+            aria-label="Search loaded booking data"
           />
         </label>
         <select
@@ -584,7 +720,12 @@ export default function BookingDataPage() {
       </section>
 
       <section className="panel table-panel booking-data-panel">
-        <div className="table-scroll booking-data-scroll">
+        <div
+          className="table-scroll booking-data-scroll"
+          role="region"
+          aria-label="Booking data table"
+          tabIndex={0}
+        >
           <table className="data-table convex-sheet-table">
             <thead>
               <tr>
@@ -636,6 +777,11 @@ export default function BookingDataPage() {
                     (booking.formResponses ?? [])
                       .filter((response) => !response.canonicalField)
                       .map((response) => [response.qid, response]),
+                  );
+                  const protectedResponseQids = new Set(
+                    (booking.formResponses ?? [])
+                      .filter((response) => response.canonicalField)
+                      .map((response) => response.qid),
                   );
                   return (
                     <tr
@@ -812,8 +958,9 @@ export default function BookingDataPage() {
                       <td>
                         <div className="primary-cell">
                           <strong>
-                            {(booking.recurrenceFrequency ?? "none")
-                              .replaceAll("_", " ")}
+                            {recurrenceLabel(
+                              booking.recurrenceFrequency,
+                            )}
                           </strong>
                           <span>
                             {booking.recurrenceCount ?? 1} occurrence
@@ -824,8 +971,22 @@ export default function BookingDataPage() {
                           {booking.recurrenceUntilAt && (
                             <small>
                               through{" "}
-                              {formatDateTime(
+                              {formatDate(
                                 booking.recurrenceUntilAt,
+                                booking.timezone,
+                              )}
+                            </small>
+                          )}
+                          {(booking.occurrences?.length ?? 0) > 1 && (
+                            <small>
+                              final occurrence{" "}
+                              {formatDateTime(
+                                booking.occurrences!.at(-1)!.startAt,
+                                booking.timezone,
+                              )}{" "}
+                              to{" "}
+                              {formatDateTime(
+                                booking.occurrences!.at(-1)!.endAt,
                                 booking.timezone,
                               )}
                             </small>
@@ -843,10 +1004,17 @@ export default function BookingDataPage() {
                               ? "Managed event"
                               : "Approval creates event"}
                           </small>
+                          {booking.deletionError && (
+                            <small title={booking.deletionError}>
+                              Previous deletion needs retry
+                            </small>
+                          )}
                         </div>
                       </td>
                       {dynamicColumns.map((column) => {
                         const response = responseByQid.get(column.qid);
+                        const responseProtected =
+                          protectedResponseQids.has(column.qid);
                         const responseValue =
                           values.responseValues[column.qid] ?? "";
                         const responseChanged =
@@ -864,7 +1032,7 @@ export default function BookingDataPage() {
                                 : undefined
                             }
                           >
-                            {editMode ? (
+                            {editMode && !responseProtected ? (
                               <textarea
                                 className="sheet-cell-input sheet-cell-textarea"
                                 rows={2}
@@ -890,6 +1058,13 @@ export default function BookingDataPage() {
                                     : "No submitted value"
                                 }
                               />
+                            ) : editMode ? (
+                              <span
+                                className="view-only-label"
+                                title="This question was a core booking field for this submission. Edit it through the Bookings page."
+                              >
+                                Core field
+                              </span>
                             ) : (
                               <span className="sheet-long-value">
                                 {response?.value || "—"}
@@ -914,15 +1089,17 @@ export default function BookingDataPage() {
                             onClick={() => deleteRow(booking)}
                             disabled={
                               editMode ||
-                              booking.availabilityCheckPending === true ||
+                              booking.deletionInProgress === true ||
                               deletingRowId === String(booking._id)
                             }
                             title={
                               editMode
                                 ? "Finish table editing before deleting rows."
-                                : booking.availabilityCheckPending === true
-                                  ? "Wait for the intake availability check to finish."
-                                : "Delete this booking row from Convex."
+                                : booking.deletionInProgress === true
+                                  ? "Safe Calendar and booking deletion is already in progress."
+                                : booking.deletionError
+                                  ? "Retry safe Calendar and booking deletion."
+                                  : "Delete this booking and its managed Calendar events."
                             }
                           >
                             <Trash2 size={14} />

@@ -1,7 +1,7 @@
 # RoomOps
 
 RoomOps is a Next.js 16 administrator workspace for room requests from
-[Jotform 261740998492068](https://form.jotform.com/261740998492068).
+[Jotform 261740998492068](https://submit.jotform.com/261740998492068).
 Clerk authenticates administrators, while Convex is the canonical store
 for booking data, authorization, and audit logs.
 
@@ -22,9 +22,12 @@ for booking data, authorization, and audit logs.
   calendars
 - Durable Calendar synchronization recovery and an administrator retry
   control for failed approved-booking updates
-- Daily, weekly, ordinal-weekday monthly, and same-date monthly recurrence
-- Recurrence self-overlap rejection and a 2,000 reservation-claim-slot
-  safety cap
+- No-repeat, daily, weekly, every-two-weeks, ordinal-weekday monthly,
+  and same-date monthly recurrence
+- Optional recurring-booking last dates, stored in the booking timezone
+  and shown together with the concrete final occurrence
+- Recurrence self-overlap and UTC-offset-transition rejection, plus a
+  2,000 reservation-claim-slot safety cap
 - Ministry Centre A & B and Ministry Centre ABC multi-calendar fan-out
 - Gmail requester notifications and no-login email approval links
 - Per-recipient, deduplicated email delivery with bounded automatic retry
@@ -56,13 +59,17 @@ Home Assistant automation remains a later phase.
   stored separately.
 - Deleting and recreating a mapped core question can change its `qid`;
   update `JOTFORM_FIELD_MAP_JSON` when that happens.
+- Recurrence end-date or legacy-count mappings require the repeat-option
+  question to be mapped too; the integrations page validates this before
+  copying the JSON.
 - The data table may edit requester name, requester email, event name,
   purpose, ministry, and non-core responses. For approved bookings,
   requester-name edits reconcile the Calendar description, while event
   name, purpose, and ministry edits reconcile the title and description.
   Requester email remains private to RoomOps and its notification flow.
-  Room, time, status, and approval changes stay on `/bookings`, where
-  their dedicated rules are enforced.
+  Room, time, recurrence, status, and approval changes stay on
+  `/bookings`, where their dedicated rules are enforced. Only pending
+  bookings may change their reservation or recurrence schedule.
 - Google Calendar owns external venue-busy events. RoomOps checks those
   calendars but stores the accepted request and concrete recurrence
   occurrences in Convex.
@@ -101,13 +108,13 @@ and run the normalization again.
 
 ## Authorization matrix
 
-| Role | View data table | Download XLSX | Approve/reject | Edit table data | Edit canonical booking | Manage users/integrations |
-|---|---:|---:|---:|---:|---:|---:|
-| Head Administrator | Yes | Yes | Yes | Yes | Yes | Yes |
-| Booking Viewer | Yes | Yes | No | No | No | No |
-| Booking Approver | Yes | Yes | Yes | No | No | No |
-| Data Editor | Yes | Yes | No | Yes | No | No |
-| Booking Manager | Yes | Yes | Yes | Yes | Yes | No |
+| Role | View data table | Download XLSX | Approve/reject | Edit table data | Edit canonical booking | Delete booking | Manage users/integrations |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Head Administrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Booking Viewer | Yes | Yes | No | No | No | No | No |
+| Booking Approver | Yes | Yes | Yes | No | No | No | No |
+| Data Editor | Yes | Yes | No | Yes | No | Yes | No |
+| Booking Manager | Yes | Yes | Yes | Yes | Yes | Yes | No |
 
 Every Convex query and mutation enforces its capability server-side.
 `table.edit` permits requester metadata, event name, purpose, ministry,
@@ -116,6 +123,16 @@ approval changes.
 When an approved-booking Calendar reconciliation fails, only Head
 Administrator and Booking Manager have the `bookings.edit` capability
 used by the retry action.
+Head Administrator, Data Editor, and Booking Manager have `table.edit`
+and may permanently delete a booking. Deletion runs through a leased
+Convex action: RoomOps verifies ownership and ETags while removing every
+managed or partially-created Google Calendar event, then atomically
+removes the Convex row, reservation claims, and decision links while
+cancelling outstanding email deliveries. A Calendar cleanup failure
+keeps the booking intact so the administrator can retry safely.
+An intake row stranded during its availability check may also be
+deleted; the deletion invalidates its processing receipt, and a late
+worker is prevented from finalizing the removed booking.
 Workbook exports are capped at 10,000 newest bookings and 150 dynamic
 fields, prioritizing the most recently seen fields and warning in-app if
 a cap is reached.
@@ -162,7 +179,8 @@ npm run build
 
 Tests cover the capability matrix, overlap rules, UTC-day claims, Jotform
 date/time and recurrence mapping, qid-keyed response capture, exact-qid
-precedence, recurrence self-overlap and claim-slot limits, venue fan-out,
+precedence, recurrence offset-transition, self-overlap, and claim-slot
+limits, venue fan-out,
 Calendar configuration, synchronization recovery, and event rendering.
 
 ## Source layout

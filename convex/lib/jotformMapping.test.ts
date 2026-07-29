@@ -54,6 +54,31 @@ describe("Jotform mapping", () => {
     expect(answerAsText(answers["3"])).toBe("Ada Lovelace");
   });
 
+  it("serializes unfamiliar booleans, nested objects, and object arrays as readable text", () => {
+    expect(answerAsText({ answer: true })).toBe("Yes");
+    expect(
+      answerAsText({
+        answer: {
+          Friday: {
+            morning: true,
+            evening: false,
+          },
+          attendees: [
+            { name: "Ada", ministry: "Youth" },
+            { name: "Grace", ministry: "Music" },
+          ],
+        },
+      }),
+    ).toBe(
+      "Friday: morning: Yes; evening: No; attendees: name: Ada; ministry: Youth, name: Grace; ministry: Music",
+    );
+    expect(
+      answerAsText({
+        answer: [{ fileName: "floor-plan.pdf", size: 2048 }],
+      }),
+    ).not.toContain("[object Object]");
+  });
+
   it("maps split date and time fields in the configured timezone", () => {
     const mapped = mapJotformBooking(
       answers,
@@ -87,6 +112,38 @@ describe("Jotform mapping", () => {
         }),
       ),
     ).toThrow("JOTFORM_FIELD_MAP_MISSING:date/time");
+  });
+
+  it("requires a last-date mapping when the recurrence end-date choice is mapped", () => {
+    expect(() =>
+      parseFieldMap(
+        JSON.stringify({
+          ...splitFieldMap,
+          recurrence: "9",
+          recurrenceHasEndDate: "10",
+        }),
+      ),
+    ).toThrow("JOTFORM_FIELD_MAP_MISSING:recurrenceUntil");
+  });
+
+  it("requires the repeat selector whenever recurrence bounds are mapped", () => {
+    for (const recurrenceField of [
+      "recurrenceHasEndDate",
+      "recurrenceCount",
+      "recurrenceUntil",
+    ] as const) {
+      expect(() =>
+        parseFieldMap(
+          JSON.stringify({
+            ...splitFieldMap,
+            [recurrenceField]: "10",
+            ...(recurrenceField === "recurrenceHasEndDate"
+              ? { recurrenceUntil: "11" }
+              : {}),
+          }),
+        ),
+      ).toThrow("JOTFORM_FIELD_MAP_MISSING:recurrence");
+    }
   });
 
   it("rejects duplicate canonical-field selectors", () => {
@@ -191,9 +248,10 @@ describe("Jotform mapping", () => {
 
   it.each([
     ["Daily", "daily"],
-    ["Weekly on the same day", "weekly_same_day"],
-    ["Monthly on the same day", "monthly_same_day"],
-    ["Monthly on the same date", "monthly_same_date"],
+    ["Every week", "weekly_same_day"],
+    ["Every 2 weeks", "biweekly_same_day"],
+    ["Every month on the same day", "monthly_same_day"],
+    ["Every month on the same date", "monthly_same_date"],
   ] as const)(
     "maps the %s repeat option and applies the default count",
     (answer, expectedFrequency) => {
@@ -216,6 +274,29 @@ describe("Jotform mapping", () => {
       expect(mapped.recurrenceFrequency).toBe(expectedFrequency);
       expect(mapped.recurrenceCount).toBe(12);
       expect(mapped.recurrenceUntilAt).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["Weekly on the same day", "weekly_same_day"],
+    ["Biweekly", "biweekly_same_day"],
+    ["Monthly on the same day", "monthly_same_day"],
+    ["Monthly on the same date", "monthly_same_date"],
+  ] as const)(
+    "continues accepting the legacy %s repeat label",
+    (answer, expectedFrequency) => {
+      const mapped = mapJotformBooking(
+        {
+          ...answers,
+          "9": { answer },
+        },
+        {
+          ...splitFieldMap,
+          recurrence: "9",
+        },
+        "Asia/Singapore",
+      );
+      expect(mapped.recurrenceFrequency).toBe(expectedFrequency);
     },
   );
 
@@ -327,6 +408,205 @@ describe("Jotform mapping", () => {
     );
   });
 
+  it("requires and maps the last date when the new end-date answer is Yes", () => {
+    const fieldMap = {
+      ...splitFieldMap,
+      recurrence: "9",
+      recurrenceHasEndDate: "10",
+      recurrenceUntil: "11",
+    };
+    const mapped = mapJotformBooking(
+      {
+        ...answers,
+        "9": { answer: "Every 2 weeks" },
+        "10": { answer: "Yes" },
+        "11": {
+          answer: { year: "2026", month: "10", day: "31" },
+        },
+      },
+      fieldMap,
+      "Asia/Singapore",
+    );
+
+    expect(mapped.recurrenceFrequency).toBe("biweekly_same_day");
+    expect(mapped.recurrenceHasEndDate).toBe(true);
+    expect(mapped.recurrenceCount).toBeUndefined();
+    expect(new Date(mapped.recurrenceUntilAt!).toISOString()).toBe(
+      "2026-10-31T15:59:59.999Z",
+    );
+    expect(
+      snapshotJotformAnswers(
+        {
+          ...answers,
+          "9": { answer: "Every 2 weeks" },
+          "10": {
+            text: "Does this recurring booking have an end date?",
+            answer: "Yes",
+          },
+          "11": {
+            text: "What is the LAST date required for the booking?",
+            answer: "2026-10-31",
+          },
+        },
+        fieldMap,
+      ).responses.find((response) => response.qid === "10"),
+    ).toMatchObject({
+      canonicalField: "recurrenceHasEndDate",
+      value: "Yes",
+    });
+  });
+
+  it("rejects a repeating Yes answer without a last date", () => {
+    expect(() =>
+      mapJotformBooking(
+        {
+          ...answers,
+          "9": { answer: "Daily" },
+          "10": { answer: "Yes" },
+          "11": { answer: "" },
+        },
+        {
+          ...splitFieldMap,
+          recurrence: "9",
+          recurrenceHasEndDate: "10",
+          recurrenceUntil: "11",
+        },
+        "Asia/Singapore",
+      ),
+    ).toThrow("JOTFORM_RECURRENCE_UNTIL_REQUIRED");
+  });
+
+  it("ignores a stale last-date answer when the new end-date answer is No", () => {
+    const mapped = mapJotformBooking(
+      {
+        ...answers,
+        "9": { answer: "Every week" },
+        "10": { answer: false },
+        "11": { answer: "not a date" },
+      },
+      {
+        ...splitFieldMap,
+        recurrence: "9",
+        recurrenceHasEndDate: "10",
+        recurrenceUntil: "11",
+      },
+      "Asia/Singapore",
+      { defaultRecurrenceCount: 20 },
+    );
+
+    expect(mapped).toMatchObject({
+      recurrenceFrequency: "weekly_same_day",
+      recurrenceHasEndDate: false,
+      recurrenceCount: 20,
+      recurrenceUntilAt: undefined,
+    });
+  });
+
+  it("makes the new end-date choice authoritative over an obsolete mapped count", () => {
+    const fieldMap = {
+      ...splitFieldMap,
+      recurrence: "9",
+      recurrenceHasEndDate: "10",
+      recurrenceCount: "11",
+      recurrenceUntil: "12",
+    };
+    const yes = mapJotformBooking(
+      {
+        ...answers,
+        "9": { answer: "Daily" },
+        "10": { answer: "Yes" },
+        "11": { answer: "2" },
+        "12": { answer: "2026-08-10" },
+      },
+      fieldMap,
+      "Asia/Singapore",
+      { defaultRecurrenceCount: 20 },
+    );
+    const no = mapJotformBooking(
+      {
+        ...answers,
+        "9": { answer: "Daily" },
+        "10": { answer: "No" },
+        "11": { answer: "2" },
+        "12": { answer: "2026-08-10" },
+      },
+      fieldMap,
+      "Asia/Singapore",
+      { defaultRecurrenceCount: 20 },
+    );
+
+    expect(yes.recurrenceCount).toBeUndefined();
+    expect(yes.recurrenceUntilAt).toBeDefined();
+    expect(no).toMatchObject({
+      recurrenceHasEndDate: false,
+      recurrenceCount: 20,
+      recurrenceUntilAt: undefined,
+    });
+  });
+
+  it("preserves legacy until-date behavior when the Yes/No field is not mapped", () => {
+    const mapped = mapJotformBooking(
+      {
+        ...answers,
+        "9": { answer: "Daily" },
+        "11": { answer: "2026-08-05" },
+      },
+      {
+        ...splitFieldMap,
+        recurrence: "9",
+        recurrenceUntil: "11",
+      },
+      "Asia/Singapore",
+    );
+
+    expect(mapped.recurrenceHasEndDate).toBe(true);
+    expect(mapped.recurrenceCount).toBeUndefined();
+    expect(mapped.recurrenceUntilAt).toBeDefined();
+  });
+
+  it("ignores stale conditional recurrence answers for No repeat", () => {
+    const mapped = mapJotformBooking(
+      {
+        ...answers,
+        "9": { answer: "No repeat" },
+        "10": { answer: "unexpected value" },
+        "11": { answer: "not a date" },
+      },
+      {
+        ...splitFieldMap,
+        recurrence: "9",
+        recurrenceHasEndDate: "10",
+        recurrenceUntil: "11",
+      },
+      "Asia/Singapore",
+    );
+
+    expect(mapped).toMatchObject({
+      recurrenceFrequency: "none",
+      recurrenceHasEndDate: false,
+      recurrenceCount: 1,
+      recurrenceUntilAt: undefined,
+    });
+  });
+
+  it("rejects an unknown end-date choice for a repeating request", () => {
+    expect(() =>
+      mapJotformBooking(
+        {
+          ...answers,
+          "9": { answer: "Daily" },
+          "10": { answer: "Maybe" },
+        },
+        {
+          ...splitFieldMap,
+          recurrence: "9",
+          recurrenceHasEndDate: "10",
+        },
+        "Asia/Singapore",
+      ),
+    ).toThrow("JOTFORM_RECURRENCE_END_DATE_CHOICE_INVALID");
+  });
+
   it("maps count and until together so the earlier bound can win", () => {
     const mapped = mapJotformBooking(
       {
@@ -382,8 +662,9 @@ describe("Jotform mapping", () => {
       purpose: "91",
       ministry: "92",
       recurrence: "93",
-      recurrenceCount: "94",
-      recurrenceUntil: "95",
+      recurrenceHasEndDate: "94",
+      recurrenceCount: "95",
+      recurrenceUntil: "96",
     };
     const mapped = mapJotformBooking(
       answers,
@@ -406,7 +687,9 @@ describe("Jotform mapping", () => {
     expect(snapshot.totalFields).toBe(6);
     expect(
       snapshot.responses.some((field) =>
-        ["90", "91", "92", "93", "94", "95"].includes(field.qid),
+        ["90", "91", "92", "93", "94", "95", "96"].includes(
+          field.qid,
+        ),
       ),
     ).toBe(false);
   });
@@ -583,6 +866,59 @@ describe("Jotform mapping", () => {
     expect(
       snapshot.responses.some((field) => field.qid === "100"),
     ).toBe(false);
+  });
+
+  it("keeps pretty-format-only widget values but excludes explicit structural controls", () => {
+    const snapshot = snapshotJotformAnswers(
+      {
+        ...answers,
+        "99": {
+          name: "customWidget",
+          text: "Custom widget",
+          type: "control_widget",
+          prettyFormat: "Selected widget value",
+        },
+        "100": {
+          name: "instructions",
+          text: "Instructions",
+          type: "control_text",
+          prettyFormat: "This is display-only form text.",
+        },
+      },
+      splitFieldMap,
+    );
+
+    expect(snapshot.totalFields).toBe(7);
+    expect(
+      snapshot.responses.find((field) => field.qid === "99"),
+    ).toMatchObject({
+      label: "Custom widget",
+      value: "Selected widget value",
+    });
+    expect(
+      snapshot.responses.some((field) => field.qid === "100"),
+    ).toBe(false);
+  });
+
+  it("marks an answer snapshot as capped when recursive serialization reaches its value limit", () => {
+    const snapshot = snapshotJotformAnswers(
+      {
+        ...answers,
+        "99": {
+          text: "Large structured answer",
+          answer: Array.from({ length: 250 }, (_, index) => ({
+            item: index,
+          })),
+        },
+      },
+      splitFieldMap,
+    );
+
+    expect(snapshot.truncated).toBe(true);
+    expect(
+      snapshot.responses.find((field) => field.qid === "99")
+        ?.value,
+    ).not.toContain("[object Object]");
   });
 
   it("prioritizes canonical fields and newer high qids at the field cap", () => {

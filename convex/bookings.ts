@@ -1,3 +1,4 @@
+import { DateTime } from "luxon";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import {
@@ -17,9 +18,12 @@ import {
 } from "./schema";
 import {
   BookingRuleError,
+  assertConflictLookupRangesWithinLimit,
   assertSortedNonOverlappingOccurrences,
   assertTotalClaimSlotsWithinLimit,
+  isClaimMigrationPageSizeValid,
   normalizeRoomKey,
+  uniqueConflictClaimRoomTargets,
   utcDaysForInterval,
 } from "./lib/bookingRules";
 import {
@@ -29,6 +33,9 @@ import {
 } from "./lib/googleCalendar";
 import {
   expandRecurrence,
+  MAX_RECURRENCE_OCCURRENCES,
+  recurrenceCountForAdminEdit,
+  recurrenceDefinitionChanged,
   type RecurrenceFrequency,
   type RecurrenceOccurrence,
 } from "./lib/recurrence";
@@ -41,6 +48,12 @@ import {
   partitionCalendarCleanupCandidates,
 } from "./lib/calendarTransition";
 import { calculateConflictOverview } from "./lib/bookingOverview";
+import {
+  bookingDeletionInProgress,
+  hasActiveEmailDeliveryLease,
+  managedCalendarEventsForDeletion,
+  mergeManagedCalendarEvents,
+} from "./lib/bookingDeletion";
 
 type BookingInput = {
   room: string;
@@ -61,6 +74,7 @@ const MAX_CLAIM_SLOTS_PER_BOOKING = 2_000;
 // slightly longer means an expired worker cannot still be writing Google
 // Calendar when a replacement worker takes ownership.
 const CALENDAR_SYNC_LEASE_MS = 31 * 60_000;
+const BOOKING_DELETION_LEASE_MS = 31 * 60_000;
 const emailDecisionClaimValidator = v.object({
   claimToken: v.string(),
   token: v.string(),
@@ -84,11 +98,52 @@ function bookingError(code: string, message: string): never {
   throw new ConvexError({ code, message });
 }
 
+function defaultRecurrenceCount(): number {
+  const raw =
+    process.env.BOOKING_RECURRENCE_DEFAULT_COUNT?.trim() || "12";
+  const count = Number(raw);
+  if (
+    !Number.isInteger(count) ||
+    count < 2 ||
+    count > MAX_RECURRENCE_OCCURRENCES
+  ) {
+    bookingError(
+      "BOOKING_RECURRENCE_DEFAULT_COUNT_INVALID",
+      `BOOKING_RECURRENCE_DEFAULT_COUNT must be an integer from 2 to ${MAX_RECURRENCE_OCCURRENCES}.`,
+    );
+  }
+  return count;
+}
+
+function recurrenceLabel(frequency: RecurrenceFrequency): string {
+  const labels: Record<RecurrenceFrequency, string> = {
+    none: "No repeat",
+    daily: "Daily",
+    weekly_same_day: "Every week",
+    biweekly_same_day: "Every 2 weeks",
+    monthly_same_day: "Every month on the same day",
+    monthly_same_date: "Every month on the same date",
+  };
+  return labels[frequency];
+}
+
 function requireAvailabilityCheckComplete(booking: Doc<"bookings">) {
   if (booking.availabilityCheckPending === true) {
     bookingError(
       "BOOKING_AVAILABILITY_CHECK_PENDING",
       "This request is saved, but its availability check has not completed. Wait for the automatic retry or retry the Jotform submission before editing or deciding it.",
+    );
+  }
+}
+
+function requireBookingDeletionIdle(
+  booking: Doc<"bookings">,
+  now = Date.now(),
+) {
+  if (bookingDeletionInProgress(booking, now)) {
+    bookingError(
+      "BOOKING_DELETION_IN_PROGRESS",
+      "This booking is being removed. Wait for deletion to finish before changing or deciding it.",
     );
   }
 }
@@ -170,6 +225,10 @@ function publicBooking(booking: Doc<"bookings">) {
     purpose: booking.purpose,
     ministry: booking.ministry,
     recurrenceFrequency: booking.recurrenceFrequency ?? "none",
+    recurrenceHasEndDate:
+      (booking.recurrenceFrequency ?? "none") !== "none" &&
+      (booking.recurrenceHasEndDate ??
+        (booking.recurrenceUntilAt !== undefined)),
     recurrenceCount:
       booking.recurrenceCount ?? booking.occurrences?.length ?? 1,
     recurrenceUntilAt: booking.recurrenceUntilAt,
@@ -202,6 +261,11 @@ function publicBooking(booking: Doc<"bookings">) {
     calendarSyncStatus: booking.calendarSyncStatus ?? "disabled",
     calendarSyncError: booking.calendarSyncError,
     calendarSyncedAt: booking.calendarSyncedAt,
+    deletionInProgress: bookingDeletionInProgress(
+      booking,
+      Date.now(),
+    ),
+    deletionError: booking.deletionError,
     createdAt: booking.createdAt,
     updatedAt: booking.updatedAt,
     revision: booking.revision ?? 0,
@@ -284,6 +348,13 @@ function updateCanonicalResponseValues(
     eventName?: string;
     purpose?: string;
     ministry?: string;
+    recurrence?: {
+      frequency: RecurrenceFrequency;
+      hasEndDate: boolean;
+      count: number;
+      untilAt?: number;
+      timezone: string;
+    };
   },
 ) {
   return responses?.map((response) => {
@@ -301,6 +372,50 @@ function updateCanonicalResponseValues(
     }
     if (response.canonicalField === "ministry") {
       return { ...response, value: values.ministry ?? "" };
+    }
+    if (
+      response.canonicalField === "recurrence" &&
+      values.recurrence
+    ) {
+      return {
+        ...response,
+        value: recurrenceLabel(values.recurrence.frequency),
+      };
+    }
+    if (
+      response.canonicalField === "recurrenceHasEndDate" &&
+      values.recurrence
+    ) {
+      return {
+        ...response,
+        value:
+          values.recurrence.frequency === "none"
+            ? "No"
+            : values.recurrence.hasEndDate
+              ? "Yes"
+              : "No",
+      };
+    }
+    if (
+      response.canonicalField === "recurrenceCount" &&
+      values.recurrence
+    ) {
+      return {
+        ...response,
+        value: String(values.recurrence.count),
+      };
+    }
+    if (
+      response.canonicalField === "recurrenceUntil" &&
+      values.recurrence
+    ) {
+      const date =
+        values.recurrence.untilAt === undefined
+          ? ""
+          : DateTime.fromMillis(values.recurrence.untilAt, {
+              zone: values.recurrence.timezone,
+            }).toISODate() ?? "";
+      return { ...response, value: date };
     }
     return response;
   });
@@ -349,6 +464,10 @@ function validateBookingInput(input: BookingInput) {
       occurrences,
       resolvedVenues.length,
       MAX_CLAIM_SLOTS_PER_BOOKING,
+    );
+    assertConflictLookupRangesWithinLimit(
+      occurrences,
+      conflictClaimRoomTargets(resolvedVenues).length,
     );
   } catch (error) {
     if (error instanceof BookingRuleError) {
@@ -403,6 +522,19 @@ function claimRoomKeysForVenue(targetVenue: string): string[] {
   return [...roomKeys];
 }
 
+function conflictClaimRoomTargets(
+  resolvedVenues: readonly string[],
+) {
+  return uniqueConflictClaimRoomTargets(
+    resolvedVenues.flatMap((targetVenue) =>
+      claimRoomKeysForVenue(targetVenue).map((roomKey) => ({
+        roomKey,
+        targetVenue,
+      })),
+    ),
+  );
+}
+
 type BookingConflict = {
   booking: Doc<"bookings">;
   bookingId: Id<"bookings">;
@@ -418,41 +550,54 @@ async function findConflicts(
     excludeBookingId?: Id<"bookings">;
   },
 ): Promise<BookingConflict[]> {
+  const claimRoomTargets = conflictClaimRoomTargets(
+    args.resolvedVenues,
+  );
+  try {
+    assertConflictLookupRangesWithinLimit(
+      args.occurrences,
+      claimRoomTargets.length,
+    );
+  } catch (error) {
+    if (error instanceof BookingRuleError) {
+      bookingError(error.code, error.message);
+    }
+    throw error;
+  }
+
   const candidatesByBooking = new Map<
     string,
     Omit<BookingConflict, "booking">
   >();
-  for (const targetVenue of args.resolvedVenues) {
-    for (const roomKey of claimRoomKeysForVenue(targetVenue)) {
-      for (const occurrence of args.occurrences) {
-        for (const utcDay of utcDaysForInterval(
-          occurrence.startAt,
-          occurrence.endAt,
-        )) {
-          const candidates = await ctx.db
-            .query("bookingClaims")
-            .withIndex("by_room_day_start", (range) =>
-              range
-                .eq("roomKey", roomKey)
-                .eq("utcDay", utcDay)
-                .lt("startAt", occurrence.endAt),
-            )
-            .collect();
-          for (const claim of candidates) {
-            if (
-              claim.bookingId === args.excludeBookingId ||
-              claim.endAt <= occurrence.startAt
-            ) {
-              continue;
-            }
-            const key = String(claim.bookingId);
-            if (!candidatesByBooking.has(key)) {
-              candidatesByBooking.set(key, {
-                bookingId: claim.bookingId,
-                occurrenceSequence: occurrence.sequence,
-                targetVenue,
-              });
-            }
+  for (const { roomKey, targetVenue } of claimRoomTargets) {
+    for (const occurrence of args.occurrences) {
+      for (const utcDay of utcDaysForInterval(
+        occurrence.startAt,
+        occurrence.endAt,
+      )) {
+        const candidates = await ctx.db
+          .query("bookingClaims")
+          .withIndex("by_room_day_start", (range) =>
+            range
+              .eq("roomKey", roomKey)
+              .eq("utcDay", utcDay)
+              .lt("startAt", occurrence.endAt),
+          )
+          .collect();
+        for (const claim of candidates) {
+          if (
+            claim.bookingId === args.excludeBookingId ||
+            claim.endAt <= occurrence.startAt
+          ) {
+            continue;
+          }
+          const key = String(claim.bookingId);
+          if (!candidatesByBooking.has(key)) {
+            candidatesByBooking.set(key, {
+              bookingId: claim.bookingId,
+              occurrenceSequence: occurrence.sequence,
+              targetVenue,
+            });
           }
         }
       }
@@ -543,6 +688,27 @@ async function clearReciprocalConflictWarnings(
       revision: (peer.revision ?? 0) + 1,
     });
   }
+}
+
+async function clearBlockingConflictReferences(
+  ctx: MutationCtx,
+  bookingId: Id<"bookings">,
+  now: number,
+): Promise<number> {
+  const peers = await ctx.db
+    .query("bookings")
+    .withIndex("by_conflict_booking", (query) =>
+      query.eq("conflictBookingId", bookingId),
+    )
+    .collect();
+  for (const peer of peers) {
+    await ctx.db.patch(peer._id, {
+      conflictBookingId: undefined,
+      updatedAt: now,
+      revision: (peer.revision ?? 0) + 1,
+    });
+  }
+  return peers.length;
 }
 
 async function addClaims(
@@ -772,13 +938,13 @@ export const rebuildActiveClaimsPage = mutation({
   handler: async (ctx, args) => {
     const user = await requireHeadAdmin(ctx);
     if (
-      !Number.isInteger(args.paginationOpts.numItems) ||
-      args.paginationOpts.numItems < 1 ||
-      args.paginationOpts.numItems > 25
+      !isClaimMigrationPageSizeValid(
+        args.paginationOpts.numItems,
+      )
     ) {
       bookingError(
         "CLAIM_MIGRATION_PAGE_SIZE_INVALID",
-        "Migrate between 1 and 25 bookings at a time.",
+        "Migrate between 1 and 2 bookings at a time.",
       );
     }
     const result = await ctx.db
@@ -845,6 +1011,10 @@ export const rebuildActiveClaimsPage = mutation({
         room: normalized.room,
         roomKey: normalized.roomKey,
         recurrenceFrequency,
+        recurrenceHasEndDate:
+          recurrenceFrequency !== "none" &&
+          (booking.recurrenceHasEndDate ??
+            (booking.recurrenceUntilAt !== undefined)),
         recurrenceCount: normalized.occurrences.length,
         occurrences: normalized.occurrences,
         resolvedVenues: normalized.resolvedVenues,
@@ -907,6 +1077,7 @@ export const stageJotformSubmission = internalMutation({
     purpose: v.optional(v.string()),
     ministry: v.optional(v.string()),
     recurrenceFrequency: recurrenceFrequencyValidator,
+    recurrenceHasEndDate: v.optional(v.boolean()),
     recurrenceCount: v.number(),
     recurrenceUntilAt: v.optional(v.number()),
     // Optional so a Jotform worker that started on v0.2 can finish during
@@ -1039,6 +1210,11 @@ export const stageJotformSubmission = internalMutation({
       purpose: normalizePurpose(args.purpose),
       ministry: normalizeMinistry(args.ministry),
       recurrenceFrequency: args.recurrenceFrequency,
+      recurrenceHasEndDate:
+        args.recurrenceFrequency === "none"
+          ? false
+          : args.recurrenceHasEndDate ??
+            (args.recurrenceUntilAt !== undefined),
       recurrenceCount: occurrences.length,
       recurrenceUntilAt: args.recurrenceUntilAt,
       occurrences,
@@ -1143,6 +1319,16 @@ export const finalizeJotformSubmission = internalMutation({
         "The staged booking no longer matches the queued submission.",
       );
     }
+    const now = Date.now();
+    if (bookingDeletionInProgress(booking, now)) {
+      await ctx.db.patch(receipt._id, {
+        state: "processed",
+        lastError: undefined,
+        processingStartedAt: undefined,
+        processingToken: undefined,
+      });
+      return booking;
+    }
     if (booking.availabilityCheckPending !== true) {
       await ctx.db.patch(receipt._id, {
         state: "processed",
@@ -1153,7 +1339,6 @@ export const finalizeJotformSubmission = internalMutation({
       return booking;
     }
 
-    const now = Date.now();
     const {
       occurrences,
       resolvedVenues,
@@ -1426,6 +1611,7 @@ export const saveTableEdits = mutation({
         );
       }
       requireAvailabilityCheckComplete(booking);
+      requireBookingDeletionIdle(booking);
       if (booking.calendarSyncToken) {
         bookingError(
           "CALENDAR_SYNC_IN_PROGRESS",
@@ -1470,7 +1656,7 @@ export const saveTableEdits = mutation({
         );
         if (
           existing?.canonicalField ||
-          catalogField?.canonicalField
+          (!existing && catalogField?.canonicalField)
         ) {
           bookingError(
             "DYNAMIC_FIELD_PROTECTED",
@@ -1663,6 +1849,322 @@ export const saveTableEdits = mutation({
   },
 });
 
+async function deleteBookingRecord(
+  ctx: MutationCtx,
+  booking: Doc<"bookings">,
+  actorId: string,
+) {
+  const decisionTokens = await ctx.db
+    .query("emailDecisionTokens")
+    .withIndex("by_booking", (query) =>
+      query.eq("bookingId", booking._id),
+    )
+    .collect();
+  const deliveries = await ctx.db
+    .query("emailDeliveries")
+    .withIndex("by_booking", (query) =>
+      query.eq("bookingId", booking._id),
+    )
+    .collect();
+  const receipt = await ctx.db
+    .query("externalSubmissions")
+    .withIndex("by_provider_submission", (query) =>
+      query
+        .eq("provider", "jotform")
+        .eq("formId", booking.jotformFormId)
+        .eq("submissionId", booking.jotformSubmissionId),
+    )
+    .unique();
+  const now = Date.now();
+  let cancelledDeliveryCount = 0;
+
+  for (const delivery of deliveries) {
+    const outstanding =
+      delivery.status !== "sent" &&
+      delivery.status !== "cancelled";
+    if (outstanding) cancelledDeliveryCount += 1;
+    await ctx.db.patch(delivery._id, {
+      decisionTokenId: undefined,
+      ...(outstanding
+        ? {
+            status: "cancelled" as const,
+            lastError: "BOOKING_DELETED_BY_ADMIN",
+            leaseToken: undefined,
+            leaseExpiresAt: undefined,
+            nextAttemptAt: undefined,
+          }
+        : {}),
+      updatedAt: now,
+    });
+  }
+  for (const token of decisionTokens) {
+    await ctx.db.delete(token._id);
+  }
+  if (receipt?.bookingId === booking._id) {
+    await ctx.db.patch(receipt._id, {
+      bookingId: undefined,
+      state: "processed",
+      processingStartedAt: undefined,
+      processingToken: undefined,
+      lastError: undefined,
+      lastReceivedAt: now,
+    });
+  }
+
+  await clearReciprocalConflictWarnings(ctx, booking, now);
+  const clearedBlockingConflictReferenceCount =
+    await clearBlockingConflictReferences(ctx, booking._id, now);
+  await removeClaims(ctx, booking._id);
+  await ctx.db.insert("auditLogs", {
+    level: "warning",
+    category: "booking",
+    action: "booking_deleted",
+    actorType: "user",
+    actorId,
+    entityType: "booking",
+    entityId: String(booking._id),
+    message:
+      "A booking and all of its RoomOps-managed Google Calendar events were deleted.",
+    detailsJson: JSON.stringify({
+      submissionId: booking.jotformSubmissionId,
+      status: booking.status,
+      previousRevision: booking.revision ?? 0,
+      calendarEventCount: managedCalendarEventsForDeletion(
+        booking.calendarEvents,
+        booking.calendarAttemptedEvents,
+      ).length,
+      invalidatedEmailDecisionTokenCount: decisionTokens.length,
+      cancelledEmailDeliveryCount: cancelledDeliveryCount,
+      clearedBlockingConflictReferenceCount,
+      externalSubmissionDetached:
+        receipt?.bookingId === booking._id,
+    }),
+    createdAt: now,
+  });
+  await ctx.db.delete(booking._id);
+}
+
+export const beginBookingDeletion = internalMutation({
+  args: {
+    bookingId: v.id("bookings"),
+    expectedRevision: v.number(),
+    actorId: v.string(),
+    deletionToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    const now = Date.now();
+    if (bookingDeletionInProgress(booking, now)) {
+      bookingError(
+        "BOOKING_DELETION_IN_PROGRESS",
+        "This booking is already being removed.",
+      );
+    }
+    const previousRevision = booking.revision ?? 0;
+    if (
+      !Number.isInteger(args.expectedRevision) ||
+      args.expectedRevision !== previousRevision
+    ) {
+      bookingError(
+        "BOOKING_DELETE_CONFLICT",
+        "This booking changed after the page loaded. Review the latest row before deleting it.",
+      );
+    }
+    if (
+      booking.calendarSyncToken &&
+      (booking.calendarSyncLeaseExpiresAt ?? 0) > now
+    ) {
+      bookingError(
+        "CALENDAR_SYNC_IN_PROGRESS",
+        "Wait for the current Google Calendar operation to finish before deleting this booking.",
+      );
+    }
+    const deliveries = await ctx.db
+      .query("emailDeliveries")
+      .withIndex("by_booking", (query) =>
+        query.eq("bookingId", booking._id),
+      )
+      .collect();
+    if (hasActiveEmailDeliveryLease(deliveries, now)) {
+      bookingError(
+        "EMAIL_DELIVERY_IN_PROGRESS",
+        "Wait for the current booking email delivery to finish before deleting this booking.",
+      );
+    }
+    const deletionToken = args.deletionToken.trim();
+    if (!deletionToken) {
+      bookingError(
+        "BOOKING_DELETE_TOKEN_INVALID",
+        "A deletion ownership token is required.",
+      );
+    }
+    await ctx.db.patch(booking._id, {
+      deletionToken,
+      deletionLeaseExpiresAt: now + BOOKING_DELETION_LEASE_MS,
+      deletionAttempts: (booking.deletionAttempts ?? 0) + 1,
+      deletionError: undefined,
+      updatedAt: now,
+    });
+    await ctx.scheduler.runAfter(
+      BOOKING_DELETION_LEASE_MS,
+      internal.bookings.recoverBookingDeletionLease,
+      {
+        bookingId: booking._id,
+        deletionToken,
+      },
+    );
+    await ctx.db.insert("auditLogs", {
+      level: "info",
+      category: "booking",
+      action: "booking_deletion_started",
+      actorType: "user",
+      actorId: args.actorId,
+      entityType: "booking",
+      entityId: String(booking._id),
+      message:
+        "An administrator started safe booking and Calendar deletion.",
+      detailsJson: JSON.stringify({
+        attempt: (booking.deletionAttempts ?? 0) + 1,
+        calendarEventCount: managedCalendarEventsForDeletion(
+          booking.calendarEvents,
+          booking.calendarAttemptedEvents,
+        ).length,
+        expectedRevision: args.expectedRevision,
+      }),
+      createdAt: now,
+    });
+    return {
+      booking,
+      events: managedCalendarEventsForDeletion(
+        booking.calendarEvents,
+        booking.calendarAttemptedEvents,
+      ),
+    };
+  },
+});
+
+export const completeBookingDeletion = internalMutation({
+  args: {
+    bookingId: v.id("bookings"),
+    actorId: v.string(),
+    deletionToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return { deleted: false };
+    if (booking.deletionToken !== args.deletionToken) {
+      bookingError(
+        "BOOKING_DELETE_LEASE_LOST",
+        "This deletion attempt no longer owns the booking.",
+      );
+    }
+    if ((booking.deletionLeaseExpiresAt ?? 0) <= Date.now()) {
+      bookingError(
+        "BOOKING_DELETE_LEASE_EXPIRED",
+        "This deletion worker lease expired before it could finish. Retry deletion.",
+      );
+    }
+    await deleteBookingRecord(ctx, booking, args.actorId);
+    return { deleted: true };
+  },
+});
+
+export const failBookingDeletion = internalMutation({
+  args: {
+    bookingId: v.id("bookings"),
+    actorId: v.string(),
+    deletionToken: v.string(),
+    errorMessage: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking || booking.deletionToken !== args.deletionToken) {
+      return;
+    }
+    const now = Date.now();
+    const message =
+      args.errorMessage
+        .replace(/[\u0000-\u001f\u007f]/g, " ")
+        .trim()
+        .slice(0, 1_000) || "BOOKING_DELETE_FAILED";
+    await ctx.db.patch(booking._id, {
+      deletionToken: undefined,
+      deletionLeaseExpiresAt: undefined,
+      deletionError: message,
+      updatedAt: now,
+      revision: (booking.revision ?? 0) + 1,
+    });
+    await ctx.db.insert("auditLogs", {
+      level: "error",
+      category: "booking",
+      action: "booking_deletion_failed",
+      actorType: "user",
+      actorId: args.actorId,
+      entityType: "booking",
+      entityId: String(booking._id),
+      message:
+        "The booking was retained because its managed Calendar events could not all be deleted safely.",
+      detailsJson: JSON.stringify({
+        attempt: booking.deletionAttempts ?? 1,
+        error: message,
+      }),
+      createdAt: now,
+    });
+  },
+});
+
+export const recoverBookingDeletionLease = internalMutation({
+  args: {
+    bookingId: v.id("bookings"),
+    deletionToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    const now = Date.now();
+    if (
+      !booking ||
+      booking.deletionToken !== args.deletionToken
+    ) {
+      return;
+    }
+    const leaseExpiresAt = booking.deletionLeaseExpiresAt ?? 0;
+    if (leaseExpiresAt > now) {
+      await ctx.scheduler.runAfter(
+        leaseExpiresAt - now + 1_000,
+        internal.bookings.recoverBookingDeletionLease,
+        args,
+      );
+      return;
+    }
+    const message =
+      "Safe booking deletion did not finish before its worker lease expired. Retry deletion; already-removed Calendar events will be handled safely.";
+    await ctx.db.patch(booking._id, {
+      deletionToken: undefined,
+      deletionLeaseExpiresAt: undefined,
+      deletionError: message,
+      updatedAt: now,
+      revision: (booking.revision ?? 0) + 1,
+    });
+    await ctx.db.insert("auditLogs", {
+      level: "error",
+      category: "booking",
+      action: "booking_deletion_lease_expired",
+      actorType: "system",
+      entityType: "booking",
+      entityId: String(booking._id),
+      message,
+      detailsJson: JSON.stringify({
+        attempt: booking.deletionAttempts ?? 1,
+      }),
+      createdAt: now,
+    });
+  },
+});
+
+// Compatibility for an older browser. Rows with any managed or attempted
+// Calendar reference must use googleCalendar.deleteBooking, which verifies
+// event ownership and ETags before deleting the Convex record.
 export const deleteTableRow = mutation({
   args: {
     bookingId: v.id("bookings"),
@@ -1675,16 +2177,22 @@ export const deleteTableRow = mutation({
       return { deleted: false };
     }
     requireAvailabilityCheckComplete(booking);
+    requireBookingDeletionIdle(booking);
     if (booking.calendarSyncToken) {
       bookingError(
         "CALENDAR_SYNC_IN_PROGRESS",
         "Wait for the current Google Calendar operation to finish before deleting this row.",
       );
     }
-    if (needsCalendarAttemptCleanup(booking)) {
+    if (
+      managedCalendarEventsForDeletion(
+        booking.calendarEvents,
+        booking.calendarAttemptedEvents,
+      ).length > 0
+    ) {
       bookingError(
-        "CALENDAR_CLEANUP_ACTION_REQUIRED",
-        "This row has an incomplete Google Calendar attempt. Reject or retry the booking first so RoomOps can clean the possible Calendar event safely.",
+        "BOOKING_DELETE_ACTION_REQUIRED",
+        "Refresh RoomOps and delete this booking again so every managed Google Calendar event is removed safely.",
       );
     }
     const previousRevision = booking.revision ?? 0;
@@ -1695,45 +2203,7 @@ export const deleteTableRow = mutation({
       );
     }
 
-    const decisionTokens = await ctx.db
-      .query("emailDecisionTokens")
-      .withIndex("by_booking", (query) =>
-        query.eq("bookingId", booking._id),
-      )
-      .collect();
-    for (const token of decisionTokens) {
-      await ctx.db.delete(token._id);
-    }
-    const now = Date.now();
-    await clearReciprocalConflictWarnings(ctx, booking, now);
-    await removeClaims(ctx, booking._id);
-    await ctx.db.delete(booking._id);
-    await ctx.db.insert("auditLogs", {
-      level:
-        booking.status === "approved" &&
-        (booking.calendarEvents?.length ?? 0) > 0
-          ? "warning"
-          : "info",
-      category: "booking",
-      action: "booking_table_row_deleted",
-      actorType: "user",
-      actorId: user.clerkUserId,
-      entityType: "booking",
-      entityId: String(booking._id),
-      message:
-        booking.status === "approved" &&
-        (booking.calendarEvents?.length ?? 0) > 0
-          ? "A booking row was deleted from Convex. Existing managed Google Calendar events were not deleted by this table action."
-          : "A booking row was deleted from Convex.",
-      detailsJson: JSON.stringify({
-        submissionId: booking.jotformSubmissionId,
-        status: booking.status,
-        previousRevision,
-        calendarEventCount: booking.calendarEvents?.length ?? 0,
-        invalidatedEmailDecisionTokenCount: decisionTokens.length,
-      }),
-      createdAt: now,
-    });
+    await deleteBookingRecord(ctx, booking, user.clerkUserId);
     return { deleted: true };
   },
 });
@@ -1791,6 +2261,7 @@ async function rejectPendingBooking(
   calendarCleanupToken?: string,
 ) {
   requireAvailabilityCheckComplete(booking);
+  requireBookingDeletionIdle(booking);
   if (booking.status !== "pending") {
     bookingError(
       "INVALID_BOOKING_STATE",
@@ -1975,6 +2446,7 @@ export const beginCalendarApproval = internalMutation({
       bookingError("BOOKING_NOT_FOUND", "The booking no longer exists.");
     }
     requireAvailabilityCheckComplete(booking);
+    requireBookingDeletionIdle(booking);
     if (booking.status !== "pending") {
       bookingError(
         "INVALID_BOOKING_STATE",
@@ -2343,6 +2815,40 @@ export const recordCalendarAttemptTargets = internalMutation({
   },
 });
 
+export const recordCalendarReconciliationTargets = internalMutation({
+  args: {
+    bookingId: v.id("bookings"),
+    expectedRevision: v.number(),
+    syncToken: v.string(),
+    events: v.array(calendarEventRefValidator),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (
+      !booking ||
+      booking.status !== "approved" ||
+      booking.calendarSyncStatus !== "creating" ||
+      booking.calendarSyncToken !== args.syncToken ||
+      (booking.revision ?? 0) !== args.expectedRevision
+    ) {
+      bookingError(
+        "CALENDAR_SYNC_LEASE_LOST",
+        "This Calendar reconciliation no longer owns the approved booking.",
+      );
+    }
+    const attemptedEvents = mergeManagedCalendarEvents(
+      booking.calendarAttemptedEvents,
+      args.events,
+    );
+    await ctx.db.patch(booking._id, {
+      calendarAttemptedEvents:
+        attemptedEvents.length > 0 ? attemptedEvents : undefined,
+      updatedAt: Date.now(),
+    });
+    return attemptedEvents;
+  },
+});
+
 export const completeCalendarApproval = internalMutation({
   args: {
     bookingId: v.id("bookings"),
@@ -2647,7 +3153,8 @@ export const renewCalendarReconciliationLease = internalMutation({
       booking.status !== "approved" ||
       booking.calendarSyncStatus !== "creating" ||
       booking.calendarSyncToken !== args.syncToken ||
-      (booking.revision ?? 0) !== args.expectedRevision
+      (booking.revision ?? 0) !== args.expectedRevision ||
+      bookingDeletionInProgress(booking, Date.now())
     ) {
       return null;
     }
@@ -2766,9 +3273,14 @@ export const recordCalendarReconcileResult = internalMutation({
     }
     const currentRevision = booking.revision ?? 0;
     const revisionMatches = currentRevision === args.expectedRevision;
-    const success = args.success && revisionMatches;
+    const success =
+      args.success &&
+      revisionMatches &&
+      (args.events?.length ?? 0) > 0;
     const errorMessage = revisionMatches
-      ? args.errorMessage
+      ? args.success && (args.events?.length ?? 0) === 0
+        ? "Google Calendar reconciliation returned no managed event references."
+        : args.errorMessage
       : "The booking revision changed during Calendar synchronization. Retry synchronization from the booking list.";
     const now = Date.now();
     await ctx.db.patch(booking._id, {
@@ -2783,7 +3295,10 @@ export const recordCalendarReconcileResult = internalMutation({
       calendarSyncToken: undefined,
       calendarSyncLeaseExpiresAt: undefined,
       ...(success && args.events
-        ? { calendarEvents: args.events }
+        ? {
+            calendarAttemptedEvents: undefined,
+            calendarEvents: args.events,
+          }
         : {}),
       updatedAt: now,
     });
@@ -2817,6 +3332,7 @@ export const retryCalendarSync = mutation({
     if (!booking) {
       bookingError("BOOKING_NOT_FOUND", "The booking no longer exists.");
     }
+    requireBookingDeletionIdle(booking);
     if (
       booking.status !== "approved" ||
       (booking.calendarEvents?.length ?? 0) === 0
@@ -2898,6 +3414,7 @@ export const retryCalendarSync = mutation({
 export const edit = mutation({
   args: {
     bookingId: v.id("bookings"),
+    expectedRevision: v.number(),
     requesterName: v.string(),
     requesterEmail: v.string(),
     room: v.string(),
@@ -2906,6 +3423,9 @@ export const edit = mutation({
     eventName: v.optional(v.string()),
     purpose: v.optional(v.string()),
     ministry: v.optional(v.string()),
+    recurrenceFrequency: recurrenceFrequencyValidator,
+    recurrenceHasEndDate: v.boolean(),
+    recurrenceUntilAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const user = await requireCapability(ctx, "bookings.edit");
@@ -2914,15 +3434,56 @@ export const edit = mutation({
       bookingError("BOOKING_NOT_FOUND", "The booking no longer exists.");
     }
     requireAvailabilityCheckComplete(booking);
+    requireBookingDeletionIdle(booking);
     if (booking.calendarSyncToken) {
       bookingError(
         "CALENDAR_SYNC_IN_PROGRESS",
         "Wait for the current Google Calendar approval operation to finish before editing this booking.",
       );
     }
+    const previousRevision = booking.revision ?? 0;
+    if (
+      !Number.isInteger(args.expectedRevision) ||
+      args.expectedRevision !== previousRevision
+    ) {
+      bookingError(
+        "BOOKING_EDIT_CONFLICT",
+        "This booking changed after the editor opened. Close it, reload the latest booking, and try again.",
+      );
+    }
 
-    const recurrenceFrequency =
+    const recurrenceFrequency = args.recurrenceFrequency;
+    const recurrenceHasEndDate =
+      recurrenceFrequency !== "none" && args.recurrenceHasEndDate;
+    const recurrenceUntilAt = recurrenceHasEndDate
+      ? args.recurrenceUntilAt
+      : undefined;
+    const existingRecurrenceFrequency =
       booking.recurrenceFrequency ?? "none";
+    const existingRecurrenceHasEndDate =
+      existingRecurrenceFrequency !== "none" &&
+      (booking.recurrenceHasEndDate ??
+        (booking.recurrenceUntilAt !== undefined));
+    const changesRecurrenceDefinition = recurrenceDefinitionChanged({
+      currentFrequency: existingRecurrenceFrequency,
+      currentHasEndDate: existingRecurrenceHasEndDate,
+      currentStartAt: booking.startAt,
+      currentUntilAt: booking.recurrenceUntilAt,
+      nextFrequency: recurrenceFrequency,
+      nextHasEndDate: recurrenceHasEndDate,
+      nextStartAt: args.startAt,
+      nextUntilAt: recurrenceUntilAt,
+    });
+    if (
+      recurrenceFrequency !== "none" &&
+      recurrenceHasEndDate &&
+      recurrenceUntilAt === undefined
+    ) {
+      bookingError(
+        "RECURRENCE_UNTIL_REQUIRED",
+        "Choose the last date required for this recurring booking.",
+      );
+    }
     const {
       occurrences,
       resolvedVenues,
@@ -2932,21 +3493,25 @@ export const edit = mutation({
       ...args,
       timezone: booking.timezone,
       recurrenceFrequency,
-      recurrenceCount:
-        recurrenceFrequency === "none"
-          ? 1
-          : booking.recurrenceCount ??
-            booking.occurrences?.length,
-      recurrenceUntilAt: booking.recurrenceUntilAt,
+      recurrenceCount: recurrenceCountForAdminEdit({
+        frequency: recurrenceFrequency,
+        hasEndDate: recurrenceHasEndDate,
+        definitionChanged: changesRecurrenceDefinition,
+        existingOccurrenceCount:
+          booking.occurrences?.length ?? booking.recurrenceCount,
+        defaultOccurrenceCount: defaultRecurrenceCount,
+      }),
+      recurrenceUntilAt,
     });
     const changesReservation =
       roomKey !== booking.roomKey ||
       args.startAt !== booking.startAt ||
-      args.endAt !== booking.endAt;
+      args.endAt !== booking.endAt ||
+      changesRecurrenceDefinition;
     if (changesReservation && booking.status !== "pending") {
       bookingError(
-        "APPROVED_TIME_EDIT_DISABLED",
-        "Approved room and time fields are locked to preserve the synchronized Google Calendar series.",
+        "DECIDED_RESERVATION_EDIT_DISABLED",
+        "Room, time, repeat rule, and last date are locked after a decision so Convex cannot drift from Google Calendar.",
       );
     }
 
@@ -2983,7 +3548,7 @@ export const edit = mutation({
         eventName !== booking.eventName ||
         purpose !== booking.purpose ||
         ministry !== booking.ministry);
-    const newRevision = (booking.revision ?? 0) + 1;
+    const newRevision = previousRevision + 1;
     const nextCalendarAttempt =
       (booking.calendarSyncAttempts ?? 0) + 1;
     const syncToken = shouldReconcileCalendar
@@ -3005,8 +3570,9 @@ export const edit = mutation({
       purpose,
       ministry,
       recurrenceFrequency,
+      recurrenceHasEndDate,
       recurrenceCount: occurrences.length,
-      recurrenceUntilAt: booking.recurrenceUntilAt,
+      recurrenceUntilAt,
       occurrences,
       resolvedVenues,
       formResponses: updateCanonicalResponseValues(
@@ -3017,6 +3583,13 @@ export const edit = mutation({
           eventName,
           purpose,
           ministry,
+          recurrence: {
+            frequency: recurrenceFrequency,
+            hasEndDate: recurrenceHasEndDate,
+            count: occurrences.length,
+            untilAt: recurrenceUntilAt,
+            timezone: booking.timezone,
+          },
         },
       ),
       sheetRequesterName: undefined,
@@ -3060,6 +3633,12 @@ export const edit = mutation({
       message: `${booking.room} booking details were edited.`,
       detailsJson: JSON.stringify({
         reservationChanged: changesReservation,
+        previousRevision,
+        newRevision,
+        recurrenceFrequency,
+        recurrenceHasEndDate,
+        recurrenceUntilAt,
+        occurrenceCount: occurrences.length,
         calendarReconciliationQueued:
           shouldReconcileCalendar,
         submissionId: booking.jotformSubmissionId,

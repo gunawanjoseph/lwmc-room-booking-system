@@ -6,11 +6,15 @@ import {
   internalQuery,
   type ActionCtx,
   type MutationCtx,
+  type QueryCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireActionHeadAdmin } from "./lib/actionAuth";
-import { formatLocalDateTime } from "./lib/emailText";
+import {
+  formatLocalDate,
+  formatLocalDateTime,
+} from "./lib/emailText";
 import {
   availabilityFollowupKind,
   bookingEmailDependencyGate,
@@ -18,10 +22,14 @@ import {
   cleanEmailLine,
   encodeGmailMime,
   initialBookingEmailDelay,
+  isCurrentConflictAlertPair,
+  isCurrentStandaloneCalendarConflict,
   isRetryableGmailStatus,
   normalizeEmailAddress,
   requiresRequesterReceipt,
+  type ConflictAlertBookingState,
 } from "./lib/gmailMessage";
+import { bookingDeletionInProgress } from "./lib/bookingDeletion";
 
 type Booking = Doc<"bookings">;
 type EmailDelivery = Doc<"emailDeliveries">;
@@ -48,6 +56,10 @@ type DeliveryContext = {
   relatedBookings: Booking[];
 };
 
+type DeliveryContextLookup =
+  | { state: "ready"; context: DeliveryContext }
+  | { state: "cancel"; reason: string };
+
 const DELIVERY_LEASE_MS = 2 * 60_000;
 const MAX_DELIVERY_ATTEMPTS = 4;
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000];
@@ -55,6 +67,102 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const DECISION_LINK_LIFETIME_MS = 14 * 24 * 60 * 60_000;
 
 let cachedAccess: GmailAccess | undefined;
+
+function conflictAlertState(
+  booking: Booking,
+): ConflictAlertBookingState {
+  return {
+    id: String(booking._id),
+    status: booking.status,
+    availabilityCheckPending: booking.availabilityCheckPending,
+    calendarAvailabilityStatus: booking.calendarAvailabilityStatus,
+    conflictBookingId: booking.conflictBookingId
+      ? String(booking.conflictBookingId)
+      : undefined,
+    conflictWarningBookingIds:
+      booking.conflictWarningBookingIds?.map(String),
+    deletionToken: booking.deletionToken,
+    deletionLeaseExpiresAt: booking.deletionLeaseExpiresAt,
+  };
+}
+
+async function currentConflictRelatedBookings(
+  ctx: MutationCtx | QueryCtx,
+  booking: Booking,
+  relatedBookingIds: readonly Id<"bookings">[],
+  now: number,
+): Promise<Booking[]> {
+  const current: Booking[] = [];
+  const seen = new Set<string>();
+  for (const bookingId of relatedBookingIds) {
+    const key = String(bookingId);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const related = await ctx.db.get(bookingId);
+    if (
+      related &&
+      isCurrentConflictAlertPair(
+        conflictAlertState(booking),
+        conflictAlertState(related),
+        now,
+      )
+    ) {
+      current.push(related);
+    }
+  }
+  return current;
+}
+
+function hasCurrentConflictAlertCause(
+  booking: Booking,
+  relatedBookings: readonly Booking[],
+  requestedRelatedCount: number,
+  now: number,
+): boolean {
+  return (
+    relatedBookings.length > 0 ||
+    (requestedRelatedCount === 0 &&
+      isCurrentStandaloneCalendarConflict(
+        conflictAlertState(booking),
+        now,
+      ))
+  );
+}
+
+async function cancelDeliveryRecord(
+  ctx: MutationCtx,
+  delivery: EmailDelivery,
+  reason: string,
+  now: number,
+  gmailMessageId?: string,
+) {
+  const cleanReason = cleanSingleLine(reason);
+  await ctx.db.patch(delivery._id, {
+    status: "cancelled",
+    gmailMessageId:
+      gmailMessageId?.slice(0, 300) ?? delivery.gmailMessageId,
+    lastError: cleanReason,
+    leaseToken: undefined,
+    leaseExpiresAt: undefined,
+    nextAttemptAt: undefined,
+    updatedAt: now,
+  });
+  await ctx.db.insert("auditLogs", {
+    level: "warning",
+    category: "system",
+    action: `${delivery.kind}_cancelled`,
+    actorType: "system",
+    entityType: "booking",
+    entityId: String(delivery.bookingId),
+    message: "An obsolete email delivery was cancelled.",
+    detailsJson: JSON.stringify({
+      deliveryId: String(delivery._id),
+      reason: cleanReason,
+      gmailMessageId,
+    }),
+    createdAt: now,
+  });
+}
 
 class GmailDeliveryError extends Error {
   constructor(
@@ -324,9 +432,10 @@ function recurrenceLabel(booking: Booking): string | undefined {
   if (frequency === "none") return undefined;
   const labels: Record<string, string> = {
     daily: "Daily",
-    weekly_same_day: "Weekly on the same day",
-    monthly_same_day: "Monthly on the same ordinal weekday",
-    monthly_same_date: "Monthly on the same date",
+    weekly_same_day: "Every week",
+    biweekly_same_day: "Every 2 weeks",
+    monthly_same_day: "Every month on the same day",
+    monthly_same_date: "Every month on the same date",
   };
   return `${labels[frequency] ?? frequency} · ${
     booking.recurrenceCount ?? booking.occurrences?.length ?? 1
@@ -453,6 +562,15 @@ function bookingDetailRows(booking: Booking): EmailDetailRow[] {
   const recurrence = recurrenceLabel(booking);
   const lastOccurrence = occurrences.at(-1);
   if (recurrence && lastOccurrence) {
+    if (booking.recurrenceUntilAt !== undefined) {
+      rows.push({
+        label: "Requested last date",
+        value: formatLocalDate(
+          booking.recurrenceUntilAt,
+          booking.timezone,
+        ),
+      });
+    }
     rows.push({
       label: "Final occurrence",
       value: `${formatLocalDateTime(
@@ -584,12 +702,7 @@ function htmlFromText(text: string): string {
   });
 }
 
-function linkHtml(text: string, href: string): string {
-  return renderActionButton(text, href);
-}
-
 function errorDetails(error: unknown): {
-
   code: string;
   message: string;
   retryable: boolean;
@@ -905,7 +1018,12 @@ export const prepareBookingReceipt = internalMutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) return { queued: 0 };
+    if (
+      !booking ||
+      bookingDeletionInProgress(booking, Date.now())
+    ) {
+      return { queued: 0 };
+    }
     await ensureRequesterReceiptDelivery(ctx, booking._id);
     return { queued: 1 };
   },
@@ -915,7 +1033,11 @@ export const prepareBookingAvailabilityCompleted = internalMutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking || booking.availabilityCheckPending === true) {
+    if (
+      !booking ||
+      booking.availabilityCheckPending === true ||
+      bookingDeletionInProgress(booking, Date.now())
+    ) {
       return { queued: 0 };
     }
     return {
@@ -932,7 +1054,12 @@ export const prepareBookingCreated = internalMutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) return { queued: 0 };
+    if (
+      !booking ||
+      bookingDeletionInProgress(booking, Date.now())
+    ) {
+      return { queued: 0 };
+    }
     await ensureRequesterReceiptDelivery(ctx, booking._id);
     if (booking.availabilityCheckPending === true) {
       return { queued: 1 };
@@ -950,6 +1077,7 @@ export const prepareBookingDecision = internalMutation({
     if (
       !booking ||
       booking.availabilityCheckPending === true ||
+      bookingDeletionInProgress(booking, Date.now()) ||
       (booking.status !== "approved" &&
         booking.status !== "rejected" &&
         booking.status !== "unavailable")
@@ -983,10 +1111,15 @@ export const prepareConflictAlert = internalMutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking || booking.availabilityCheckPending === true) {
+    const now = Date.now();
+    if (
+      !booking ||
+      booking.availabilityCheckPending === true ||
+      bookingDeletionInProgress(booking, now)
+    ) {
       return { queued: 0 };
     }
-    const relatedBookingIds = [
+    const requestedRelatedBookingIds = [
       ...new Set(
         args.relatedBookingIds
           .filter((bookingId) => bookingId !== booking._id)
@@ -995,6 +1128,25 @@ export const prepareConflictAlert = internalMutation({
     ]
       .slice(0, 20)
       .map((bookingId) => bookingId as Id<"bookings">);
+    const relatedBookings = await currentConflictRelatedBookings(
+      ctx,
+      booking,
+      requestedRelatedBookingIds,
+      now,
+    );
+    if (
+      !hasCurrentConflictAlertCause(
+        booking,
+        relatedBookings,
+        requestedRelatedBookingIds.length,
+        now,
+      )
+    ) {
+      return { queued: 0 };
+    }
+    const relatedBookingIds = relatedBookings.map(
+      (related) => related._id,
+    );
     const approvers = await ctx.db
       .query("approverEmails")
       .withIndex("by_active", (range) => range.eq("active", true))
@@ -1012,7 +1164,7 @@ export const prepareConflictAlert = internalMutation({
         detailsJson: JSON.stringify({
           relatedBookingIds: relatedBookingIds.map(String),
         }),
-        createdAt: Date.now(),
+        createdAt: now,
       });
       return { queued: 0 };
     }
@@ -1090,6 +1242,43 @@ export const dispatchDelivery = internalMutation({
       return;
     }
     const now = Date.now();
+    const booking = await ctx.db.get(delivery.bookingId);
+    if (!booking || bookingDeletionInProgress(booking, now)) {
+      await cancelDeliveryRecord(
+        ctx,
+        delivery,
+        booking
+          ? "BOOKING_DELETION_IN_PROGRESS:No email may start while the booking is being deleted."
+          : "BOOKING_MISSING:The booking no longer exists.",
+        now,
+      );
+      return;
+    }
+    if (delivery.kind === "approver_conflict_urgent") {
+      const requestedRelatedIds = delivery.relatedBookingIds ?? [];
+      const relatedBookings = await currentConflictRelatedBookings(
+        ctx,
+        booking,
+        requestedRelatedIds,
+        now,
+      );
+      if (
+        !hasCurrentConflictAlertCause(
+          booking,
+          relatedBookings,
+          requestedRelatedIds.length,
+          now,
+        )
+      ) {
+        await cancelDeliveryRecord(
+          ctx,
+          delivery,
+          "CONFLICT_ALERT_OBSOLETE:The related bookings are no longer in a current conflict.",
+          now,
+        );
+        return;
+      }
+    }
     if (requiresRequesterReceipt(delivery.kind)) {
       let dependencyId = delivery.dependsOnDeliveryId;
       let dependency = dependencyId
@@ -1225,14 +1414,27 @@ export const getDeliveryContext = internalQuery({
     deliveryId: v.id("emailDeliveries"),
     leaseToken: v.string(),
   },
-  handler: async (ctx, args): Promise<DeliveryContext | null> => {
+  handler: async (ctx, args): Promise<DeliveryContextLookup> => {
     const delivery = await ctx.db.get(args.deliveryId);
     if (
       !delivery ||
       delivery.status !== "sending" ||
       delivery.leaseToken !== args.leaseToken
     ) {
-      return null;
+      return {
+        state: "cancel",
+        reason: "EMAIL_DELIVERY_LEASE_LOST",
+      };
+    }
+    const now = Date.now();
+    const booking = await ctx.db.get(delivery.bookingId);
+    if (!booking || bookingDeletionInProgress(booking, now)) {
+      return {
+        state: "cancel",
+        reason: booking
+          ? "BOOKING_DELETION_IN_PROGRESS:No email may start while the booking is being deleted."
+          : "BOOKING_MISSING:The booking no longer exists.",
+      };
     }
     if (requiresRequesterReceipt(delivery.kind)) {
       const dependency = delivery.dependsOnDeliveryId
@@ -1251,24 +1453,48 @@ export const getDeliveryContext = internalQuery({
             : null,
         ) !== "ready"
       ) {
-        return null;
+        return {
+          state: "cancel",
+          reason:
+            "EMAIL_DEPENDENCY_NOT_DELIVERED:The requester receipt is no longer a valid prerequisite.",
+        };
       }
     }
-    const booking = await ctx.db.get(delivery.bookingId);
-    if (!booking) return null;
     const decisionToken = delivery.decisionTokenId
       ? await ctx.db.get(delivery.decisionTokenId)
       : null;
-    const relatedBookings: Booking[] = [];
-    for (const bookingId of delivery.relatedBookingIds ?? []) {
-      const related = await ctx.db.get(bookingId);
-      if (related) relatedBookings.push(related);
+    let relatedBookings: Booking[] = [];
+    if (delivery.kind === "approver_conflict_urgent") {
+      const requestedRelatedIds = delivery.relatedBookingIds ?? [];
+      relatedBookings = await currentConflictRelatedBookings(
+        ctx,
+        booking,
+        requestedRelatedIds,
+        now,
+      );
+      if (
+        !hasCurrentConflictAlertCause(
+          booking,
+          relatedBookings,
+          requestedRelatedIds.length,
+          now,
+        )
+      ) {
+        return {
+          state: "cancel",
+          reason:
+            "CONFLICT_ALERT_OBSOLETE:The related bookings are no longer in a current conflict.",
+        };
+      }
     }
     return {
-      delivery,
-      booking,
-      decisionToken,
-      relatedBookings,
+      state: "ready",
+      context: {
+        delivery,
+        booking,
+        decisionToken,
+        relatedBookings,
+      },
     };
   },
 });
@@ -1451,22 +1677,22 @@ export const sendDelivery = internalAction({
     leaseToken: v.string(),
   },
   handler: async (ctx, args) => {
-    const context = (await ctx.runQuery(
+    const lookup = (await ctx.runQuery(
       internal.emailNotifications.getDeliveryContext,
       args,
-    )) as DeliveryContext | null;
-    if (!context) {
+    )) as DeliveryContextLookup;
+    if (lookup.state === "cancel") {
       await ctx.runMutation(
         internal.emailNotifications.cancelDelivery,
         {
           deliveryId: args.deliveryId,
           leaseToken: args.leaseToken,
-          reason:
-            "The booking no longer exists or this worker no longer owns the delivery.",
+          reason: lookup.reason,
         },
       );
       return;
     }
+    const context = lookup.context;
     try {
       const message = composeDelivery(context);
       const result = await sendGmail({
@@ -1525,6 +1751,45 @@ export const completeDelivery = internalMutation({
       return;
     }
     const now = Date.now();
+    const booking = await ctx.db.get(delivery.bookingId);
+    if (!booking || bookingDeletionInProgress(booking, now)) {
+      await cancelDeliveryRecord(
+        ctx,
+        delivery,
+        booking
+          ? "BOOKING_DELETION_STARTED_AFTER_GMAIL_ACCEPTED:Gmail may have accepted this message before deletion began."
+          : "BOOKING_DELETED_AFTER_GMAIL_ACCEPTED:Gmail may have accepted this message before the booking was removed.",
+        now,
+        args.gmailMessageId,
+      );
+      return;
+    }
+    if (delivery.kind === "approver_conflict_urgent") {
+      const requestedRelatedIds = delivery.relatedBookingIds ?? [];
+      const relatedBookings = await currentConflictRelatedBookings(
+        ctx,
+        booking,
+        requestedRelatedIds,
+        now,
+      );
+      if (
+        !hasCurrentConflictAlertCause(
+          booking,
+          relatedBookings,
+          requestedRelatedIds.length,
+          now,
+        )
+      ) {
+        await cancelDeliveryRecord(
+          ctx,
+          delivery,
+          "CONFLICT_OBSOLETE_AFTER_GMAIL_ACCEPTED:Gmail may have accepted this message before the conflict became obsolete.",
+          now,
+          args.gmailMessageId,
+        );
+        return;
+      }
+    }
     await ctx.db.patch(delivery._id, {
       status: "sent",
       gmailMessageId: args.gmailMessageId?.slice(0, 300),
@@ -1593,28 +1858,7 @@ export const cancelDelivery = internalMutation({
       return;
     }
     const now = Date.now();
-    await ctx.db.patch(delivery._id, {
-      status: "cancelled",
-      lastError: cleanSingleLine(args.reason),
-      leaseToken: undefined,
-      leaseExpiresAt: undefined,
-      nextAttemptAt: undefined,
-      updatedAt: now,
-    });
-    await ctx.db.insert("auditLogs", {
-      level: "warning",
-      category: "system",
-      action: `${delivery.kind}_cancelled`,
-      actorType: "system",
-      entityType: "booking",
-      entityId: String(delivery.bookingId),
-      message: "An obsolete email delivery was cancelled.",
-      detailsJson: JSON.stringify({
-        deliveryId: String(delivery._id),
-        reason: cleanSingleLine(args.reason),
-      }),
-      createdAt: now,
-    });
+    await cancelDeliveryRecord(ctx, delivery, args.reason, now);
   },
 });
 

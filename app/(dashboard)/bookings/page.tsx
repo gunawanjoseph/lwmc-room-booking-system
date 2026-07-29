@@ -8,13 +8,18 @@ import {
   Pencil,
   RotateCcw,
   Search,
+  Trash2,
   TriangleAlert,
   X,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { Capability } from "@/shared/roles";
-import { formatDateTime, messageFromError } from "@/lib/ui";
+import {
+  formatDate,
+  formatDateTime,
+  messageFromError,
+} from "@/lib/ui";
 import { StatusBadge } from "@/components/status-badge";
 
 type Booking = {
@@ -33,9 +38,17 @@ type Booking = {
     | "none"
     | "daily"
     | "weekly_same_day"
+    | "biweekly_same_day"
     | "monthly_same_day"
     | "monthly_same_date";
+  recurrenceHasEndDate: boolean;
   recurrenceCount: number;
+  recurrenceUntilAt?: number;
+  occurrences: Array<{
+    sequence: number;
+    startAt: number;
+    endAt: number;
+  }>;
   availabilityCheckPending: boolean;
   calendarAvailabilityStatus:
     | "unchecked"
@@ -51,14 +64,40 @@ type Booking = {
     | "failed"
     | "conflict";
   calendarSyncError?: string;
+  deletionInProgress: boolean;
+  deletionError?: string;
   status: "pending" | "approved" | "rejected" | "unavailable";
   createdAt: number;
+  revision: number;
+};
+
+const RECURRENCE_LABELS: Record<
+  Booking["recurrenceFrequency"],
+  string
+> = {
+  none: "No repeat",
+  daily: "Daily",
+  weekly_same_day: "Every week",
+  biweekly_same_day: "Every 2 weeks",
+  monthly_same_day: "Every month on the same day",
+  monthly_same_date: "Every month on the same date",
 };
 
 function localInputValue(timestamp: number, timezone: string): string {
   return DateTime.fromMillis(timestamp)
     .setZone(timezone)
     .toFormat("yyyy-MM-dd'T'HH:mm");
+}
+
+function localDateValue(
+  timestamp: number | undefined,
+  timezone: string,
+): string {
+  return timestamp === undefined
+    ? ""
+    : DateTime.fromMillis(timestamp, { zone: timezone }).toFormat(
+        "yyyy-MM-dd",
+      );
 }
 
 function DecisionDialog({
@@ -206,12 +245,23 @@ function EditDialog({
     eventName: booking.eventName ?? "",
     purpose: booking.purpose ?? "",
     ministry: booking.ministry ?? "",
+    recurrenceFrequency: booking.recurrenceFrequency,
+    recurrenceHasEndDate: booking.recurrenceHasEndDate
+      ? "yes"
+      : "no",
+    recurrenceUntil: localDateValue(
+      booking.recurrenceUntilAt,
+      booking.timezone,
+    ),
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const reservationEditable = booking.status === "pending";
 
-  function update(key: keyof typeof form, value: string) {
+  function update<Key extends keyof typeof form>(
+    key: Key,
+    value: (typeof form)[Key],
+  ) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
@@ -226,8 +276,19 @@ function EditDialog({
       const endAt = DateTime.fromISO(form.end, {
         zone: booking.timezone,
       }).toMillis();
+      const isRecurring = form.recurrenceFrequency !== "none";
+      const recurrenceHasEndDate =
+        isRecurring && form.recurrenceHasEndDate === "yes";
+      const recurrenceUntilAt = recurrenceHasEndDate
+        ? DateTime.fromFormat(form.recurrenceUntil, "yyyy-MM-dd", {
+            zone: booking.timezone,
+          })
+            .endOf("day")
+            .toMillis()
+        : undefined;
       await edit({
         bookingId: booking._id,
+        expectedRevision: booking.revision,
         requesterName: form.requesterName,
         requesterEmail: form.requesterEmail,
         room: form.room,
@@ -236,6 +297,9 @@ function EditDialog({
         eventName: form.eventName || undefined,
         purpose: form.purpose || undefined,
         ministry: form.ministry || undefined,
+        recurrenceFrequency: form.recurrenceFrequency,
+        recurrenceHasEndDate,
+        recurrenceUntilAt,
       });
       close();
     } catch (caught) {
@@ -264,8 +328,8 @@ function EditDialog({
         </div>
         {!reservationEditable && (
           <div className="info-banner">
-            Room and time are locked after a decision so the managed
-            Google Calendar series cannot drift from Convex.
+            Room, time, and recurrence are locked after a decision so the
+            managed Google Calendar series cannot drift from Convex.
           </div>
         )}
         <div className="form-grid">
@@ -345,6 +409,66 @@ function EditDialog({
               }
             />
           </label>
+          <label className="field form-grid-full">
+            <span>Repeat</span>
+            <select
+              disabled={!reservationEditable}
+              value={form.recurrenceFrequency}
+              onChange={(event) =>
+                update(
+                  "recurrenceFrequency",
+                  event.target
+                    .value as Booking["recurrenceFrequency"],
+                )
+              }
+            >
+              <option value="none">No repeat</option>
+              <option value="daily">Daily</option>
+              <option value="weekly_same_day">Every week</option>
+              <option value="biweekly_same_day">Every 2 weeks</option>
+              <option value="monthly_same_day">
+                Every month on the same day
+              </option>
+              <option value="monthly_same_date">
+                Every month on the same date
+              </option>
+            </select>
+          </label>
+          {form.recurrenceFrequency !== "none" && (
+            <>
+              <label className="field">
+                <span>Does this recurring booking have an end date?</span>
+                <select
+                  disabled={!reservationEditable}
+                  value={form.recurrenceHasEndDate}
+                  onChange={(event) =>
+                    update(
+                      "recurrenceHasEndDate",
+                      event.target.value,
+                    )
+                  }
+                >
+                  <option value="no">No</option>
+                  <option value="yes">Yes</option>
+                </select>
+              </label>
+              {form.recurrenceHasEndDate === "yes" && (
+                <label className="field">
+                  <span>Last date required</span>
+                  <input
+                    required
+                    disabled={!reservationEditable}
+                    type="date"
+                    min={form.start.slice(0, 10)}
+                    value={form.recurrenceUntil}
+                    onChange={(event) =>
+                      update("recurrenceUntil", event.target.value)
+                    }
+                  />
+                </label>
+              )}
+            </>
+          )}
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
@@ -365,6 +489,7 @@ function EditDialog({
 }
 
 export default function BookingsPage() {
+  const deleteBooking = useAction(api.googleCalendar.deleteBooking);
   const retryCalendarSync = useMutation(
     api.bookings.retryCalendarSync,
   );
@@ -383,7 +508,10 @@ export default function BookingsPage() {
   const [editing, setEditing] = useState<Booking | null>(null);
   const [retryingBookingId, setRetryingBookingId] =
     useState<Id<"bookings"> | null>(null);
+  const [deletingBookingId, setDeletingBookingId] =
+    useState<Id<"bookings"> | null>(null);
   const [pageError, setPageError] = useState("");
+  const [pageNotice, setPageNotice] = useState("");
 
   const canApprove =
     profile?.capabilities.includes("bookings.approve") ?? false;
@@ -399,6 +527,34 @@ export default function BookingsPage() {
       setPageError(messageFromError(caught));
     } finally {
       setRetryingBookingId(null);
+    }
+  }
+
+  async function removeBooking(booking: Booking) {
+    if (
+      !window.confirm(
+        `Permanently delete booking ${booking.jotformSubmissionId}? RoomOps will first remove every managed Google Calendar event, then delete the Convex record. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingBookingId(booking._id);
+    setPageError("");
+    setPageNotice("");
+    try {
+      const result = await deleteBooking({
+        bookingId: booking._id,
+        expectedRevision: booking.revision,
+      });
+      setPageNotice(
+        result.deleted
+          ? `Booking ${booking.jotformSubmissionId} and its managed Calendar events were deleted.`
+          : "That booking was already gone.",
+      );
+    } catch (caught) {
+      setPageError(messageFromError(caught));
+    } finally {
+      setDeletingBookingId(null);
     }
   }
 
@@ -440,6 +596,11 @@ export default function BookingsPage() {
       {pageError && (
         <div className="form-error page-error" role="alert">
           {pageError}
+        </div>
+      )}
+      {pageNotice && (
+        <div className="sheet-feedback sheet-feedback-success" role="status">
+          {pageNotice}
         </div>
       )}
 
@@ -540,13 +701,34 @@ export default function BookingsPage() {
                           )}
                         </small>
                         {booking.recurrenceFrequency !== "none" && (
-                          <small>
-                            {booking.recurrenceFrequency.replaceAll(
-                              "_",
-                              " ",
-                            )}{" "}
-                            · {booking.recurrenceCount} occurrences
-                          </small>
+                          <>
+                            <small>
+                              {
+                                RECURRENCE_LABELS[
+                                  booking.recurrenceFrequency
+                                ]
+                              }{" "}
+                              · {booking.recurrenceCount} occurrences
+                            </small>
+                            {booking.recurrenceUntilAt && (
+                              <small>
+                                Requested through{" "}
+                                {formatDate(
+                                  booking.recurrenceUntilAt,
+                                  booking.timezone,
+                                )}
+                              </small>
+                            )}
+                            {booking.occurrences.length > 1 && (
+                              <small>
+                                Final occurrence{" "}
+                                {formatDateTime(
+                                  booking.occurrences.at(-1)!.startAt,
+                                  booking.timezone,
+                                )}
+                              </small>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -605,6 +787,11 @@ export default function BookingsPage() {
                             Calendar action needs attention
                           </small>
                         )}
+                        {booking.deletionError && (
+                          <small title={booking.deletionError}>
+                            Previous deletion needs retry
+                          </small>
+                        )}
                       </div>
                     </td>
                     <td>
@@ -615,11 +802,14 @@ export default function BookingsPage() {
                             aria-label={`Edit ${booking.room} booking`}
                             disabled={
                               booking.availabilityCheckPending ||
-                              booking.calendarSyncStatus === "creating"
+                              booking.calendarSyncStatus === "creating" ||
+                              booking.deletionInProgress
                             }
                             title={
                               booking.availabilityCheckPending
                                 ? "Wait for the intake availability check to finish."
+                                : booking.deletionInProgress
+                                  ? "Safe Calendar and booking deletion is in progress."
                                 : booking.calendarSyncStatus === "creating"
                                 ? "Wait for Google Calendar synchronization to finish."
                                 : "Edit booking"
@@ -637,7 +827,8 @@ export default function BookingsPage() {
                               aria-label={`Retry Google Calendar synchronization for ${booking.room}`}
                               title="Retry Google Calendar synchronization"
                               disabled={
-                                retryingBookingId === booking._id
+                                retryingBookingId === booking._id ||
+                                booking.deletionInProgress
                               }
                               onClick={() =>
                                 void retryCalendar(booking)
@@ -646,6 +837,24 @@ export default function BookingsPage() {
                               <RotateCcw size={16} />
                             </button>
                           )}
+                        {canEdit && (
+                          <button
+                            className="icon-button action-reject"
+                            aria-label={`Delete ${booking.room} booking`}
+                            title={
+                              booking.deletionInProgress
+                                ? "Safe Calendar and booking deletion is already in progress."
+                                : "Delete booking and managed Calendar events"
+                            }
+                            disabled={
+                              booking.deletionInProgress ||
+                              deletingBookingId === booking._id
+                            }
+                            onClick={() => void removeBooking(booking)}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                         {canApprove &&
                           booking.status === "pending" &&
                           !booking.availabilityCheckPending && (
@@ -665,6 +874,7 @@ export default function BookingsPage() {
                                   decision: "approve",
                                 })
                               }
+                              disabled={booking.deletionInProgress}
                             >
                               <Check size={17} />
                             </button>
@@ -683,6 +893,7 @@ export default function BookingsPage() {
                                   decision: "reject",
                                 })
                               }
+                              disabled={booking.deletionInProgress}
                             >
                               <X size={17} />
                             </button>

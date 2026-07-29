@@ -23,3 +23,13 @@ export function formatDateTime(
     timeZone: timezone || "Asia/Singapore",
   }).format(new Date(timestamp));
 }
+
+export function formatDate(
+  timestamp: number,
+  timezone?: string,
+): string {
+  return new Intl.DateTimeFormat("en-SG", {
+    dateStyle: "medium",
+    timeZone: timezone || "Asia/Singapore",
+  }).format(new Date(timestamp));
+}

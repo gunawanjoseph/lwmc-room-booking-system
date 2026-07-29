@@ -13,6 +13,7 @@ export type JotformCanonicalField =
   | "purpose"
   | "ministry"
   | "recurrence"
+  | "recurrenceHasEndDate"
   | "recurrenceCount"
   | "recurrenceUntil"
   | "start"
@@ -54,10 +55,17 @@ export type BookingExportRow = {
     | "none"
     | "daily"
     | "weekly_same_day"
+    | "biweekly_same_day"
     | "monthly_same_day"
     | "monthly_same_date";
+  recurrenceHasEndDate?: boolean;
   recurrenceCount?: number;
   recurrenceUntilAt?: number;
+  occurrences?: Array<{
+    sequence: number;
+    startAt: number;
+    endAt: number;
+  }>;
   availabilityCheckPending?: boolean;
   calendarSyncStatus?:
     | "disabled"
@@ -99,6 +107,7 @@ export type BookingWorkbook = {
 const QID_PATTERN = /^\d{1,20}$/;
 export const MAX_EXPORTED_DYNAMIC_COLUMNS = 150;
 const LOCAL_DATE_FORMAT = "yyyy-mm-dd hh:mm";
+const LOCAL_DATE_ONLY_FORMAT = "yyyy-mm-dd";
 const UTC_DATE_FORMAT = "yyyy-mm-dd hh:mm:ss";
 
 const HEADER_STYLE = {
@@ -127,6 +136,20 @@ const STATUS_BACKGROUND: Record<BookingExportRow["status"], string> = {
   rejected: "#F4CCCC",
   unavailable: "#E6E6E6",
 };
+
+function recurrenceLabel(
+  frequency: BookingExportRow["recurrenceFrequency"],
+): string {
+  const labels = {
+    none: "No repeat",
+    daily: "Daily",
+    weekly_same_day: "Every week",
+    biweekly_same_day: "Every 2 weeks",
+    monthly_same_day: "Every month on the same day",
+    monthly_same_date: "Every month on the same date",
+  } as const;
+  return labels[frequency ?? "none"];
+}
 
 function textCell(
   value: unknown,
@@ -190,20 +213,13 @@ function compareNumericQids(
  *
  * The newest booking metadata wins when a question label is changed. Columns
  * are then sorted by numeric qid, an identifier that remains stable when a
- * question is renamed or moved in Jotform.
+ * question is renamed or moved in Jotform. Canonical status is evaluated per
+ * stored response so a later field-map change cannot hide historical dynamic
+ * answers that share the same qid.
  */
 export function collectDynamicColumns(
   rows: readonly BookingExportRow[],
 ): DynamicJotformColumn[] {
-  const canonicalQids = new Set<string>();
-  for (const row of rows) {
-    for (const response of row.formResponses ?? []) {
-      if (response.canonicalField && QID_PATTERN.test(response.qid)) {
-        canonicalQids.add(response.qid);
-      }
-    }
-  }
-
   const newestFirst = rows
     .map((row, originalIndex) => ({
       row,
@@ -224,7 +240,6 @@ export function collectDynamicColumns(
       const qid = response.qid.trim();
       if (
         response.canonicalField ||
-        canonicalQids.has(qid) ||
         !QID_PATTERN.test(qid) ||
         columns.has(qid)
       ) {
@@ -271,7 +286,9 @@ function selectDynamicColumns(
   for (const row of rows) {
     for (const response of row.formResponses ?? []) {
       const qid = response.qid.trim();
-      if (!candidateQids.has(qid)) continue;
+      if (response.canonicalField || !candidateQids.has(qid)) {
+        continue;
+      }
       const existing = mostRecentlySeen.get(qid);
       if (existing === undefined || row.createdAt > existing) {
         mostRecentlySeen.set(qid, row.createdAt);
@@ -361,8 +378,11 @@ function bookingsHeader(
     "Purpose",
     "Ministry",
     "Repeat",
+    "Has Recurrence End Date",
     "Occurrence Count",
-    "Repeat Until (Local)",
+    "Requested Last Date (Local)",
+    "Final Occurrence Start (Local)",
+    "Final Occurrence End (Local)",
     "Calendar Sync",
     "Review Note",
     "Submitted (UTC)",
@@ -410,6 +430,7 @@ function bookingDataRow(
   const baseStyle = { ...BODY_STYLE, ...alternateRow };
   const wrapStyle = { ...baseStyle, wrap: true };
   const responseValues = dynamicValues(row);
+  const finalOccurrence = row.occurrences?.at(-1);
 
   return [
     textCell(row.jotformSubmissionId, baseStyle),
@@ -435,8 +456,14 @@ function bookingDataRow(
     textCell(row.eventName ?? "", wrapStyle),
     textCell(row.purpose ?? "", wrapStyle),
     textCell(row.ministry ?? "", wrapStyle),
+    textCell(recurrenceLabel(row.recurrenceFrequency), baseStyle),
     textCell(
-      (row.recurrenceFrequency ?? "none").replaceAll("_", " "),
+      (row.recurrenceFrequency ?? "none") === "none"
+        ? "No"
+        : (row.recurrenceHasEndDate ??
+            (row.recurrenceUntilAt !== undefined))
+          ? "Yes"
+          : "No",
       baseStyle,
     ),
     numberCell(row.recurrenceCount ?? 1, baseStyle),
@@ -445,6 +472,26 @@ function bookingDataRow(
         ? undefined
         : toTimezoneWallClockDate(
             row.recurrenceUntilAt,
+            row.timezone,
+          ),
+      LOCAL_DATE_ONLY_FORMAT,
+      baseStyle,
+    ),
+    dateCell(
+      finalOccurrence === undefined
+        ? undefined
+        : toTimezoneWallClockDate(
+            finalOccurrence.startAt,
+            row.timezone,
+          ),
+      LOCAL_DATE_FORMAT,
+      baseStyle,
+    ),
+    dateCell(
+      finalOccurrence === undefined
+        ? undefined
+        : toTimezoneWallClockDate(
+            finalOccurrence.endAt,
             row.timezone,
           ),
       LOCAL_DATE_FORMAT,
@@ -498,8 +545,8 @@ export function buildBookingWorkbook(
   ];
 
   const fixedColumnWidths = [
-    20, 24, 30, 20, 19, 19, 22, 14, 30, 36, 24, 24, 16, 20, 18,
-    30, 20, 20, 20, 10, 28,
+    20, 24, 30, 20, 19, 19, 22, 14, 30, 36, 24, 24, 18, 16, 20, 20,
+    20, 18, 30, 20, 20, 20, 10, 28,
   ];
   const sheets: Sheet<BrowserFileContent>[] = [
     {

@@ -68,7 +68,7 @@ export default function HomePage() {
         </div>
         <a
           className="button button-secondary"
-          href="https://form.jotform.com/261740998492068"
+          href="https://submit.jotform.com/261740998492068"
           target="_blank"
           rel="noreferrer"
         >

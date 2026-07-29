@@ -1,11 +1,14 @@
 import { DateTime } from "luxon";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MAX_RECURRENCE_HORIZON_YEARS,
   MAX_RECURRENCE_OCCURRENCES,
+  assertRecurrenceOccurrencesHaveStableUtcOffset,
   buildGoogleRecurrenceRule,
   expandRecurrence,
   parseRecurrenceFrequency,
+  recurrenceCountForAdminEdit,
+  recurrenceDefinitionChanged,
 } from "./recurrence";
 
 function millis(
@@ -61,7 +64,7 @@ describe("recurrence expansion", () => {
     ]);
   });
 
-  it("expands daily and weekly rules with count including the base", () => {
+  it("expands daily, weekly, and every-two-weeks rules with count including the base", () => {
     expect(
       isoDates(
         expandRecurrence({
@@ -81,6 +84,16 @@ describe("recurrence expansion", () => {
         }),
       ),
     ).toEqual(["2026-01-16", "2026-01-23", "2026-01-30"]);
+
+    expect(
+      isoDates(
+        expandRecurrence({
+          ...base,
+          frequency: "biweekly_same_day",
+          count: 3,
+        }),
+      ),
+    ).toEqual(["2026-01-16", "2026-01-30", "2026-02-13"]);
   });
 
   it("uses the same ordinal weekday for monthly_same_day", () => {
@@ -181,7 +194,7 @@ describe("recurrence expansion", () => {
     ).toEqual(["2026-01-16", "2026-01-23", "2026-01-30"]);
   });
 
-  it("keeps local wall-clock times through daylight-saving changes", () => {
+  it("rejects a recurring series whose starts cross a daylight-saving offset change", () => {
     const zone = "America/New_York";
     const dstBase = {
       startAt: millis(
@@ -204,32 +217,146 @@ describe("recurrence expansion", () => {
       ),
       timezone: zone,
     };
-    const occurrences = expandRecurrence({
-      ...dstBase,
-      frequency: "weekly_same_day",
-      count: 3,
+    expect(() =>
+      expandRecurrence({
+        ...dstBase,
+        frequency: "weekly_same_day",
+        count: 3,
+      }),
+    ).toThrow(
+      "RECURRENCE_TIMEZONE_OFFSET_TRANSITION_UNSUPPORTED",
+    );
+  });
+
+  it("rejects a recurring occurrence whose interval crosses a daylight-saving offset change", () => {
+    const zone = "America/New_York";
+    expect(() =>
+      expandRecurrence({
+        startAt: millis(
+          {
+            year: 2026,
+            month: 3,
+            day: 8,
+            hour: 1,
+            minute: 30,
+          },
+          zone,
+        ),
+        endAt: millis(
+          {
+            year: 2026,
+            month: 3,
+            day: 8,
+            hour: 3,
+            minute: 30,
+          },
+          zone,
+        ),
+        timezone: zone,
+        frequency: "weekly_same_day",
+        count: 2,
+      }),
+    ).toThrow(
+      "RECURRENCE_TIMEZONE_OFFSET_TRANSITION_UNSUPPORTED",
+    );
+  });
+
+  it("rejects a generated start that falls in a nonexistent daylight-saving wall time", () => {
+    const zone = "America/New_York";
+    expect(() =>
+      expandRecurrence({
+        startAt: millis(
+          {
+            year: 2026,
+            month: 3,
+            day: 7,
+            hour: 2,
+            minute: 30,
+          },
+          zone,
+        ),
+        endAt: millis(
+          {
+            year: 2026,
+            month: 3,
+            day: 7,
+            hour: 4,
+            minute: 30,
+          },
+          zone,
+        ),
+        timezone: zone,
+        frequency: "daily",
+        count: 3,
+      }),
+    ).toThrow(
+      "RECURRENCE_TIMEZONE_OFFSET_TRANSITION_UNSUPPORTED",
+    );
+  });
+
+  it("allows a one-time interval across a daylight-saving offset change", () => {
+    const zone = "America/New_York";
+    const occurrence = expandRecurrence({
+      startAt: millis(
+        {
+          year: 2026,
+          month: 3,
+          day: 8,
+          hour: 1,
+          minute: 30,
+        },
+        zone,
+      ),
+      endAt: millis(
+        {
+          year: 2026,
+          month: 3,
+          day: 8,
+          hour: 3,
+          minute: 30,
+        },
+        zone,
+      ),
+      timezone: zone,
+      frequency: "none",
     });
 
-    expect(
-      occurrences.map((occurrence) =>
-        DateTime.fromMillis(occurrence.startAt, { zone }).toFormat(
-          "yyyy-MM-dd HH:mm",
+    expect(occurrence).toHaveLength(1);
+  });
+
+  it("rejects a legacy stored occurrence set that crosses a UTC-offset transition", () => {
+    const zone = "America/New_York";
+    const storedOccurrences = [
+      {
+        startAt: millis(
+          { year: 2026, month: 3, day: 1, hour: 9 },
+          zone,
         ),
+        endAt: millis(
+          { year: 2026, month: 3, day: 1, hour: 10 },
+          zone,
+        ),
+      },
+      {
+        startAt: millis(
+          { year: 2026, month: 3, day: 15, hour: 9 },
+          zone,
+        ),
+        endAt: millis(
+          { year: 2026, month: 3, day: 15, hour: 10 },
+          zone,
+        ),
+      },
+    ];
+
+    expect(() =>
+      assertRecurrenceOccurrencesHaveStableUtcOffset(
+        storedOccurrences,
+        zone,
       ),
-    ).toEqual([
-      "2026-03-01 09:00",
-      "2026-03-08 09:00",
-      "2026-03-15 09:00",
-    ]);
-    expect(
-      occurrences.map((occurrence) =>
-        new Date(occurrence.startAt).toISOString(),
-      ),
-    ).toEqual([
-      "2026-03-01T14:00:00.000Z",
-      "2026-03-08T13:00:00.000Z",
-      "2026-03-15T13:00:00.000Z",
-    ]);
+    ).toThrow(
+      "RECURRENCE_TIMEZONE_OFFSET_TRANSITION_UNSUPPORTED",
+    );
   });
 
   it("preserves an overnight booking across monthly ordinal shifts", () => {
@@ -327,16 +454,124 @@ describe("recurrence expansion", () => {
     expect(
       parseRecurrenceFrequency("Weekly on the same day"),
     ).toBe("weekly_same_day");
+    expect(parseRecurrenceFrequency("Every week")).toBe(
+      "weekly_same_day",
+    );
+    expect(parseRecurrenceFrequency("Every 2 weeks")).toBe(
+      "biweekly_same_day",
+    );
+    expect(parseRecurrenceFrequency("Every two weeks")).toBe(
+      "biweekly_same_day",
+    );
     expect(
       parseRecurrenceFrequency("Monthly on the same day"),
     ).toBe("monthly_same_day");
     expect(
+      parseRecurrenceFrequency("Every month on the same day"),
+    ).toBe("monthly_same_day");
+    expect(
       parseRecurrenceFrequency("Monthly on the same date"),
+    ).toBe("monthly_same_date");
+    expect(
+      parseRecurrenceFrequency("Every month on the same date"),
     ).toBe("monthly_same_date");
     expect(parseRecurrenceFrequency("No repeat")).toBe("none");
     expect(() =>
       parseRecurrenceFrequency("Whenever possible"),
     ).toThrow("RECURRENCE_FREQUENCY_INVALID");
+  });
+});
+
+describe("recurrence edit bounds", () => {
+  it("treats a moved series start as a recurrence-definition change", () => {
+    expect(
+      recurrenceDefinitionChanged({
+        currentFrequency: "daily",
+        currentHasEndDate: true,
+        currentStartAt: 1_000,
+        currentUntilAt: 10_000,
+        nextFrequency: "daily",
+        nextHasEndDate: true,
+        nextStartAt: 2_000,
+        nextUntilAt: 10_000,
+      }),
+    ).toBe(true);
+    expect(
+      recurrenceDefinitionChanged({
+        currentFrequency: "daily",
+        currentHasEndDate: true,
+        currentStartAt: 1_000,
+        currentUntilAt: 10_000,
+        nextFrequency: "daily",
+        nextHasEndDate: true,
+        nextStartAt: 1_000,
+        nextUntilAt: 10_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves an existing no-end series count for metadata-only edits", () => {
+    const defaultCount = vi.fn(() => 12);
+
+    expect(
+      recurrenceCountForAdminEdit({
+        frequency: "weekly_same_day",
+        hasEndDate: false,
+        definitionChanged: false,
+        existingOccurrenceCount: 20,
+        defaultOccurrenceCount: defaultCount,
+      }),
+    ).toBe(20);
+    expect(defaultCount).not.toHaveBeenCalled();
+  });
+
+  it("preserves the accepted count of an unchanged dated series", () => {
+    const defaultCount = vi.fn(() => 12);
+
+    expect(
+      recurrenceCountForAdminEdit({
+        frequency: "daily",
+        hasEndDate: true,
+        definitionChanged: false,
+        existingOccurrenceCount: 3,
+        defaultOccurrenceCount: defaultCount,
+      }),
+    ).toBe(3);
+    expect(defaultCount).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured count only for a new or changed no-end rule", () => {
+    expect(
+      recurrenceCountForAdminEdit({
+        frequency: "biweekly_same_day",
+        hasEndDate: false,
+        definitionChanged: true,
+        existingOccurrenceCount: 20,
+        defaultOccurrenceCount: () => 12,
+      }),
+    ).toBe(12);
+  });
+
+  it("does not resolve a default count for one-time or dated rules", () => {
+    const defaultCount = vi.fn(() => 12);
+
+    expect(
+      recurrenceCountForAdminEdit({
+        frequency: "none",
+        hasEndDate: false,
+        definitionChanged: true,
+        defaultOccurrenceCount: defaultCount,
+      }),
+    ).toBe(1);
+    expect(
+      recurrenceCountForAdminEdit({
+        frequency: "monthly_same_date",
+        hasEndDate: true,
+        definitionChanged: true,
+        defaultOccurrenceCount: defaultCount,
+      }),
+    ).toBeUndefined();
+    expect(defaultCount).not.toHaveBeenCalled();
   });
 });
 
@@ -348,7 +583,7 @@ describe("Google Calendar recurrence rules", () => {
     hour: 19,
   });
 
-  it("builds daily, weekly, ordinal-weekday, and same-date rules", () => {
+  it("builds daily, weekly, every-two-weeks, ordinal-weekday, and same-date rules", () => {
     expect(
       buildGoogleRecurrenceRule({
         frequency: "daily",
@@ -365,6 +600,14 @@ describe("Google Calendar recurrence rules", () => {
         timezone: "Asia/Singapore",
       }),
     ).toBe("RRULE:FREQ=WEEKLY;BYDAY=FR;COUNT=12");
+    expect(
+      buildGoogleRecurrenceRule({
+        frequency: "biweekly_same_day",
+        occurrenceCount: 12,
+        startAt,
+        timezone: "Asia/Singapore",
+      }),
+    ).toBe("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;COUNT=12");
     expect(
       buildGoogleRecurrenceRule({
         frequency: "monthly_same_day",
