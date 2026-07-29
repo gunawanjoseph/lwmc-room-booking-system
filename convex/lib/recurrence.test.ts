@@ -420,7 +420,7 @@ describe("recurrence expansion", () => {
     ).toThrow("RECURRENCE_UNTIL_BEFORE_START");
   });
 
-  it("caps until-only rules by horizon and occurrence count", () => {
+  it("caps until-only rules by horizon", () => {
     const tooFar = DateTime.fromMillis(base.startAt, {
       zone: base.timezone,
     })
@@ -434,19 +434,11 @@ describe("recurrence expansion", () => {
       }),
     ).toThrow("RECURRENCE_HORIZON_EXCEEDED");
 
-    const moreThanMaximumDailyOccurrences =
-      DateTime.fromMillis(base.startAt, {
-        zone: base.timezone,
-      })
-        .plus({ days: MAX_RECURRENCE_OCCURRENCES })
-        .toMillis();
-    expect(() =>
-      expandRecurrence({
-        ...base,
-        frequency: "daily",
-        untilAt: moreThanMaximumDailyOccurrences,
-      }),
-    ).toThrow("RECURRENCE_OCCURRENCE_LIMIT_EXCEEDED");
+    // With a 10000-occurrence cap and a 20-year horizon, the horizon (about
+    // 7305 days) is always the tighter bound for a daily until-only rule, so
+    // that combination can never reach the occurrence cap itself here. The
+    // occurrence cap is still enforced directly for explicit counts above
+    // MAX_RECURRENCE_OCCURRENCES, as covered in the test above.
   });
 
   it("parses current Jotform recurrence labels and rejects unknown ones", () => {
