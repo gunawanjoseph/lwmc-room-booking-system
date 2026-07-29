@@ -752,7 +752,7 @@ export function mapJotformBooking(
     if (!fieldMap.recurrenceHasEndDate && recurrenceCountAnswer) {
       const countText = answerAsText(recurrenceCountAnswer);
       if (countText) {
-        if (!/^\d{1,3}$/.test(countText)) {
+        if (!/^\d{1,5}$/.test(countText)) {
           throw new Error("JOTFORM_RECURRENCE_COUNT_INVALID");
         }
         recurrenceCount = Number(countText);
