@@ -61,6 +61,7 @@ export default function UserManagementPage() {
     | undefined;
   const upsertApprover = useMutation(api.approvers.upsert);
   const setApproverActive = useMutation(api.approvers.setActive);
+  const removeApprover = useMutation(api.approvers.remove);
   const [roleSelections, setRoleSelections] = useState<
     Record<string, AssignableRole>
   >({});
@@ -432,6 +433,31 @@ export default function UserManagementPage() {
                   >
                     {approver.active ? "Deactivate" : "Reactivate"}
                   </button>
+                  {!approver.active && (
+                    <button
+                      type="button"
+                      className="icon-button action-reject"
+                      disabled={busyId === approver._id}
+                      aria-label={`Permanently remove ${
+                        approver.displayName || approver.email
+                      } as an email approver`}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Permanently remove ${
+                              approver.displayName || approver.email
+                            }? This deletes the approver record from Convex and cannot be undone.`,
+                          )
+                        ) {
+                          void run(approver._id, () =>
+                            removeApprover({ approverId: approver._id }),
+                          );
+                        }
+                      }}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
                 </div>
               </article>
             ))

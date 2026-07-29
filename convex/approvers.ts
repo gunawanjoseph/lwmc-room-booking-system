@@ -6,6 +6,7 @@ import {
   query,
   type MutationCtx,
 } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { requireHeadAdmin } from "./lib/auth";
 import {
@@ -184,6 +185,41 @@ export const setActive = mutation({
         });
       }
     }
+  },
+});
+
+export const remove = mutation({
+  args: {
+    approverId: v.id("approverEmails"),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireHeadAdmin(ctx);
+    const approver = await ctx.db.get(args.approverId);
+    if (!approver) {
+      approverError(
+        "APPROVER_NOT_FOUND",
+        "That approver email no longer exists.",
+      );
+    }
+    if (approver.active) {
+      approverError(
+        "APPROVER_STILL_ACTIVE",
+        "Deactivate this approver before permanently removing it.",
+      );
+    }
+    await ctx.db.delete(approver._id);
+    await ctx.scheduler.runAfter(0, internal.logs.write, {
+      level: "warning",
+      category: "user_management",
+      action: "approver_removed",
+      actorType: "user",
+      actorId: user.clerkUserId,
+      entityType: "approverEmail",
+      entityId: String(approver._id),
+      message: `${
+        approver.displayName || approver.email
+      } was permanently removed as an email approver.`,
+    });
   },
 });
 
