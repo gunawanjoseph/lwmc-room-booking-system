@@ -7,6 +7,7 @@ import {
   mutation,
   query,
   type MutationCtx,
+  type QueryCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -49,6 +50,11 @@ import {
 } from "./lib/calendarTransition";
 import { calculateConflictOverview } from "./lib/bookingOverview";
 import {
+  applyOccurrenceEdit,
+  conflictIdsAcknowledged,
+  type EditableOccurrence,
+} from "./lib/bookingEdit";
+import {
   bookingDeletionInProgress,
   hasActiveEmailDeliveryLease,
   managedCalendarEventsForDeletion,
@@ -64,6 +70,9 @@ type BookingInput = {
   recurrenceCount?: number;
   recurrenceUntilAt?: number;
 };
+
+type BookingOccurrence = RecurrenceOccurrence &
+  Pick<EditableOccurrence, "room" | "resolvedVenues">;
 
 const MAX_TABLE_EDITS = 50;
 const MAX_RESPONSE_EDITS_PER_BOOKING = 40;
@@ -543,16 +552,19 @@ type BookingConflict = {
 };
 
 async function findConflicts(
-  ctx: MutationCtx,
+  ctx: MutationCtx | QueryCtx,
   args: {
-    occurrences: RecurrenceOccurrence[];
+    occurrences: BookingOccurrence[];
     resolvedVenues: string[];
     excludeBookingId?: Id<"bookings">;
   },
 ): Promise<BookingConflict[]> {
-  const claimRoomTargets = conflictClaimRoomTargets(
-    args.resolvedVenues,
-  );
+  const claimRoomTargets = conflictClaimRoomTargets([
+    ...args.resolvedVenues,
+    ...args.occurrences.flatMap(
+      (occurrence) => occurrence.resolvedVenues ?? [],
+    ),
+  ]);
   try {
     assertConflictLookupRangesWithinLimit(
       args.occurrences,
@@ -569,8 +581,11 @@ async function findConflicts(
     string,
     Omit<BookingConflict, "booking">
   >();
-  for (const { roomKey, targetVenue } of claimRoomTargets) {
-    for (const occurrence of args.occurrences) {
+  for (const occurrence of args.occurrences) {
+    const occurrenceTargets = conflictClaimRoomTargets(
+      occurrence.resolvedVenues ?? args.resolvedVenues,
+    );
+    for (const { roomKey, targetVenue } of occurrenceTargets) {
       for (const utcDay of utcDaysForInterval(
         occurrence.startAt,
         occurrence.endAt,
@@ -617,17 +632,6 @@ async function findConflicts(
     }
   }
   return conflicts;
-}
-
-async function findConflict(
-  ctx: MutationCtx,
-  args: {
-    occurrences: RecurrenceOccurrence[];
-    resolvedVenues: string[];
-    excludeBookingId?: Id<"bookings">;
-  },
-): Promise<BookingConflict | null> {
-  return (await findConflicts(ctx, args))[0] ?? null;
 }
 
 function uniqueBookingIds(
@@ -715,13 +719,14 @@ async function addClaims(
   ctx: MutationCtx,
   bookingId: Id<"bookings">,
   args: {
-    occurrences: RecurrenceOccurrence[];
+    occurrences: BookingOccurrence[];
     resolvedVenues: string[];
   },
 ) {
-  for (const targetVenue of args.resolvedVenues) {
-    const roomKey = normalizeRoomKey(targetVenue);
-    for (const occurrence of args.occurrences) {
+  for (const occurrence of args.occurrences) {
+    for (const targetVenue of
+      occurrence.resolvedVenues ?? args.resolvedVenues) {
+      const roomKey = normalizeRoomKey(targetVenue);
       for (const utcDay of utcDaysForInterval(
         occurrence.startAt,
         occurrence.endAt,
@@ -2438,6 +2443,7 @@ export const beginCalendarApproval = internalMutation({
     actorId: v.string(),
     syncToken: v.string(),
     purpose: v.union(v.literal("approve"), v.literal("cleanup")),
+    confirmConflicts: v.optional(v.boolean()),
     emailDecisionClaim: v.optional(emailDecisionClaimValidator),
   },
   handler: async (ctx, args) => {
@@ -2576,6 +2582,42 @@ export const beginCalendarApproval = internalMutation({
       const pendingConflictIds = uniqueBookingIds(
         pendingConflicts.map((conflict) => conflict.bookingId),
       );
+      if (
+        pendingConflictIds.length > 0 &&
+        args.confirmConflicts !== true
+      ) {
+        await addReciprocalConflictWarnings(
+          ctx,
+          booking._id,
+          pendingConflictIds,
+          now,
+        );
+        await ctx.db.patch(booking._id, {
+          conflictWarningBookingIds: uniqueBookingIds(
+            [
+              ...(booking.conflictWarningBookingIds ?? []),
+              ...pendingConflictIds,
+            ],
+            booking._id,
+          ),
+          conflictWarningAcknowledgedAt: undefined,
+          updatedAt: now,
+          revision: (booking.revision ?? 0) + 1,
+        });
+        await ctx.scheduler.runAfter(
+          0,
+          internal.emailNotifications.notifyConflictAlert,
+          {
+            bookingId: booking._id,
+            relatedBookingIds: pendingConflictIds,
+          },
+        );
+        return {
+          started: false as const,
+          reason: "conflict_ack_required" as const,
+          conflictBookingId: pendingConflictIds[0],
+        };
+      }
       const inProgressConflict = pendingConflicts.find(
         (conflict) =>
           conflict.booking.calendarSyncStatus === "creating" &&
@@ -3282,6 +3324,11 @@ export const recordCalendarReconcileResult = internalMutation({
         ? "Google Calendar reconciliation returned no managed event references."
         : args.errorMessage
       : "The booking revision changed during Calendar synchronization. Retry synchronization from the booking list.";
+    const calendarConflict =
+      !success &&
+      errorMessage?.startsWith(
+        "GOOGLE_CALENDAR_CONFLICT_AFTER_EDIT:",
+      ) === true;
     const now = Date.now();
     await ctx.db.patch(booking._id, {
       calendarSyncStatus: success ? "synced" : "failed",
@@ -3294,6 +3341,21 @@ export const recordCalendarReconcileResult = internalMutation({
         : booking.calendarSyncedAt,
       calendarSyncToken: undefined,
       calendarSyncLeaseExpiresAt: undefined,
+      calendarAvailabilityStatus: success
+        ? "available"
+        : calendarConflict
+          ? "conflict"
+          : booking.calendarAvailabilityStatus,
+      calendarConflictSummary: success
+        ? undefined
+        : calendarConflict
+          ? errorMessage
+              ?.replace(
+                /^GOOGLE_CALENDAR_CONFLICT_AFTER_EDIT:/,
+                "",
+              )
+              .slice(0, 1_000)
+          : booking.calendarConflictSummary,
       ...(success && args.events
         ? {
             calendarAttemptedEvents: undefined,
@@ -3319,6 +3381,16 @@ export const recordCalendarReconcileResult = internalMutation({
         : JSON.stringify({ error: errorMessage }),
       createdAt: now,
     });
+    if (calendarConflict) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.emailNotifications.notifyConflictAlert,
+        {
+          bookingId: booking._id,
+          relatedBookingIds: [],
+        },
+      );
+    }
   },
 });
 
@@ -3411,21 +3483,225 @@ export const retryCalendarSync = mutation({
   },
 });
 
+type AdminEditInput = {
+  requesterName: string;
+  requesterEmail: string;
+  room: string;
+  startAt: number;
+  endAt: number;
+  eventName?: string;
+  purpose?: string;
+  ministry?: string;
+  recurrenceFrequency: RecurrenceFrequency;
+  recurrenceHasEndDate: boolean;
+  recurrenceUntilAt?: number;
+  editScope: "series" | "occurrence";
+  occurrenceSequence?: number;
+};
+
+function adminReservationProposal(
+  booking: Doc<"bookings">,
+  args: AdminEditInput,
+): {
+  room: string;
+  roomKey: string;
+  startAt: number;
+  endAt: number;
+  recurrenceFrequency: RecurrenceFrequency;
+  recurrenceHasEndDate: boolean;
+  recurrenceUntilAt?: number;
+  occurrences: BookingOccurrence[];
+  resolvedVenues: string[];
+  changesReservation: boolean;
+} {
+  const existingFrequency = booking.recurrenceFrequency ?? "none";
+  const existingHasEndDate =
+    existingFrequency !== "none" &&
+    (booking.recurrenceHasEndDate ??
+      booking.recurrenceUntilAt !== undefined);
+
+  if (args.editScope === "occurrence") {
+    if (
+      existingFrequency === "none" ||
+      (booking.occurrences?.length ?? 1) < 2
+    ) {
+      bookingError(
+        "BOOKING_OCCURRENCE_EDIT_NOT_AVAILABLE",
+        "Only a recurring booking can edit one occurrence.",
+      );
+    }
+    const selection = resolveVenueSelection(args.room);
+    let occurrences: BookingOccurrence[];
+    try {
+      occurrences = applyOccurrenceEdit(
+        (booking.occurrences ?? []) as BookingOccurrence[],
+        args.occurrenceSequence ?? -1,
+        {
+          startAt: args.startAt,
+          endAt: args.endAt,
+          room: selection.displayName,
+          defaultRoom: booking.room,
+          resolvedVenues: [...selection.venues],
+        },
+      );
+      assertSortedNonOverlappingOccurrences(occurrences);
+      let remainingClaims = MAX_CLAIM_SLOTS_PER_BOOKING;
+      for (const occurrence of occurrences) {
+        const used = assertTotalClaimSlotsWithinLimit(
+          [occurrence],
+          (occurrence.resolvedVenues ?? booking.resolvedVenues ?? [
+            booking.room,
+          ]).length,
+          remainingClaims,
+        );
+        remainingClaims -= used;
+      }
+    } catch (error) {
+      if (error instanceof BookingRuleError) {
+        bookingError(error.code, error.message);
+      }
+      bookingError(
+        "BOOKING_OCCURRENCE_EDIT_INVALID",
+        error instanceof Error
+          ? `The selected occurrence could not be edited (${error.message}).`
+          : "The selected occurrence could not be edited.",
+      );
+    }
+    return {
+      room: booking.room,
+      roomKey: booking.roomKey,
+      startAt: booking.startAt,
+      endAt: booking.endAt,
+      recurrenceFrequency: existingFrequency,
+      recurrenceHasEndDate: existingHasEndDate,
+      recurrenceUntilAt: booking.recurrenceUntilAt,
+      occurrences,
+      resolvedVenues: booking.resolvedVenues ?? [booking.room],
+      changesReservation: true,
+    };
+  }
+
+  const recurrenceFrequency = args.recurrenceFrequency;
+  const recurrenceHasEndDate =
+    recurrenceFrequency !== "none" && args.recurrenceHasEndDate;
+  const recurrenceUntilAt = recurrenceHasEndDate
+    ? args.recurrenceUntilAt
+    : undefined;
+  const changesRecurrenceDefinition = recurrenceDefinitionChanged({
+    currentFrequency: existingFrequency,
+    currentHasEndDate: existingHasEndDate,
+    currentStartAt: booking.startAt,
+    currentUntilAt: booking.recurrenceUntilAt,
+    nextFrequency: recurrenceFrequency,
+    nextHasEndDate: recurrenceHasEndDate,
+    nextStartAt: args.startAt,
+    nextUntilAt: recurrenceUntilAt,
+  });
+  if (
+    recurrenceFrequency !== "none" &&
+    recurrenceHasEndDate &&
+    recurrenceUntilAt === undefined
+  ) {
+    bookingError(
+      "RECURRENCE_UNTIL_REQUIRED",
+      "Choose the last date required for this recurring booking.",
+    );
+  }
+  const normalized = validateBookingInput({
+    ...args,
+    timezone: booking.timezone,
+    recurrenceFrequency,
+    recurrenceCount: recurrenceCountForAdminEdit({
+      frequency: recurrenceFrequency,
+      hasEndDate: recurrenceHasEndDate,
+      definitionChanged: changesRecurrenceDefinition,
+      existingOccurrenceCount:
+        booking.occurrences?.length ?? booking.recurrenceCount,
+      defaultOccurrenceCount: defaultRecurrenceCount,
+    }),
+    recurrenceUntilAt,
+  });
+  return {
+    ...normalized,
+    startAt: args.startAt,
+    endAt: args.endAt,
+    recurrenceFrequency,
+    recurrenceHasEndDate,
+    recurrenceUntilAt,
+    changesReservation:
+      normalized.roomKey !== booking.roomKey ||
+      args.startAt !== booking.startAt ||
+      args.endAt !== booking.endAt ||
+      changesRecurrenceDefinition ||
+      (booking.occurrences ?? []).some(
+        (occurrence) =>
+          occurrence.room !== undefined ||
+          occurrence.resolvedVenues !== undefined,
+      ),
+  };
+}
+
+const adminEditArgs = {
+  bookingId: v.id("bookings"),
+  expectedRevision: v.number(),
+  requesterName: v.string(),
+  requesterEmail: v.string(),
+  room: v.string(),
+  startAt: v.number(),
+  endAt: v.number(),
+  eventName: v.optional(v.string()),
+  purpose: v.optional(v.string()),
+  ministry: v.optional(v.string()),
+  recurrenceFrequency: recurrenceFrequencyValidator,
+  recurrenceHasEndDate: v.boolean(),
+  recurrenceUntilAt: v.optional(v.number()),
+  editScope: v.union(v.literal("series"), v.literal("occurrence")),
+  occurrenceSequence: v.optional(v.number()),
+};
+
+export const previewEdit = query({
+  args: adminEditArgs,
+  handler: async (ctx, args) => {
+    await requireCapability(ctx, "bookings.edit");
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) {
+      bookingError("BOOKING_NOT_FOUND", "The booking no longer exists.");
+    }
+    requireAvailabilityCheckComplete(booking);
+    requireBookingDeletionIdle(booking);
+    if ((booking.revision ?? 0) !== args.expectedRevision) {
+      bookingError(
+        "BOOKING_EDIT_CONFLICT",
+        "This booking changed after the editor opened. Close it, reload the latest booking, and try again.",
+      );
+    }
+    const proposal = adminReservationProposal(booking, args);
+    if (!proposal.changesReservation) return { conflicts: [] };
+    const conflicts = await findConflicts(ctx, {
+      occurrences: proposal.occurrences,
+      resolvedVenues: proposal.resolvedVenues,
+      excludeBookingId: booking._id,
+    });
+    return {
+      conflicts: conflicts.map((conflict) => ({
+        bookingId: conflict.bookingId,
+        status: conflict.booking.status,
+        room: conflict.booking.room,
+        startAt: conflict.booking.startAt,
+        endAt: conflict.booking.endAt,
+        targetVenue: conflict.targetVenue,
+        occurrenceSequence: conflict.occurrenceSequence,
+      })),
+    };
+  },
+});
+
 export const edit = mutation({
   args: {
-    bookingId: v.id("bookings"),
-    expectedRevision: v.number(),
-    requesterName: v.string(),
-    requesterEmail: v.string(),
-    room: v.string(),
-    startAt: v.number(),
-    endAt: v.number(),
-    eventName: v.optional(v.string()),
-    purpose: v.optional(v.string()),
-    ministry: v.optional(v.string()),
-    recurrenceFrequency: recurrenceFrequencyValidator,
-    recurrenceHasEndDate: v.boolean(),
-    recurrenceUntilAt: v.optional(v.number()),
+    ...adminEditArgs,
+    acknowledgedConflictBookingIds: v.optional(
+      v.array(v.id("bookings")),
+    ),
   },
   handler: async (ctx, args) => {
     const user = await requireCapability(ctx, "bookings.edit");
@@ -3438,7 +3714,7 @@ export const edit = mutation({
     if (booking.calendarSyncToken) {
       bookingError(
         "CALENDAR_SYNC_IN_PROGRESS",
-        "Wait for the current Google Calendar approval operation to finish before editing this booking.",
+        "Wait for the current Google Calendar operation to finish before editing this booking.",
       );
     }
     const previousRevision = booking.revision ?? 0;
@@ -3452,88 +3728,67 @@ export const edit = mutation({
       );
     }
 
-    const recurrenceFrequency = args.recurrenceFrequency;
-    const recurrenceHasEndDate =
-      recurrenceFrequency !== "none" && args.recurrenceHasEndDate;
-    const recurrenceUntilAt = recurrenceHasEndDate
-      ? args.recurrenceUntilAt
-      : undefined;
-    const existingRecurrenceFrequency =
-      booking.recurrenceFrequency ?? "none";
-    const existingRecurrenceHasEndDate =
-      existingRecurrenceFrequency !== "none" &&
-      (booking.recurrenceHasEndDate ??
-        (booking.recurrenceUntilAt !== undefined));
-    const changesRecurrenceDefinition = recurrenceDefinitionChanged({
-      currentFrequency: existingRecurrenceFrequency,
-      currentHasEndDate: existingRecurrenceHasEndDate,
-      currentStartAt: booking.startAt,
-      currentUntilAt: booking.recurrenceUntilAt,
-      nextFrequency: recurrenceFrequency,
-      nextHasEndDate: recurrenceHasEndDate,
-      nextStartAt: args.startAt,
-      nextUntilAt: recurrenceUntilAt,
-    });
+    const proposal = adminReservationProposal(booking, args);
     if (
-      recurrenceFrequency !== "none" &&
-      recurrenceHasEndDate &&
-      recurrenceUntilAt === undefined
+      proposal.changesReservation &&
+      booking.status !== "pending" &&
+      booking.status !== "approved"
     ) {
       bookingError(
-        "RECURRENCE_UNTIL_REQUIRED",
-        "Choose the last date required for this recurring booking.",
+        "DECIDED_RESERVATION_EDIT_DISABLED",
+        "Reservation fields can be changed for pending or approved bookings only.",
       );
     }
-    const {
-      occurrences,
-      resolvedVenues,
-      room,
-      roomKey,
-    } = validateBookingInput({
-      ...args,
-      timezone: booking.timezone,
-      recurrenceFrequency,
-      recurrenceCount: recurrenceCountForAdminEdit({
-        frequency: recurrenceFrequency,
-        hasEndDate: recurrenceHasEndDate,
-        definitionChanged: changesRecurrenceDefinition,
-        existingOccurrenceCount:
-          booking.occurrences?.length ?? booking.recurrenceCount,
-        defaultOccurrenceCount: defaultRecurrenceCount,
-      }),
-      recurrenceUntilAt,
-    });
-    const changesReservation =
-      roomKey !== booking.roomKey ||
-      args.startAt !== booking.startAt ||
-      args.endAt !== booking.endAt ||
-      changesRecurrenceDefinition;
-    if (changesReservation && booking.status !== "pending") {
+
+    const conflicts = proposal.changesReservation
+      ? await findConflicts(ctx, {
+          occurrences: proposal.occurrences,
+          resolvedVenues: proposal.resolvedVenues,
+          excludeBookingId: booking._id,
+        })
+      : [];
+    const blockingConflict = conflicts.find(
+      (conflict) =>
+        conflict.booking.status === "approved" ||
+        booking.status === "approved",
+    );
+    if (blockingConflict) {
       bookingError(
-        "DECIDED_RESERVATION_EDIT_DISABLED",
-        "Room, time, repeat rule, and last date are locked after a decision so Convex cannot drift from Google Calendar.",
+        "BOOKING_CONFLICT",
+        `The proposed change conflicts with an active booking for ${blockingConflict.targetVenue}. The change was not committed.`,
+      );
+    }
+    const pendingConflictIds = uniqueBookingIds(
+      conflicts
+        .filter((conflict) => conflict.booking.status === "pending")
+        .map((conflict) => conflict.bookingId),
+    );
+    if (
+      pendingConflictIds.length > 0 &&
+      !conflictIdsAcknowledged(
+        pendingConflictIds.map(String),
+        (args.acknowledgedConflictBookingIds ?? []).map(String),
+      )
+    ) {
+      bookingError(
+        "BOOKING_CONFLICT_ACK_REQUIRED",
+        "The conflict set changed. Review and acknowledge the current conflicts before saving.",
       );
     }
 
     const now = Date.now();
-    if (changesReservation) {
-      const conflict = await findConflict(ctx, {
-        occurrences,
-        resolvedVenues,
-        excludeBookingId: booking._id,
-      });
-      if (conflict) {
-        bookingError(
-          "BOOKING_CONFLICT",
-          "That room already has a pending or approved booking in the selected interval.",
-        );
-      }
+    if (proposal.changesReservation) {
       await clearReciprocalConflictWarnings(ctx, booking, now);
       await removeClaims(ctx, booking._id);
-      await addClaims(ctx, booking._id, {
-        occurrences,
-        resolvedVenues,
-      });
+      await addClaims(ctx, booking._id, proposal);
+      if (booking.status === "pending" && pendingConflictIds.length > 0) {
+        await addReciprocalConflictWarnings(
+          ctx,
+          booking._id,
+          pendingConflictIds,
+          now,
+        );
+      }
     }
 
     const requesterName = normalizeAdminName(args.requesterName);
@@ -3541,13 +3796,16 @@ export const edit = mutation({
     const eventName = normalizeEventName(args.eventName);
     const purpose = normalizePurpose(args.purpose);
     const ministry = normalizeMinistry(args.ministry);
+    const metadataChanged =
+      requesterName !== booking.requesterName ||
+      requesterEmail !== booking.requesterEmail ||
+      eventName !== booking.eventName ||
+      purpose !== booking.purpose ||
+      ministry !== booking.ministry;
     const shouldReconcileCalendar =
       booking.status === "approved" &&
       (booking.calendarEvents?.length ?? 0) > 0 &&
-      (requesterName !== booking.requesterName ||
-        eventName !== booking.eventName ||
-        purpose !== booking.purpose ||
-        ministry !== booking.ministry);
+      (proposal.changesReservation || metadataChanged);
     const newRevision = previousRevision + 1;
     const nextCalendarAttempt =
       (booking.calendarSyncAttempts ?? 0) + 1;
@@ -3562,19 +3820,19 @@ export const edit = mutation({
     await ctx.db.patch(booking._id, {
       requesterName,
       requesterEmail,
-      room,
-      roomKey,
-      startAt: args.startAt,
-      endAt: args.endAt,
+      room: proposal.room,
+      roomKey: proposal.roomKey,
+      startAt: proposal.startAt,
+      endAt: proposal.endAt,
       eventName,
       purpose,
       ministry,
-      recurrenceFrequency,
-      recurrenceHasEndDate,
-      recurrenceCount: occurrences.length,
-      recurrenceUntilAt,
-      occurrences,
-      resolvedVenues,
+      recurrenceFrequency: proposal.recurrenceFrequency,
+      recurrenceHasEndDate: proposal.recurrenceHasEndDate,
+      recurrenceCount: proposal.occurrences.length,
+      recurrenceUntilAt: proposal.recurrenceUntilAt,
+      occurrences: proposal.occurrences,
+      resolvedVenues: proposal.resolvedVenues,
       formResponses: updateCanonicalResponseValues(
         booking.formResponses,
         {
@@ -3584,10 +3842,10 @@ export const edit = mutation({
           purpose,
           ministry,
           recurrence: {
-            frequency: recurrenceFrequency,
-            hasEndDate: recurrenceHasEndDate,
-            count: occurrences.length,
-            untilAt: recurrenceUntilAt,
+            frequency: proposal.recurrenceFrequency,
+            hasEndDate: proposal.recurrenceHasEndDate,
+            count: proposal.occurrences.length,
+            untilAt: proposal.recurrenceUntilAt,
             timezone: booking.timezone,
           },
         },
@@ -3597,11 +3855,16 @@ export const edit = mutation({
       sheetPurpose: undefined,
       updatedAt: now,
       revision: newRevision,
-      ...(changesReservation
+      ...(proposal.changesReservation
         ? {
             conflictBookingId: undefined,
-            conflictWarningBookingIds: undefined,
-            conflictWarningAcknowledgedAt: undefined,
+            conflictWarningBookingIds:
+              booking.status === "pending" &&
+              pendingConflictIds.length > 0
+                ? pendingConflictIds
+                : undefined,
+            conflictWarningAcknowledgedAt:
+              pendingConflictIds.length > 0 ? now : undefined,
             calendarAvailabilityStatus: "unchecked" as const,
             calendarConflictSummary: undefined,
           }
@@ -3623,28 +3886,44 @@ export const edit = mutation({
       sheetSyncLeaseExpiresAt: undefined,
     });
     await ctx.db.insert("auditLogs", {
-      level: "info",
+      level: pendingConflictIds.length > 0 ? "warning" : "info",
       category: "booking",
-      action: "booking_edited",
+      action:
+        args.editScope === "occurrence"
+          ? "booking_occurrence_edited"
+          : "booking_edited",
       actorType: "user",
       actorId: user.clerkUserId,
       entityType: "booking",
       entityId: String(booking._id),
-      message: `${booking.room} booking details were edited.`,
+      message:
+        args.editScope === "occurrence"
+          ? `${booking.room} recurring booking occurrence was edited.`
+          : `${booking.room} booking details were edited.`,
       detailsJson: JSON.stringify({
-        reservationChanged: changesReservation,
+        editScope: args.editScope,
+        occurrenceSequence: args.occurrenceSequence,
+        reservationChanged: proposal.changesReservation,
         previousRevision,
         newRevision,
-        recurrenceFrequency,
-        recurrenceHasEndDate,
-        recurrenceUntilAt,
-        occurrenceCount: occurrences.length,
-        calendarReconciliationQueued:
-          shouldReconcileCalendar,
+        recurrenceFrequency: proposal.recurrenceFrequency,
+        occurrenceCount: proposal.occurrences.length,
+        pendingConflictIds: pendingConflictIds.map(String),
+        calendarReconciliationQueued: shouldReconcileCalendar,
         submissionId: booking.jotformSubmissionId,
       }),
       createdAt: now,
     });
+    if (pendingConflictIds.length > 0) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.emailNotifications.notifyConflictAlert,
+        {
+          bookingId: booking._id,
+          relatedBookingIds: pendingConflictIds,
+        },
+      );
+    }
     if (shouldReconcileCalendar) {
       await ctx.scheduler.runAfter(
         0,

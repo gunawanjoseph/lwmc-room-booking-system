@@ -434,11 +434,9 @@ describe("recurrence expansion", () => {
       }),
     ).toThrow("RECURRENCE_HORIZON_EXCEEDED");
 
-    // With a 10000-occurrence cap and a 20-year horizon, the horizon (about
-    // 7305 days) is always the tighter bound for a daily until-only rule, so
-    // that combination can never reach the occurrence cap itself here. The
-    // occurrence cap is still enforced directly for explicit counts above
-    // MAX_RECURRENCE_OCCURRENCES, as covered in the test above.
+    // The 120-occurrence cap keeps conflict, claim, and per-occurrence
+    // Calendar work within the action runtime. Explicit counts above the cap
+    // are covered in the preceding test.
   });
 
   it("parses current Jotform recurrence labels and rejects unknown ones", () => {

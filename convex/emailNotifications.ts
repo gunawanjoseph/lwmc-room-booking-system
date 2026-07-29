@@ -1147,11 +1147,11 @@ export const prepareConflictAlert = internalMutation({
     const relatedBookingIds = relatedBookings.map(
       (related) => related._id,
     );
-    const approvers = await ctx.db
-      .query("approverEmails")
+    const conflictAdmins = await ctx.db
+      .query("conflictAdmins")
       .withIndex("by_active", (range) => range.eq("active", true))
       .collect();
-    if (approvers.length === 0) {
+    if (conflictAdmins.length === 0) {
       await ctx.db.insert("auditLogs", {
         level: "error",
         category: "system",
@@ -1160,7 +1160,7 @@ export const prepareConflictAlert = internalMutation({
         entityType: "booking",
         entityId: String(booking._id),
         message:
-          "An urgent booking conflict was detected, but no approval-email recipient is active.",
+          "An urgent booking conflict was detected, but no conflict administrator is active.",
         detailsJson: JSON.stringify({
           relatedBookingIds: relatedBookingIds.map(String),
         }),
@@ -1168,15 +1168,15 @@ export const prepareConflictAlert = internalMutation({
       });
       return { queued: 0 };
     }
-    for (const approver of approvers) {
+    for (const conflictAdmin of conflictAdmins) {
       await enqueueDelivery(ctx, {
         bookingId: booking._id,
         relatedBookingIds,
         kind: "approver_conflict_urgent",
-        recipientEmail: approver.email,
+        recipientEmail: conflictAdmin.email,
       });
     }
-    return { queued: approvers.length };
+    return { queued: conflictAdmins.length };
   },
 });
 

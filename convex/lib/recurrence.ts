@@ -40,7 +40,7 @@ export type ExpandRecurrenceInput = {
  * Keeps a single request from creating an unexpectedly large number of
  * database records, conflict checks, or downstream calendar events.
  */
-export const MAX_RECURRENCE_OCCURRENCES = 10000;
+export const MAX_RECURRENCE_OCCURRENCES = 120;
 
 /**
  * An until-only rule needs both an occurrence cap and a calendar horizon so

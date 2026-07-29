@@ -20,22 +20,21 @@ import {
   type GoogleCalendarVenue,
   type VenueCalendarTarget,
 } from "./lib/googleCalendar";
-import {
-  assertRecurrenceOccurrencesHaveStableUtcOffset,
-  buildGoogleRecurrenceRule,
-  type RecurrenceFrequency,
-} from "./lib/recurrence";
-import {
-  managedCalendarEventsExcluding,
-  type ManagedCalendarEventReference,
-} from "./lib/bookingDeletion";
+import type { ManagedCalendarEventReference } from "./lib/bookingDeletion";
+import { partitionManagedEventsForFutureReplacement } from "./lib/bookingEdit";
 
 type Booking = Doc<"bookings">;
+type CalendarOccurrence = GoogleCalendarOccurrence & {
+  room?: string;
+};
 type CalendarApprovalStart =
   | { started: true; booking: Booking }
   | {
       started: false;
-      reason: "approved_conflict" | "approval_in_progress";
+      reason:
+        | "approved_conflict"
+        | "approval_in_progress"
+        | "conflict_ack_required";
       conflictBookingId: Id<"bookings">;
     }
   | {
@@ -62,7 +61,7 @@ function requiredRuntime(): GoogleCalendarRuntime {
 
 function occurrencesForBooking(
   booking: Booking,
-): GoogleCalendarOccurrence[] {
+): CalendarOccurrence[] {
   return (
     booking.occurrences ?? [
       {
@@ -77,35 +76,14 @@ function occurrencesForBooking(
       : index,
     startAt: occurrence.startAt,
     endAt: occurrence.endAt,
+    room: occurrence.room,
   }));
-}
-
-function recurrenceForBooking(
-  booking: Booking,
-  occurrences: readonly GoogleCalendarOccurrence[],
-): readonly string[] | undefined {
-  const frequency =
-    (booking.recurrenceFrequency as RecurrenceFrequency | undefined) ??
-    "none";
-  if (frequency !== "none" && occurrences.length > 1) {
-    assertRecurrenceOccurrencesHaveStableUtcOffset(
-      occurrences,
-      booking.timezone,
-    );
-  }
-  const rule = buildGoogleRecurrenceRule({
-    frequency,
-    occurrenceCount: occurrences.length,
-    startAt: booking.startAt,
-    timezone: booking.timezone,
-  });
-  return rule ? [rule] : undefined;
 }
 
 function eventInput(
   booking: Booking,
   target: VenueCalendarTarget,
-  occurrences: readonly GoogleCalendarOccurrence[],
+  occurrence: GoogleCalendarOccurrence,
 ): GoogleCalendarEventInput {
   const eventText = buildGoogleCalendarEventText({
     eventName: booking.eventName,
@@ -120,13 +98,67 @@ function eventInput(
     venue: target.venue,
     requestedVenue: booking.room,
     summary: eventText.summary,
-    startAt: booking.startAt,
-    endAt: booking.endAt,
+    startAt: occurrence.startAt,
+    endAt: occurrence.endAt,
     timeZone: booking.timezone,
     description: eventText.description,
     location: eventText.location,
     sourceSubmissionId: booking.jotformSubmissionId,
-    recurrence: recurrenceForBooking(booking, occurrences),
+  };
+}
+
+type CalendarEventPlan = {
+  occurrence: CalendarOccurrence;
+  target: VenueCalendarTarget;
+  generation: string;
+};
+
+function calendarEventPlans(
+  booking: Booking,
+  runtime: GoogleCalendarRuntime,
+  occurrences: readonly CalendarOccurrence[],
+): CalendarEventPlan[] {
+  return occurrences.flatMap((occurrence) =>
+    calendarTargetsForVenue(
+      occurrence.room ?? booking.room,
+      runtime.venueMap,
+    ).map((target) => ({
+      occurrence,
+      target,
+      generation: `occurrence-${occurrence.sequence}-${occurrence.startAt}`,
+    })),
+  );
+}
+
+async function checkBookingAvailability(
+  booking: Booking,
+  runtime: GoogleCalendarRuntime,
+  occurrences: readonly CalendarOccurrence[],
+): Promise<{
+  availability: GoogleCalendarAvailability;
+  targets: VenueCalendarTarget[];
+}> {
+  const conflicts: GoogleCalendarAvailability["conflicts"] = [];
+  const targets: VenueCalendarTarget[] = [];
+  for (const occurrence of occurrences) {
+    const occurrenceTargets = calendarTargetsForVenue(
+      occurrence.room ?? booking.room,
+      runtime.venueMap,
+    );
+    targets.push(...occurrenceTargets);
+    const result = await runtime.client.checkAvailability({
+      calendarIds: occurrenceTargets.map((target) => target.calendarId),
+      occurrences: [occurrence],
+      timeZone: booking.timezone,
+    });
+    conflicts.push(...result.conflicts);
+  }
+  return {
+    availability: {
+      available: conflicts.length === 0,
+      conflicts,
+    },
+    targets,
   };
 }
 
@@ -359,6 +391,7 @@ export const decide = action({
     decision: v.union(v.literal("approve"), v.literal("reject")),
     note: v.optional(v.string()),
     token: v.optional(v.string()),
+    confirmConflicts: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     let actorId: string;
@@ -505,6 +538,7 @@ export const decide = action({
         actorId,
         syncToken,
         purpose: "approve",
+        confirmConflicts: args.confirmConflicts,
         emailDecisionClaim: emailClaim,
       },
     )) as CalendarApprovalStart;
@@ -559,6 +593,12 @@ export const decide = action({
         }
         return await finish({ status: "unavailable" as const });
       }
+      if (start.reason === "conflict_ack_required") {
+        calendarError(
+          "BOOKING_CONFLICT_ACK_REQUIRED",
+          "This recurring request overlaps another pending booking. Review the warning and explicitly acknowledge it before approving.",
+        );
+      }
       calendarError(
         "PENDING_APPROVAL_CONFLICT",
         "Another overlapping request is currently being approved. Wait for it to finish before deciding this request.",
@@ -566,12 +606,9 @@ export const decide = action({
     }
     const booking = start.booking;
     const occurrences = occurrencesForBooking(booking);
-    let targets: VenueCalendarTarget[];
+    let plans: CalendarEventPlan[];
     try {
-      targets = calendarTargetsForVenue(
-        booking.room,
-        runtime.venueMap,
-      );
+      plans = calendarEventPlans(booking, runtime, occurrences);
     } catch (error) {
       const message = errorMessage(error);
       await ctx.runMutation(internal.bookings.failCalendarApproval, {
@@ -586,14 +623,18 @@ export const decide = action({
     }
 
     const attemptedEvents = await Promise.all(
-      targets.map(async (target) => ({
-        calendarId: target.calendarId,
+      plans.map(async (plan) => ({
+        calendarId: plan.target.calendarId,
         eventId: await deterministicGoogleCalendarEventId({
           bookingId: String(booking._id),
-          calendarId: target.calendarId,
-          venue: target.venue,
+          calendarId: plan.target.calendarId,
+          venue: plan.target.venue,
+          generation: plan.generation,
         }),
-        targetVenue: target.venue,
+        targetVenue: plan.target.venue,
+        occurrenceSequence: plan.occurrence.sequence,
+        startAt: plan.occurrence.startAt,
+        endAt: plan.occurrence.endAt,
       })),
     );
 
@@ -631,12 +672,15 @@ export const decide = action({
     }
 
     let availability: GoogleCalendarAvailability;
+    let availabilityTargets: VenueCalendarTarget[];
     try {
-      availability = await runtime.client.checkAvailability({
-        calendarIds: targets.map((target) => target.calendarId),
+      const checked = await checkBookingAvailability(
+        booking,
+        runtime,
         occurrences,
-        timeZone: booking.timezone,
-      });
+      );
+      availability = checked.availability;
+      availabilityTargets = checked.targets;
     } catch (error) {
       const message = errorMessage(error);
       await ctx.runMutation(internal.bookings.failCalendarApproval, {
@@ -651,7 +695,7 @@ export const decide = action({
     }
     if (!availability.available) {
       const summary = conflictSummary(
-        targets,
+        availabilityTargets,
         availability.conflicts,
       );
       await ctx.runMutation(internal.bookings.markCalendarConflict, {
@@ -667,10 +711,11 @@ export const decide = action({
 
     const created: GoogleCalendarEventRef[] = [];
     try {
-      for (const target of targets) {
+      for (const plan of plans) {
         created.push(
           await runtime.client.createEvent(
-            eventInput(booking, target, occurrences),
+            eventInput(booking, plan.target, plan.occurrence),
+            plan.generation,
           ),
         );
       }
@@ -708,7 +753,10 @@ export const decide = action({
       calendarId: event.calendarId,
       eventId: event.eventId,
       htmlLink: event.htmlLink,
-      targetVenue: targets[index].venue,
+      targetVenue: plans[index].target.venue,
+      occurrenceSequence: plans[index].occurrence.sequence,
+      startAt: plans[index].occurrence.startAt,
+      endAt: plans[index].occurrence.endAt,
     }));
     try {
       await ctx.runMutation(
@@ -954,16 +1002,41 @@ export const reconcileApprovedBooking = internalAction({
           targetVenue: event.targetVenue,
         };
       });
+      const now = Date.now();
+      const futureOccurrences = occurrences.filter(
+        (occurrence) => occurrence.startAt >= now,
+      );
+      if (futureOccurrences.length === 0) {
+        await ctx.runMutation(
+          internal.bookings.recordCalendarReconcileResult,
+          {
+            bookingId: booking._id,
+            expectedRevision: args.expectedRevision,
+            syncToken: args.syncToken,
+            success: true,
+            events: managedEvents,
+          },
+        );
+        return;
+      }
+      const plans = calendarEventPlans(
+        booking,
+        runtime,
+        futureOccurrences,
+      );
       const replacementCandidates = await Promise.all(
-        managedEvents.map(async (event) => ({
-          calendarId: event.calendarId,
+        plans.map(async (plan) => ({
+          calendarId: plan.target.calendarId,
           eventId: await deterministicGoogleCalendarEventId({
             bookingId: String(booking._id),
-            calendarId: event.calendarId,
-            venue: event.targetVenue,
-            generation: `repair-${event.eventId}`,
+            calendarId: plan.target.calendarId,
+            venue: plan.target.venue,
+            generation: plan.generation,
           }),
-          targetVenue: event.targetVenue,
+          targetVenue: plan.target.venue,
+          occurrenceSequence: plan.occurrence.sequence,
+          startAt: plan.occurrence.startAt,
+          endAt: plan.occurrence.endAt,
         })),
       );
       // Persist every deterministic replacement before the first external
@@ -978,45 +1051,50 @@ export const reconcileApprovedBooking = internalAction({
           events: replacementCandidates,
         },
       )) as ManagedCalendarEventReference[];
-      const reconciledEvents: NonNullable<
+      const { keep, replace } =
+        partitionManagedEventsForFutureReplacement(
+          managedEvents,
+          now,
+        );
+      await cleanupManagedEvents(
+        runtime,
+        String(booking._id),
+        [...replace, ...reconciliationCandidates],
+      );
+
+      const checked = await checkBookingAvailability(
+        booking,
+        runtime,
+        futureOccurrences,
+      );
+      if (!checked.availability.available) {
+        throw new Error(
+          `GOOGLE_CALENDAR_CONFLICT_AFTER_EDIT:${conflictSummary(
+            checked.targets,
+            checked.availability.conflicts,
+          )}`,
+        );
+      }
+
+      const createdEvents: NonNullable<
         Booking["calendarEvents"]
       > = [];
-      for (const event of managedEvents) {
-        const reconciled = await runtime.client.updateEvent(
-          event.eventId,
-          eventInput(
-            booking,
-            {
-              calendarId: event.calendarId,
-              requestedVenue: booking.room,
-              venue: event.targetVenue,
-            },
-            occurrences,
-          ),
-          // The repair generation is tied to the stored missing event, not
-          // the booking revision. If a worker creates the replacement and
-          // then dies before Convex stores its ref, every retry converges on
-          // the same deterministic replacement ID.
-          `repair-${event.eventId}`,
+      for (const plan of plans) {
+        const created = await runtime.client.createEvent(
+          eventInput(booking, plan.target, plan.occurrence),
+          plan.generation,
         );
-        reconciledEvents.push({
-          calendarId: reconciled.calendarId,
-          eventId: reconciled.eventId,
-          htmlLink: reconciled.htmlLink,
-          targetVenue: event.targetVenue,
+        createdEvents.push({
+          calendarId: created.calendarId,
+          eventId: created.eventId,
+          htmlLink: created.htmlLink,
+          targetVenue: plan.target.venue,
+          occurrenceSequence: plan.occurrence.sequence,
+          startAt: plan.occurrence.startAt,
+          endAt: plan.occurrence.endAt,
         });
       }
-      const supersededCandidates = managedCalendarEventsExcluding(
-        reconciliationCandidates,
-        reconciledEvents,
-      );
-      if (supersededCandidates.length > 0) {
-        await cleanupManagedEvents(
-          runtime,
-          String(booking._id),
-          supersededCandidates,
-        );
-      }
+      const reconciledEvents = [...keep, ...createdEvents];
       await ctx.runMutation(
         internal.bookings.recordCalendarReconcileResult,
         {

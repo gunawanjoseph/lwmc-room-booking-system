@@ -43,6 +43,8 @@ export const bookingOccurrenceValidator = v.object({
   sequence: v.number(),
   startAt: v.number(),
   endAt: v.number(),
+  room: v.optional(v.string()),
+  resolvedVenues: v.optional(v.array(v.string())),
 });
 
 export const calendarSyncStatusValidator = v.union(
@@ -59,6 +61,9 @@ export const calendarEventRefValidator = v.object({
   eventId: v.string(),
   htmlLink: v.optional(v.string()),
   targetVenue: v.string(),
+  occurrenceSequence: v.optional(v.number()),
+  startAt: v.optional(v.number()),
+  endAt: v.optional(v.number()),
 });
 
 export const jotformCanonicalFieldValidator = v.union(
@@ -260,6 +265,18 @@ export default defineSchema({
   ]),
 
   approverEmails: defineTable({
+    email: v.string(),
+    displayName: v.optional(v.string()),
+    active: v.boolean(),
+    createdAt: v.number(),
+    createdBy: v.string(),
+    updatedAt: v.number(),
+    updatedBy: v.string(),
+  })
+    .index("by_email", ["email"])
+    .index("by_active", ["active"]),
+
+  conflictAdmins: defineTable({
     email: v.string(),
     displayName: v.optional(v.string()),
     active: v.boolean(),

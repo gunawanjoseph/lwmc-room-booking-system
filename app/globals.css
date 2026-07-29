@@ -1748,6 +1748,14 @@ textarea:focus-visible {
   margin: 0;
 }
 
+.approver-management-title p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
 .approver-count-pill {
   display: inline-flex;
   min-height: 36px;
@@ -1896,6 +1904,26 @@ textarea:focus-visible {
 .booking-conflict-warning strong {
   color: #5e380b;
   font-size: 0.74rem;
+}
+
+.confirmation-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.confirmation-check input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--forest);
 }
 
 .email-decision-page {

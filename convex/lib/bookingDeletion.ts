@@ -2,6 +2,9 @@ export type ManagedCalendarEventReference = {
   calendarId: string;
   eventId: string;
   targetVenue: string;
+  occurrenceSequence?: number;
+  startAt?: number;
+  endAt?: number;
 };
 
 type BookingDeletionLease = {

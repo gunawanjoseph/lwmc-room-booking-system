@@ -215,7 +215,8 @@ export function isCurrentStandaloneCalendarConflict(
   return (
     booking.availabilityCheckPending !== true &&
     !bookingDeletionInProgress(booking, now) &&
-    booking.status === "unavailable" &&
+    (booking.status === "unavailable" ||
+      booking.status === "approved") &&
     booking.calendarAvailabilityStatus === "conflict" &&
     booking.conflictBookingId === undefined
   );

@@ -10,6 +10,7 @@
 
 import type * as approvers from "../approvers.js";
 import type * as bookings from "../bookings.js";
+import type * as conflictAdmins from "../conflictAdmins.js";
 import type * as emailNotifications from "../emailNotifications.js";
 import type * as googleCalendar from "../googleCalendar.js";
 import type * as googleSheets from "../googleSheets.js";
@@ -19,6 +20,7 @@ import type * as jotform from "../jotform.js";
 import type * as lib_actionAuth from "../lib/actionAuth.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_bookingDeletion from "../lib/bookingDeletion.js";
+import type * as lib_bookingEdit from "../lib/bookingEdit.js";
 import type * as lib_bookingOverview from "../lib/bookingOverview.js";
 import type * as lib_bookingRules from "../lib/bookingRules.js";
 import type * as lib_calendarTransition from "../lib/calendarTransition.js";
@@ -43,6 +45,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 const fullApi: ApiFromModules<{
   approvers: typeof approvers;
   bookings: typeof bookings;
+  conflictAdmins: typeof conflictAdmins;
   emailNotifications: typeof emailNotifications;
   googleCalendar: typeof googleCalendar;
   googleSheets: typeof googleSheets;
@@ -52,6 +55,7 @@ const fullApi: ApiFromModules<{
   "lib/actionAuth": typeof lib_actionAuth;
   "lib/auth": typeof lib_auth;
   "lib/bookingDeletion": typeof lib_bookingDeletion;
+  "lib/bookingEdit": typeof lib_bookingEdit;
   "lib/bookingOverview": typeof lib_bookingOverview;
   "lib/bookingRules": typeof lib_bookingRules;
   "lib/calendarTransition": typeof lib_calendarTransition;

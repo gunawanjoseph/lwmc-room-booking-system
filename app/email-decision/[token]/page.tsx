@@ -38,6 +38,7 @@ export default function EmailDecisionPage() {
   const [error, setError] = useState("");
   const [done, setDone] = useState("");
   const [busy, setBusy] = useState(false);
+  const [conflictsConfirmed, setConflictsConfirmed] = useState(false);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -51,6 +52,11 @@ export default function EmailDecisionPage() {
         decision,
         note: note || undefined,
         token,
+        confirmConflicts:
+          decision === "approve" &&
+          info.booking.conflictWarningCount > 0
+            ? conflictsConfirmed
+            : undefined,
       })) as {
         status: "approved" | "rejected" | "unavailable";
       };
@@ -207,8 +213,33 @@ export default function EmailDecisionPage() {
                     placeholder="This comment will be included in the email sent to the requester."
                   />
                 </label>
+                {decision === "approve" &&
+                  info.booking.conflictWarningCount > 0 && (
+                    <label className="confirmation-check">
+                      <input
+                        type="checkbox"
+                        checked={conflictsConfirmed}
+                        onChange={(event) =>
+                          setConflictsConfirmed(event.target.checked)
+                        }
+                      />
+                      <span>
+                        I reviewed the conflicting bookings and
+                        understand that approval makes overlapping
+                        requests unavailable.
+                      </span>
+                    </label>
+                  )}
                 {error && <div className="form-error">{error}</div>}
-                <button className="button button-primary" disabled={busy}>
+                <button
+                  className="button button-primary"
+                  disabled={
+                    busy ||
+                    (decision === "approve" &&
+                      info.booking.conflictWarningCount > 0 &&
+                      !conflictsConfirmed)
+                  }
+                >
                   {busy ? "Submitting…" : "Submit decision"}
                 </button>
               </form>

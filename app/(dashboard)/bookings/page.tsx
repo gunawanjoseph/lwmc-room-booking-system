@@ -1,7 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useAction, useMutation, useQuery } from "convex/react";
+import {
+  useAction,
+  useConvex,
+  useMutation,
+  useQuery,
+} from "convex/react";
 import { DateTime } from "luxon";
 import {
   Check,
@@ -48,6 +53,8 @@ type Booking = {
     sequence: number;
     startAt: number;
     endAt: number;
+    room?: string;
+    resolvedVenues?: string[];
   }>;
   availabilityCheckPending: boolean;
   calendarAvailabilityStatus:
@@ -113,6 +120,9 @@ function DecisionDialog({
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [conflictsConfirmed, setConflictsConfirmed] = useState(false);
+  const hasConflictWarning =
+    (booking.conflictWarningBookingIds?.length ?? 0) > 0;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -123,6 +133,10 @@ function DecisionDialog({
         bookingId: booking._id,
         decision,
         note: note || undefined,
+        confirmConflicts:
+          decision === "approve" && hasConflictWarning
+            ? conflictsConfirmed
+            : undefined,
       });
       close();
     } catch (caught) {
@@ -165,13 +179,13 @@ function DecisionDialog({
             {formatDateTime(booking.endAt, booking.timezone)}
           </strong>
         </div>
-        {(booking.conflictWarningBookingIds?.length ?? 0) > 0 && (
+        {hasConflictWarning && (
           <div className="booking-conflict-warning" role="note">
             <TriangleAlert size={17} aria-hidden="true" />
             <span>
-              <strong>Pending conflict</strong>
-              Review this request together with its overlapping pending
-              request before making a decision.
+              <strong>Conflict detected</strong>
+              This request overlaps one or more pending bookings. Review
+              all occurrences before making a decision.
             </span>
           </div>
         )}
@@ -182,6 +196,22 @@ function DecisionDialog({
             again. Approval completes only after every required Google
             Calendar event is created.
           </div>
+        )}
+        {decision === "approve" && hasConflictWarning && (
+          <label className="confirmation-check">
+            <input
+              type="checkbox"
+              checked={conflictsConfirmed}
+              onChange={(event) =>
+                setConflictsConfirmed(event.target.checked)
+              }
+            />
+            <span>
+              I reviewed the conflicting bookings and understand that
+              approving this request will make the overlapping requests
+              unavailable.
+            </span>
+          </label>
         )}
         <label className="field">
           <span>Remark/comment to requester (optional)</span>
@@ -207,7 +237,12 @@ function DecisionDialog({
             Cancel
           </button>
           <button
-            disabled={busy}
+            disabled={
+              busy ||
+              (decision === "approve" &&
+                hasConflictWarning &&
+                !conflictsConfirmed)
+            }
             className={
               decision === "approve"
                 ? "button button-primary"
@@ -235,6 +270,7 @@ function EditDialog({
   booking: Booking;
   close: () => void;
 }) {
+  const convex = useConvex();
   const edit = useMutation(api.bookings.edit);
   const [form, setForm] = useState({
     requesterName: booking.requesterName,
@@ -253,20 +289,63 @@ function EditDialog({
       booking.recurrenceUntilAt,
       booking.timezone,
     ),
+    editScope: "series" as "series" | "occurrence",
+    occurrenceSequence: booking.occurrences[0]?.sequence ?? 0,
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const reservationEditable = booking.status === "pending";
+  const [irreversibleConfirmed, setIrreversibleConfirmed] =
+    useState(false);
+  const [conflictsConfirmed, setConflictsConfirmed] = useState(false);
+  const [previewConflicts, setPreviewConflicts] = useState<
+    Array<{
+      bookingId: Id<"bookings">;
+      status: Booking["status"];
+      room: string;
+      startAt: number;
+      endAt: number;
+      targetVenue: string;
+      occurrenceSequence: number;
+    }>
+  >([]);
+  const reservationEditable =
+    booking.status === "pending" || booking.status === "approved";
+  const occurrenceEditAvailable =
+    reservationEditable && booking.occurrences.length > 1;
 
   function update<Key extends keyof typeof form>(
     key: Key,
     value: (typeof form)[Key],
   ) {
     setForm((current) => ({ ...current, [key]: value }));
+    setPreviewConflicts([]);
+    setConflictsConfirmed(false);
+  }
+
+  function selectOccurrence(sequence: number) {
+    const occurrence = booking.occurrences.find(
+      (item) => item.sequence === sequence,
+    );
+    if (!occurrence) return;
+    setForm((current) => ({
+      ...current,
+      occurrenceSequence: sequence,
+      room: occurrence.room ?? booking.room,
+      start: localInputValue(occurrence.startAt, booking.timezone),
+      end: localInputValue(occurrence.endAt, booking.timezone),
+    }));
+    setPreviewConflicts([]);
+    setConflictsConfirmed(false);
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!irreversibleConfirmed) {
+      setError(
+        "Confirm that you understand the Calendar replacement cannot be automatically undone.",
+      );
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -286,7 +365,7 @@ function EditDialog({
             .endOf("day")
             .toMillis()
         : undefined;
-      await edit({
+      const editArgs = {
         bookingId: booking._id,
         expectedRevision: booking.revision,
         requesterName: form.requesterName,
@@ -300,6 +379,54 @@ function EditDialog({
         recurrenceFrequency: form.recurrenceFrequency,
         recurrenceHasEndDate,
         recurrenceUntilAt,
+        editScope: form.editScope,
+        occurrenceSequence:
+          form.editScope === "occurrence"
+            ? form.occurrenceSequence
+            : undefined,
+      } as const;
+      const preview = (await convex.query(
+        api.bookings.previewEdit,
+        editArgs,
+      )) as {
+        conflicts: typeof previewConflicts;
+      };
+      const nextConflictIds = preview.conflicts
+        .map((conflict) => String(conflict.bookingId))
+        .sort();
+      const displayedConflictIds = previewConflicts
+        .map((conflict) => String(conflict.bookingId))
+        .sort();
+      const conflictSetChanged =
+        nextConflictIds.join(",") !== displayedConflictIds.join(",");
+      if (preview.conflicts.length > 0) {
+        setPreviewConflicts(preview.conflicts);
+        if (
+          preview.conflicts.some(
+            (conflict) => conflict.status === "approved",
+          ) ||
+          booking.status === "approved"
+        ) {
+          setError(
+            "The proposed change conflicts with an active booking and cannot be committed.",
+          );
+          return;
+        }
+        if (conflictSetChanged || !conflictsConfirmed) {
+          setConflictsConfirmed(false);
+          setError(
+            "Conflicts were detected. Review the warning below, acknowledge it, then save again.",
+          );
+          return;
+        }
+      } else {
+        setPreviewConflicts([]);
+      }
+      await edit({
+        ...editArgs,
+        acknowledgedConflictBookingIds: preview.conflicts.map(
+          (conflict) => conflict.bookingId,
+        ),
       });
       close();
     } catch (caught) {
@@ -326,13 +453,103 @@ function EditDialog({
             <X size={18} />
           </button>
         </div>
+        {booking.status === "approved" && (
+          <div className="booking-conflict-warning" role="note">
+            <TriangleAlert size={17} aria-hidden="true" />
+            <span>
+              <strong>Irreversible Calendar replacement</strong>
+              Saving reservation changes removes the managed future
+              Google Calendar events and rebuilds them from Convex.
+              RoomOps cannot automatically restore the prior schedule.
+            </span>
+          </div>
+        )}
+        {(booking.conflictWarningBookingIds?.length ?? 0) > 0 &&
+          previewConflicts.length === 0 && (
+            <div className="booking-conflict-warning" role="note">
+              <TriangleAlert size={17} aria-hidden="true" />
+              <span>
+                <strong>Existing booking conflict</strong>
+                This booking currently overlaps{" "}
+                {booking.conflictWarningBookingIds!.length} pending{" "}
+                {booking.conflictWarningBookingIds!.length === 1
+                  ? "request"
+                  : "requests"}
+                . Saving a reservation change will recheck the complete
+                conflict set.
+              </span>
+            </div>
+          )}
         {!reservationEditable && (
           <div className="info-banner">
-            Room, time, and recurrence are locked after a decision so the
-            managed Google Calendar series cannot drift from Convex.
+            Reservation fields can be changed only while a booking is
+            pending or approved.
           </div>
         )}
         <div className="form-grid">
+          {occurrenceEditAvailable && (
+            <>
+              <label className="field form-grid-full">
+                <span>Edit</span>
+                <select
+                  value={form.editScope}
+                  onChange={(event) => {
+                    const scope = event.target.value as
+                      | "series"
+                      | "occurrence";
+                    update("editScope", scope);
+                    if (scope === "occurrence") {
+                      selectOccurrence(form.occurrenceSequence);
+                    } else {
+                      setForm((current) => ({
+                        ...current,
+                        room: booking.room,
+                        start: localInputValue(
+                          booking.startAt,
+                          booking.timezone,
+                        ),
+                        end: localInputValue(
+                          booking.endAt,
+                          booking.timezone,
+                        ),
+                      }));
+                    }
+                  }}
+                >
+                  <option value="series">
+                    Entire booking and recurrence
+                  </option>
+                  <option value="occurrence">
+                    One occurrence only
+                  </option>
+                </select>
+              </label>
+              {form.editScope === "occurrence" && (
+                <label className="field form-grid-full">
+                  <span>Occurrence</span>
+                  <select
+                    value={form.occurrenceSequence}
+                    onChange={(event) =>
+                      selectOccurrence(Number(event.target.value))
+                    }
+                  >
+                    {booking.occurrences.map((occurrence) => (
+                      <option
+                        key={occurrence.sequence}
+                        value={occurrence.sequence}
+                      >
+                        {formatDateTime(
+                          occurrence.startAt,
+                          booking.timezone,
+                        )}{" "}
+                        · {occurrence.room ?? booking.room}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </>
+          )}
           <label className="field">
             <span>Requester name</span>
             <input
@@ -409,67 +626,131 @@ function EditDialog({
               }
             />
           </label>
-          <label className="field form-grid-full">
-            <span>Repeat</span>
-            <select
-              disabled={!reservationEditable}
-              value={form.recurrenceFrequency}
-              onChange={(event) =>
-                update(
-                  "recurrenceFrequency",
-                  event.target
-                    .value as Booking["recurrenceFrequency"],
-                )
-              }
-            >
-              <option value="none">No repeat</option>
-              <option value="daily">Daily</option>
-              <option value="weekly_same_day">Every week</option>
-              <option value="biweekly_same_day">Every 2 weeks</option>
-              <option value="monthly_same_day">
-                Every month on the same day
-              </option>
-              <option value="monthly_same_date">
-                Every month on the same date
-              </option>
-            </select>
-          </label>
-          {form.recurrenceFrequency !== "none" && (
+          {form.editScope === "series" && (
             <>
-              <label className="field">
-                <span>Does this recurring booking have an end date?</span>
+              <label className="field form-grid-full">
+                <span>Repeat</span>
                 <select
                   disabled={!reservationEditable}
-                  value={form.recurrenceHasEndDate}
+                  value={form.recurrenceFrequency}
                   onChange={(event) =>
                     update(
-                      "recurrenceHasEndDate",
-                      event.target.value,
+                      "recurrenceFrequency",
+                      event.target
+                        .value as Booking["recurrenceFrequency"],
                     )
                   }
                 >
-                  <option value="no">No</option>
-                  <option value="yes">Yes</option>
+                  <option value="none">No repeat</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly_same_day">Every week</option>
+                  <option value="biweekly_same_day">
+                    Every 2 weeks
+                  </option>
+                  <option value="monthly_same_day">
+                    Every month on the same day
+                  </option>
+                  <option value="monthly_same_date">
+                    Every month on the same date
+                  </option>
                 </select>
               </label>
-              {form.recurrenceHasEndDate === "yes" && (
-                <label className="field">
-                  <span>Last date required</span>
-                  <input
-                    required
-                    disabled={!reservationEditable}
-                    type="date"
-                    min={form.start.slice(0, 10)}
-                    value={form.recurrenceUntil}
-                    onChange={(event) =>
-                      update("recurrenceUntil", event.target.value)
-                    }
-                  />
-                </label>
+              {form.recurrenceFrequency !== "none" && (
+                <>
+                  <label className="field">
+                    <span>
+                      Does this recurring booking have an end date?
+                    </span>
+                    <select
+                      disabled={!reservationEditable}
+                      value={form.recurrenceHasEndDate}
+                      onChange={(event) =>
+                        update(
+                          "recurrenceHasEndDate",
+                          event.target.value,
+                        )
+                      }
+                    >
+                      <option value="no">No</option>
+                      <option value="yes">Yes</option>
+                    </select>
+                  </label>
+                  {form.recurrenceHasEndDate === "yes" && (
+                    <label className="field">
+                      <span>Last date required</span>
+                      <input
+                        required
+                        disabled={!reservationEditable}
+                        type="date"
+                        min={form.start.slice(0, 10)}
+                        value={form.recurrenceUntil}
+                        onChange={(event) =>
+                          update(
+                            "recurrenceUntil",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </label>
+                  )}
+                </>
               )}
             </>
           )}
         </div>
+        {previewConflicts.length > 0 && (
+          <div className="booking-conflict-warning" role="alert">
+            <TriangleAlert size={17} aria-hidden="true" />
+            <span>
+              <strong>
+                {previewConflicts.length} conflict
+                {previewConflicts.length === 1 ? "" : "s"} detected
+              </strong>
+              {previewConflicts.map((conflict) => (
+                <small key={conflict.bookingId}>
+                  {conflict.targetVenue} ·{" "}
+                  {formatDateTime(
+                    conflict.startAt,
+                    booking.timezone,
+                  )}{" "}
+                  · {conflict.status}
+                </small>
+              ))}
+            </span>
+          </div>
+        )}
+        {previewConflicts.length > 0 &&
+          booking.status === "pending" &&
+          previewConflicts.every(
+            (conflict) => conflict.status === "pending",
+          ) && (
+            <label className="confirmation-check">
+              <input
+                type="checkbox"
+                checked={conflictsConfirmed}
+                onChange={(event) =>
+                  setConflictsConfirmed(event.target.checked)
+                }
+              />
+              <span>
+                I reviewed these pending conflicts and want to save the
+                warned booking.
+              </span>
+            </label>
+          )}
+        <label className="confirmation-check">
+          <input
+            type="checkbox"
+            checked={irreversibleConfirmed}
+            onChange={(event) =>
+              setIrreversibleConfirmed(event.target.checked)
+            }
+          />
+          <span>
+            I understand this action cannot be automatically undone and
+            future Calendar events may be replaced.
+          </span>
+        </label>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
           <button
@@ -479,7 +760,10 @@ function EditDialog({
           >
             Cancel
           </button>
-          <button disabled={busy} className="button button-primary">
+          <button
+            disabled={busy || !irreversibleConfirmed}
+            className="button button-primary"
+          >
             {busy ? "Saving…" : "Save changes"}
           </button>
         </div>
@@ -925,7 +1209,11 @@ export default function BookingsPage() {
 
       {decision && (
         <DecisionDialog
-          booking={decision.booking}
+          booking={
+            bookings?.find(
+              (booking) => booking._id === decision.booking._id,
+            ) ?? decision.booking
+          }
           decision={decision.decision}
           close={() => setDecision(null)}
         />

@@ -314,6 +314,12 @@ describe("Gmail message safety", () => {
     ).toBe(true);
     expect(
       isCurrentStandaloneCalendarConflict(
+        { ...conflict, status: "approved" },
+        1_000,
+      ),
+    ).toBe(true);
+    expect(
+      isCurrentStandaloneCalendarConflict(
         { ...conflict, conflictBookingId: "booking-2" },
         1_000,
       ),

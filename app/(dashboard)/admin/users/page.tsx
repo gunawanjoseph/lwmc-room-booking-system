@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
+  BellRing,
   Check,
   Mail,
   Shield,
@@ -49,6 +50,14 @@ type ApproverEmail = {
   updatedAt: number;
 };
 
+type ConflictAdministrator = {
+  _id: Id<"conflictAdmins">;
+  email: string;
+  displayName?: string;
+  active: boolean;
+  updatedAt: number;
+};
+
 export default function UserManagementPage() {
   const users = useQuery(api.users.listForManagement) as
     | ManagedUser[]
@@ -62,6 +71,14 @@ export default function UserManagementPage() {
   const upsertApprover = useMutation(api.approvers.upsert);
   const setApproverActive = useMutation(api.approvers.setActive);
   const removeApprover = useMutation(api.approvers.remove);
+  const conflictAdmins = useQuery(api.conflictAdmins.list) as
+    | ConflictAdministrator[]
+    | undefined;
+  const upsertConflictAdmin = useMutation(api.conflictAdmins.upsert);
+  const setConflictAdminActive = useMutation(
+    api.conflictAdmins.setActive,
+  );
+  const removeConflictAdmin = useMutation(api.conflictAdmins.remove);
   const [roleSelections, setRoleSelections] = useState<
     Record<string, AssignableRole>
   >({});
@@ -69,10 +86,17 @@ export default function UserManagementPage() {
     displayName: "",
     email: "",
   });
+  const [conflictAdminForm, setConflictAdminForm] = useState({
+    displayName: "",
+    email: "",
+  });
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const activeApproverCount = approvers?.filter(
     (approver) => approver.active,
+  ).length;
+  const activeConflictAdminCount = conflictAdmins?.filter(
+    (administrator) => administrator.active,
   ).length;
 
   function selectedRole(user: ManagedUser): AssignableRole {
@@ -91,6 +115,17 @@ export default function UserManagementPage() {
         displayName: approverForm.displayName || undefined,
       });
       setApproverForm({ displayName: "", email: "" });
+    });
+  }
+
+  async function addConflictAdmin(event: React.FormEvent) {
+    event.preventDefault();
+    await run("conflict-admin-form", async () => {
+      await upsertConflictAdmin({
+        email: conflictAdminForm.email,
+        displayName: conflictAdminForm.displayName || undefined,
+      });
+      setConflictAdminForm({ displayName: "", email: "" });
     });
   }
 
@@ -451,6 +486,191 @@ export default function UserManagementPage() {
                         ) {
                           void run(approver._id, () =>
                             removeApprover({ approverId: approver._id }),
+                          );
+                        }
+                      }}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section
+        className="panel approver-management-panel"
+        aria-labelledby="conflict-admin-management-title"
+      >
+        <div className="panel-heading approver-management-heading">
+          <div className="approver-management-title">
+            <span className="panel-kicker">CONFLICT ALERTS</span>
+            <h2 id="conflict-admin-management-title">
+              Conflict administrator management
+            </h2>
+            <p>
+              These recipients receive an urgent email as soon as
+              RoomOps persists a booking conflict. This list is
+              independent from booking approvers.
+            </p>
+          </div>
+          <span
+            className="approver-count-pill"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            aria-label={
+              activeConflictAdminCount === undefined
+                ? "Loading active conflict administrators"
+                : `${activeConflictAdminCount} active conflict administrator${
+                    activeConflictAdminCount === 1 ? "" : "s"
+                  }`
+            }
+          >
+            <BellRing size={16} aria-hidden="true" />
+            {activeConflictAdminCount === undefined
+              ? "Loading…"
+              : `${activeConflictAdminCount} active`}
+          </span>
+        </div>
+        <form
+          className="approver-form"
+          onSubmit={addConflictAdmin}
+          aria-label="Add a conflict administrator"
+        >
+          <label className="field">
+            <span>Name</span>
+            <input
+              autoComplete="name"
+              value={conflictAdminForm.displayName}
+              onChange={(event) =>
+                setConflictAdminForm((current) => ({
+                  ...current,
+                  displayName: event.target.value,
+                }))
+              }
+              placeholder="Optional display name"
+            />
+          </label>
+          <label className="field">
+            <span>Email</span>
+            <input
+              required
+              type="email"
+              autoComplete="email"
+              value={conflictAdminForm.email}
+              onChange={(event) =>
+                setConflictAdminForm((current) => ({
+                  ...current,
+                  email: event.target.value,
+                }))
+              }
+              placeholder="conflicts@example.com"
+            />
+          </label>
+          <button
+            className="button button-primary"
+            disabled={busyId === "conflict-admin-form"}
+          >
+            {busyId === "conflict-admin-form"
+              ? "Adding…"
+              : "Add conflict administrator"}
+          </button>
+        </form>
+        <div
+          className="approver-list"
+          aria-busy={conflictAdmins === undefined}
+        >
+          {!conflictAdmins ? (
+            <div className="table-message approver-empty">
+              Loading conflict administrators…
+            </div>
+          ) : conflictAdmins.length === 0 ? (
+            <div className="table-message approver-empty">
+              No conflict administrators configured yet.
+            </div>
+          ) : (
+            conflictAdmins.map((administrator) => (
+              <article
+                key={administrator._id}
+                className={
+                  administrator.active
+                    ? "approver-row"
+                    : "approver-row approver-row-inactive"
+                }
+              >
+                <div className="approver-identity">
+                  <span className="approver-avatar" aria-hidden="true">
+                    {(administrator.displayName || administrator.email)
+                      .slice(0, 1)
+                      .toUpperCase()}
+                  </span>
+                  <div>
+                    <strong>
+                      {administrator.displayName ||
+                        administrator.email}
+                    </strong>
+                    <span>{administrator.email}</span>
+                    <small>
+                      Updated {formatDateTime(administrator.updatedAt)}
+                    </small>
+                  </div>
+                </div>
+                <div className="approver-row-actions">
+                  <StatusBadge
+                    status={
+                      administrator.active ? "active" : "removed"
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="button button-small button-secondary"
+                    disabled={
+                      busyId === `conflict-${administrator._id}`
+                    }
+                    onClick={() =>
+                      void run(
+                        `conflict-${administrator._id}`,
+                        () =>
+                          setConflictAdminActive({
+                            conflictAdminId: administrator._id,
+                            active: !administrator.active,
+                          }),
+                      )
+                    }
+                  >
+                    {administrator.active
+                      ? "Deactivate"
+                      : "Reactivate"}
+                  </button>
+                  {!administrator.active && (
+                    <button
+                      type="button"
+                      className="icon-button action-reject"
+                      disabled={
+                        busyId === `conflict-${administrator._id}`
+                      }
+                      aria-label={`Permanently remove ${
+                        administrator.displayName ||
+                        administrator.email
+                      } as a conflict administrator`}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Permanently remove ${
+                              administrator.displayName ||
+                              administrator.email
+                            }? This deletes the conflict administrator record from Convex and cannot be undone.`,
+                          )
+                        ) {
+                          void run(
+                            `conflict-${administrator._id}`,
+                            () =>
+                              removeConflictAdmin({
+                                conflictAdminId: administrator._id,
+                              }),
                           );
                         }
                       }}
