@@ -343,7 +343,7 @@ describe("Jotform mapping", () => {
     });
   });
 
-  it.each(["0", "367", "2.5", "eight"])(
+  it.each(["0", "10030", "2.5", "eight"])(
     "rejects the invalid recurrence count %s",
     (answer) => {
       expect(() =>
@@ -364,7 +364,7 @@ describe("Jotform mapping", () => {
     },
   );
 
-  it.each([1, 367, 2.5])(
+  it.each([1, 10030, 2.5])(
     "rejects the invalid default recurrence count %s",
     (defaultRecurrenceCount) => {
       expect(() =>
