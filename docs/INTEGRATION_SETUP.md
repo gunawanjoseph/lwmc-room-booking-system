@@ -73,7 +73,7 @@ npx convex env --prod set NAME
 | `BOOKING_TIME_ZONE` | IANA zone used for answers without an offset, such as `Asia/Singapore`. |
 | `GOOGLE_CALENDAR_ENABLED` | `true` enables Google free/busy checks and approved-event writes; keep `false` until setup is complete. |
 | `GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON_B64` | Base64-encoded Google service-account JSON used only by Convex actions. |
-| `GOOGLE_CALENDAR_VENUE_MAP_JSON` | JSON mapping all ten individual venue names to their real Google Calendar IDs. |
+| `GOOGLE_CALENDAR_VENUE_MAP_JSON` | JSON mapping seven bookable venues and three historical-only office venues to their real Google Calendar IDs. |
 | `BOOKING_RECURRENCE_DEFAULT_COUNT` | Occurrence count used when a repeating request supplies neither count nor until date; default `12`, allowed `2`–`120`. |
 | `APP_BASE_URL` | Public application origin used in secure email-decision and conflict-review links. |
 | `GMAIL_CLIENT_ID` | OAuth web client ID for the notification mailbox. |
@@ -101,7 +101,8 @@ Requirements:
 - Clerk, Convex, Jotform, Google Cloud, Google Calendar, and Vercel
   accounts
 - Owner access to the Jotform form
-- Permission to share and edit all ten venue calendars
+- Permission to share and edit all ten managed venue calendars: seven
+  bookable and three retained for historical managed events
 
 Run:
 
@@ -316,11 +317,12 @@ complete setup and test procedure. In summary:
 
 1. Enable the Google Calendar API in a Google Cloud project.
 2. Create a service account and download its JSON key.
-3. Share each of the ten individual venue calendars with the service
-   account using **Make changes to events** permission.
+3. Share each of the ten managed venue calendars with the service
+   account using **Make changes to events** permission. Seven accept new
+   bookings; three are retained for historical managed events.
 4. Copy each real **Calendar ID** from **Settings and sharing →
    Integrate calendar**.
-5. Build `GOOGLE_CALENDAR_VENUE_MAP_JSON` with all ten individual venues.
+5. Build `GOOGLE_CALENDAR_VENUE_MAP_JSON` with all ten managed venues.
    Do not create combined A & B or ABC map entries.
 6. Set the four Calendar and recurrence variables in the target Convex
    deployment, initially keeping `GOOGLE_CALENDAR_ENABLED=false`.
@@ -364,6 +366,13 @@ automation or accepting and approving normal requests.
 The required venue-map keys are Board Room, Counselling / Music Room, L1
 Ministry Space, Ministry Centre A, Ministry Centre B, Ministry Centre C,
 Office L2 Main Area, Pastor Office, PIC Office, and Shema Space.
+
+The Calendar page and new-booking validation expose only Board Room,
+Counselling / Music Room, L1 Ministry Space, Ministry Centre A, Ministry
+Centre B, Ministry Centre C, and Shema Space. Office L2 Main Area, Pastor
+Office, and PIC Office are historical-only: remove them from the Jotform
+room choices. Their mappings must remain configured so RoomOps can
+reconcile or delete managed events belonging to existing bookings.
 
 Ministry Centre A & B checks and books A plus B. Ministry Centre ABC
 checks and books A, B, and C. Every occurrence and physical venue must be
@@ -654,7 +663,7 @@ and match the structured error code in `/logs`. In particular:
 - `GOOGLE_CALENDAR_NOT_ENABLED` means the integration is still disabled
   in the active Convex deployment.
 - `GOOGLE_CALENDAR_VENUE_MAP_INCOMPLETE` means one or more of the ten
-  individual venue keys is missing.
+  managed venue keys is missing, including a historical-only venue.
 - a Google `403` normally means the Calendar API is disabled or the
   service account lacks the required calendar permission.
 - `GOOGLE_CALENDAR_WRITE_ACCESS_REQUIRED` means at least one mapped

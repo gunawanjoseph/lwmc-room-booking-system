@@ -1282,6 +1282,68 @@ textarea:focus-visible {
   font-size: 0.7rem;
 }
 
+.conflict-toast-stack {
+  position: fixed;
+  z-index: 110;
+  top: 20px;
+  right: 20px;
+  display: grid;
+  width: min(390px, calc(100vw - 40px));
+  gap: 10px;
+  pointer-events: none;
+}
+
+.conflict-toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 15px;
+  border: 1px solid #e3bc7e;
+  border-radius: 14px;
+  color: #654214;
+  background: #fff9ed;
+  box-shadow: 0 18px 55px rgba(56, 42, 19, 0.2);
+  pointer-events: auto;
+}
+
+.conflict-toast > svg {
+  margin-top: 1px;
+  color: #a86616;
+}
+
+.conflict-toast-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.conflict-toast-copy strong {
+  color: #5f3d10;
+  font-size: 0.87rem;
+}
+
+.conflict-toast-copy span {
+  overflow-wrap: anywhere;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.conflict-toast-copy .text-link {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 0.75rem;
+}
+
+.conflict-toast-close {
+  width: 30px;
+  height: 30px;
+  border-color: #ead3ad;
+  color: #785321;
+  background: #fffdf8;
+}
+
 .modal-backdrop {
   position: fixed;
   z-index: 80;
@@ -1557,6 +1619,10 @@ textarea:focus-visible {
   box-shadow: inset 3px 0 #cf8a2f;
 }
 
+.convex-sheet-table tr.booking-row-processing > td {
+  background: #f4f7f5;
+}
+
 .convex-sheet-table td.dirty-cell {
   background: #fff7e8;
 }
@@ -1577,6 +1643,13 @@ textarea:focus-visible {
 .sheet-cell-input:focus {
   border-color: #79a094;
   box-shadow: 0 0 0 3px rgba(40, 95, 83, 0.1);
+}
+
+.sheet-cell-input:disabled {
+  cursor: not-allowed;
+  color: #75807c;
+  border-color: #dce3df;
+  background: #eef2ef;
 }
 
 .sheet-email-input {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  BOOKABLE_GOOGLE_CALENDAR_VENUES,
   GOOGLE_CALENDAR_VENUES,
   GoogleCalendarClient,
   buildGoogleCalendarEventText,
@@ -10,6 +11,7 @@ import {
   parseGoogleServiceAccount,
   parseGoogleServiceAccountBase64,
   parseGoogleCalendarVenueMap,
+  resolveBookableVenueSelection,
   resolveVenueSelection,
   type GoogleCalendarEventInput,
 } from "./googleCalendar";
@@ -160,6 +162,39 @@ describe("Google Calendar venue configuration", () => {
 });
 
 describe("Google Calendar venue selection", () => {
+  it("exposes only the seven venues that still accept bookings", () => {
+    expect(BOOKABLE_GOOGLE_CALENDAR_VENUES).toEqual([
+      "Board Room",
+      "Counselling / Music Room",
+      "L1 Ministry Space",
+      "Ministry Centre A",
+      "Ministry Centre B",
+      "Ministry Centre C",
+      "Shema Space",
+    ]);
+  });
+
+  it("keeps retired office venues resolvable for historical cleanup but not new bookings", () => {
+    for (const venue of [
+      "Office L2 Main Area",
+      "Church Office L2 Main Area",
+      "L2 Main Area",
+      "Pastor Office",
+      "PIC Office",
+    ]) {
+      expect(resolveVenueSelection(venue).venues).toHaveLength(1);
+      expect(() => resolveBookableVenueSelection(venue)).toThrow(
+        "GOOGLE_CALENDAR_VENUE_NOT_BOOKABLE",
+      );
+    }
+    expect(
+      resolveBookableVenueSelection("Ministry Centre A & B"),
+    ).toEqual({
+      displayName: "Ministry Centre A & B",
+      venues: ["Ministry Centre A", "Ministry Centre B"],
+    });
+  });
+
   it("normalizes Jotform numbering, quotes, and venue aliases", () => {
     expect(
       resolveVenueSelection(

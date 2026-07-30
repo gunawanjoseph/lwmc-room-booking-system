@@ -162,16 +162,84 @@ export type BookingEmailKind =
   | "requester_rejected"
   | "approver_conflict_urgent";
 
+export function urgentConflictDeliveryRecoveryMode(
+  status:
+    | "pending"
+    | "sending"
+    | "sent"
+    | "failed"
+    | "cancelled"
+    | "blocked",
+  hasObsoleteDependency: boolean,
+): "none" | "clear_dependency" | "requeue" {
+  if (
+    hasObsoleteDependency &&
+    (status === "pending" || status === "blocked")
+  ) {
+    return "requeue";
+  }
+  if (status === "sending" && hasObsoleteDependency) {
+    return "clear_dependency";
+  }
+  return "none";
+}
+
 export type ConflictAlertBookingState = {
   id: string;
   status: "pending" | "approved" | "rejected" | "unavailable";
   availabilityCheckPending?: boolean;
   calendarAvailabilityStatus?: "unchecked" | "available" | "conflict";
+  calendarSyncAttempts?: number;
   conflictBookingId?: string;
   conflictWarningBookingIds?: readonly string[];
   deletionToken?: string;
   deletionLeaseExpiresAt?: number;
+  revision?: number;
 };
+
+/**
+ * Identifies one persisted conflict episode without making delivery retries
+ * produce new messages. RoomOps conflicts advance with the booking revision;
+ * standalone Calendar conflicts also include the sync attempt because a retry
+ * can discover a fresh conflict without changing the approved booking revision.
+ */
+export function conflictAlertEpisodeKey(
+  booking: ConflictAlertBookingState,
+  relatedBookingIds: readonly string[],
+): string {
+  const related = [
+    ...new Set(
+      relatedBookingIds.filter(
+        (bookingId) => bookingId !== booking.id,
+      ),
+    ),
+  ].sort();
+  const revision = Math.max(
+    0,
+    Math.floor(booking.revision ?? 0),
+  );
+  if (related.length > 0) {
+    const cause = booking.conflictBookingId
+      ? `decided:${booking.conflictBookingId}`
+      : booking.status === "pending"
+        ? "pending-warning"
+        : `related:${booking.status}`;
+    return [
+      `revision=${revision}`,
+      `cause=${cause}`,
+      `related=${related.join(",")}`,
+    ].join("|");
+  }
+
+  return [
+    `revision=${revision}`,
+    `cause=calendar:${booking.status}`,
+    `attempt=${Math.max(
+      0,
+      Math.floor(booking.calendarSyncAttempts ?? 0),
+    )}`,
+  ].join("|");
+}
 
 /**
  * Conflict-alert deliveries are durable and can run after either booking has
@@ -235,7 +303,10 @@ export function availabilityFollowupKind(input: {
 export function requiresRequesterReceipt(
   kind: BookingEmailKind,
 ): boolean {
-  return kind !== "requester_submission_received";
+  return (
+    kind !== "requester_submission_received" &&
+    kind !== "approver_conflict_urgent"
+  );
 }
 
 /**

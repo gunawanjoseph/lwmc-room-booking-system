@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useAction,
   useConvex,
@@ -30,6 +30,7 @@ import {
   formatDateTime,
   messageFromError,
 } from "@/lib/ui";
+import { isBookingCalendarProcessing } from "@/lib/booking-conflict-transition";
 import type { Capability } from "@/shared/roles";
 import { StatusBadge } from "@/components/status-badge";
 
@@ -207,6 +208,9 @@ export default function BookingDataPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [editMode, setEditMode] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
+  const draftClearTimersRef = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
   const [saving, setSaving] = useState(false);
   const [deletingRowId, setDeletingRowId] = useState<string | null>(
     null,
@@ -230,12 +234,22 @@ export default function BookingDataPage() {
   );
   const omittedDynamicColumnCount =
     allDynamicColumns.length - dynamicColumns.length;
+  const processingRowIds = useMemo(
+    () =>
+      new Set(
+        rows
+          .filter(isBookingCalendarProcessing)
+          .map((booking) => String(booking._id)),
+      ),
+    [rows],
+  );
   const dirtyDrafts = useMemo(
     () =>
-      Object.entries(drafts).filter(([, draft]) =>
-        draftIsDirty(draft),
+      Object.entries(drafts).filter(
+        ([bookingId, draft]) =>
+          !processingRowIds.has(bookingId) && draftIsDirty(draft),
       ),
-    [drafts],
+    [drafts, processingRowIds],
   );
   const dirtyCount = dirtyDrafts.length;
   const cappedSnapshotCount = rows.filter(
@@ -275,6 +289,46 @@ export default function BookingDataPage() {
       );
     });
   }, [query, rows, statusFilter]);
+
+  useEffect(() => {
+    if (processingRowIds.size === 0) return;
+    const lockedIds = [...processingRowIds].filter(
+      (bookingId) => !draftClearTimersRef.current.has(bookingId),
+    );
+    if (lockedIds.length === 0) return;
+    const timer = setTimeout(() => {
+      for (const bookingId of lockedIds) {
+        if (draftClearTimersRef.current.get(bookingId) === timer) {
+          draftClearTimersRef.current.delete(bookingId);
+        }
+      }
+      setDrafts((current) => {
+        const next = Object.fromEntries(
+          Object.entries(current).filter(
+            ([bookingId]) => !lockedIds.includes(bookingId),
+          ),
+        );
+        return Object.keys(next).length === Object.keys(current).length
+          ? current
+          : next;
+      });
+    }, 0);
+    for (const bookingId of lockedIds) {
+      draftClearTimersRef.current.set(bookingId, timer);
+    }
+  }, [processingRowIds]);
+
+  useEffect(
+    () => () => {
+      for (const timer of new Set(
+        draftClearTimersRef.current.values(),
+      )) {
+        clearTimeout(timer);
+      }
+      draftClearTimersRef.current.clear();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (dirtyCount === 0) return;
@@ -346,6 +400,7 @@ export default function BookingDataPage() {
     booking: BookingRow,
     update: (values: EditableValues) => EditableValues,
   ) {
+    if (isBookingCalendarProcessing(booking)) return;
     setNotice("");
     setSaveError("");
     setDrafts((current) => {
@@ -510,7 +565,14 @@ export default function BookingDataPage() {
   }
 
   async function deleteRow(booking: BookingRow) {
-    if (!canEdit || editMode || deletingRowId) return;
+    if (
+      !canEdit ||
+      editMode ||
+      deletingRowId ||
+      isBookingCalendarProcessing(booking)
+    ) {
+      return;
+    }
     if (
       !window.confirm(
         `Permanently delete booking ${booking.jotformSubmissionId}? RoomOps will first remove every managed Google Calendar event, then delete the Convex row. This cannot be undone.`,
@@ -604,6 +666,15 @@ export default function BookingDataPage() {
       {notice && (
         <div className="sheet-feedback sheet-feedback-success" role="status">
           {notice}
+        </div>
+      )}
+
+      {editMode && processingRowIds.size > 0 && (
+        <div className="sheet-feedback sheet-feedback-warning" role="status">
+          {processingRowIds.size} loaded booking
+          {processingRowIds.size === 1 ? " is" : "s are"} locked while
+          Calendar processing runs in the background. Those rows cannot
+          be edited or saved, and any draft for them has been cleared.
         </div>
       )}
 
@@ -770,6 +841,8 @@ export default function BookingDataPage() {
               ) : (
                 filteredRows.map((booking) => {
                   const key = String(booking._id);
+                  const rowProcessing =
+                    isBookingCalendarProcessing(booking);
                   const draft = drafts[key];
                   const values =
                     draft?.values ?? editableValues(booking);
@@ -786,16 +859,22 @@ export default function BookingDataPage() {
                   return (
                     <tr
                       key={key}
-                      className={
-                        draft && draftIsDirty(draft)
-                          ? "dirty-row"
-                          : undefined
-                      }
+                      className={[
+                        draft && draftIsDirty(draft) ? "dirty-row" : "",
+                        rowProcessing ? "booking-row-processing" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
                     >
                       <td>
                         <div className="primary-cell submission-cell">
                           <strong>{booking.jotformSubmissionId}</strong>
                           <small>Revision {booking.revision}</small>
+                          {rowProcessing && (
+                            <small className="view-only-label">
+                              Calendar processing · editing locked
+                            </small>
+                          )}
                         </div>
                       </td>
                       <td
@@ -812,6 +891,7 @@ export default function BookingDataPage() {
                             className="sheet-cell-input"
                             value={values.requesterName}
                             maxLength={160}
+                            disabled={rowProcessing}
                             aria-label={`Requester name for submission ${booking.jotformSubmissionId}`}
                             onChange={(event) =>
                               updateDraft(booking, (current) => ({
@@ -839,6 +919,7 @@ export default function BookingDataPage() {
                             type="email"
                             value={values.requesterEmail}
                             maxLength={254}
+                            disabled={rowProcessing}
                             aria-label={`Requester email for submission ${booking.jotformSubmissionId}`}
                             onChange={(event) =>
                               updateDraft(booking, (current) => ({
@@ -886,6 +967,7 @@ export default function BookingDataPage() {
                             className="sheet-cell-input"
                             value={values.eventName}
                             maxLength={500}
+                            disabled={rowProcessing}
                             aria-label={`Event name for submission ${booking.jotformSubmissionId}`}
                             onChange={(event) =>
                               updateDraft(booking, (current) => ({
@@ -914,6 +996,7 @@ export default function BookingDataPage() {
                             rows={2}
                             value={values.purpose}
                             maxLength={2_000}
+                            disabled={rowProcessing}
                             aria-label={`Purpose for submission ${booking.jotformSubmissionId}`}
                             onChange={(event) =>
                               updateDraft(booking, (current) => ({
@@ -941,6 +1024,7 @@ export default function BookingDataPage() {
                             className="sheet-cell-input"
                             value={values.ministry}
                             maxLength={300}
+                            disabled={rowProcessing}
                             aria-label={`Ministry for submission ${booking.jotformSubmissionId}`}
                             onChange={(event) =>
                               updateDraft(booking, (current) => ({
@@ -1038,6 +1122,7 @@ export default function BookingDataPage() {
                                 rows={2}
                                 value={responseValue}
                                 maxLength={4_000}
+                                disabled={rowProcessing}
                                 aria-label={`${column.label} for submission ${booking.jotformSubmissionId}`}
                                 onChange={(event) =>
                                   updateDraft(
@@ -1089,17 +1174,20 @@ export default function BookingDataPage() {
                             onClick={() => deleteRow(booking)}
                             disabled={
                               editMode ||
+                              rowProcessing ||
                               booking.deletionInProgress === true ||
                               deletingRowId === String(booking._id)
                             }
                             title={
                               editMode
                                 ? "Finish table editing before deleting rows."
-                                : booking.deletionInProgress === true
-                                  ? "Safe Calendar and booking deletion is already in progress."
-                                : booking.deletionError
-                                  ? "Retry safe Calendar and booking deletion."
-                                  : "Delete this booking and its managed Calendar events."
+                                : rowProcessing
+                                  ? "Wait for the background Calendar operation to finish."
+                                  : booking.deletionInProgress === true
+                                    ? "Safe Calendar and booking deletion is already in progress."
+                                    : booking.deletionError
+                                      ? "Retry safe Calendar and booking deletion."
+                                      : "Delete this booking and its managed Calendar events."
                             }
                           >
                             <Trash2 size={14} />

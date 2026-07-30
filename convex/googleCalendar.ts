@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalAction } from "./_generated/server";
+import { action, internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -43,6 +43,19 @@ type CalendarApprovalStart =
       conflictBookingId: Id<"bookings">;
       booking: Booking;
     };
+
+type EmailDecisionClaim = {
+  token: string;
+  claimToken: string;
+};
+
+type CalendarApprovalResult =
+  | {
+      status: "approved";
+      calendarEventCount: number;
+      occurrenceCount: number;
+    }
+  | { status: "unavailable" };
 
 function calendarError(code: string, message: string): never {
   throw new ConvexError({ code, message });
@@ -224,6 +237,282 @@ async function cleanupManagedEvents(
       venue: event.targetVenue,
     });
   }
+}
+
+async function runCalendarApprovalAfterBegin(
+  ctx: ActionCtx,
+  args: {
+    booking: Booking;
+    actorId: string;
+    syncToken: string;
+    note?: string;
+    approvedConflictBookingId?: Id<"bookings">;
+    emailDecisionClaim?: EmailDecisionClaim;
+  },
+): Promise<CalendarApprovalResult> {
+  const runtime = requiredRuntime();
+  const booking = args.booking;
+
+  if (args.approvedConflictBookingId) {
+    try {
+      await cleanupManagedEvents(
+        runtime,
+        String(booking._id),
+        booking.calendarAttemptedEvents ?? [],
+      );
+      await ctx.runMutation(
+        internal.bookings.markApprovedConflictAfterCalendarCleanup,
+        {
+          bookingId: booking._id,
+          conflictBookingId: args.approvedConflictBookingId,
+          actorId: args.actorId,
+          syncToken: args.syncToken,
+          note: args.note,
+          emailDecisionClaim: args.emailDecisionClaim,
+        },
+      );
+    } catch (error) {
+      const current = (await ctx.runQuery(internal.bookings.getInternal, {
+        bookingId: booking._id,
+      })) as Booking | null;
+      if (current?.status === "unavailable") {
+        return { status: "unavailable" };
+      }
+      await ctx.runMutation(internal.bookings.failCalendarApproval, {
+        bookingId: booking._id,
+        syncToken: args.syncToken,
+        errorMessage: errorMessage(error),
+      });
+      calendarError(
+        "GOOGLE_CALENDAR_ORPHAN_CLEANUP_FAILED",
+        `The request remains pending because its incomplete Calendar attempt could not be cleaned safely. ${errorMessage(error)}`,
+      );
+    }
+    return { status: "unavailable" };
+  }
+
+  const occurrences = occurrencesForBooking(booking);
+  let plans: CalendarEventPlan[];
+  try {
+    plans = calendarEventPlans(booking, runtime, occurrences);
+  } catch (error) {
+    const message = errorMessage(error);
+    await ctx.runMutation(internal.bookings.failCalendarApproval, {
+      bookingId: booking._id,
+      syncToken: args.syncToken,
+      errorMessage: message,
+    });
+    calendarError(
+      "GOOGLE_CALENDAR_VENUE_RESOLUTION_FAILED",
+      `The booking venue could not be mapped to a Google Calendar. The booking remains pending. ${message}`,
+    );
+  }
+
+  const attemptedEvents = await Promise.all(
+    plans.map(async (plan) => ({
+      calendarId: plan.target.calendarId,
+      eventId: await deterministicGoogleCalendarEventId({
+        bookingId: String(booking._id),
+        calendarId: plan.target.calendarId,
+        venue: plan.target.venue,
+        generation: plan.generation,
+      }),
+      targetVenue: plan.target.venue,
+      occurrenceSequence: plan.occurrence.sequence,
+      startAt: plan.occurrence.startAt,
+      endAt: plan.occurrence.endAt,
+    })),
+  );
+
+  // A previous action may have been terminated after Google committed an
+  // event but before Convex received its response. Deterministic IDs let a
+  // new lease remove those known-orphan candidates before checking free/busy.
+  try {
+    await cleanupManagedEvents(runtime, String(booking._id), [
+      ...(booking.calendarAttemptedEvents ?? []),
+      ...attemptedEvents,
+    ]);
+    await ctx.runMutation(internal.bookings.recordCalendarAttemptTargets, {
+      bookingId: booking._id,
+      syncToken: args.syncToken,
+      events: attemptedEvents,
+    });
+  } catch (error) {
+    const message = errorMessage(error);
+    await ctx.runMutation(internal.bookings.failCalendarApproval, {
+      bookingId: booking._id,
+      syncToken: args.syncToken,
+      errorMessage: message,
+    });
+    calendarError(
+      "GOOGLE_CALENDAR_ORPHAN_CLEANUP_FAILED",
+      `RoomOps could not clear an earlier incomplete Calendar attempt. The booking remains pending. ${message}`,
+    );
+  }
+
+  let availability: GoogleCalendarAvailability;
+  let availabilityTargets: VenueCalendarTarget[];
+  try {
+    const checked = await checkBookingAvailability(
+      booking,
+      runtime,
+      occurrences,
+    );
+    availability = checked.availability;
+    availabilityTargets = checked.targets;
+  } catch (error) {
+    const message = errorMessage(error);
+    await ctx.runMutation(internal.bookings.failCalendarApproval, {
+      bookingId: booking._id,
+      syncToken: args.syncToken,
+      errorMessage: message,
+    });
+    calendarError(
+      "GOOGLE_CALENDAR_CHECK_FAILED",
+      `Google Calendar could not be checked. The booking remains pending. ${message}`,
+    );
+  }
+  if (!availability.available) {
+    const summary = conflictSummary(
+      availabilityTargets,
+      availability.conflicts,
+    );
+    await ctx.runMutation(internal.bookings.markCalendarConflict, {
+      bookingId: booking._id,
+      actorId: args.actorId,
+      syncToken: args.syncToken,
+      note: args.note,
+      conflictSummary: summary,
+      emailDecisionClaim: args.emailDecisionClaim,
+    });
+    return { status: "unavailable" };
+  }
+
+  const created: GoogleCalendarEventRef[] = [];
+  try {
+    for (const plan of plans) {
+      created.push(
+        await runtime.client.createEvent(
+          eventInput(booking, plan.target, plan.occurrence),
+          plan.generation,
+        ),
+      );
+    }
+  } catch (error) {
+    const cleanupErrors: string[] = [];
+    try {
+      await cleanupManagedEvents(runtime, String(booking._id), attemptedEvents);
+    } catch (cleanupError) {
+      cleanupErrors.push(errorMessage(cleanupError));
+    }
+    const message = [
+      errorMessage(error),
+      cleanupErrors.length
+        ? `Cleanup also failed: ${cleanupErrors.join("; ")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    await ctx.runMutation(internal.bookings.failCalendarApproval, {
+      bookingId: booking._id,
+      syncToken: args.syncToken,
+      errorMessage: message,
+    });
+    calendarError(
+      "GOOGLE_CALENDAR_CREATE_FAILED",
+      `The Google Calendar event could not be created. The booking remains pending. ${message}`,
+    );
+  }
+
+  const completedEvents = created.map((event, index) => ({
+    calendarId: event.calendarId,
+    eventId: event.eventId,
+    htmlLink: event.htmlLink,
+    targetVenue: plans[index].target.venue,
+    occurrenceSequence: plans[index].occurrence.sequence,
+    startAt: plans[index].occurrence.startAt,
+    endAt: plans[index].occurrence.endAt,
+  }));
+  try {
+    await ctx.runMutation(internal.bookings.completeCalendarApproval, {
+      bookingId: booking._id,
+      actorId: args.actorId,
+      syncToken: args.syncToken,
+      note: args.note,
+      events: completedEvents,
+      emailDecisionClaim: args.emailDecisionClaim,
+    });
+  } catch (error) {
+    // A mutation response can be lost after its transaction commits. Read
+    // back the authoritative booking before deleting events, so an
+    // ambiguous response never removes a successfully approved series.
+    let current: Booking | null;
+    try {
+      current = (await ctx.runQuery(internal.bookings.getInternal, {
+        bookingId: booking._id,
+      })) as Booking | null;
+    } catch {
+      calendarError(
+        "CALENDAR_APPROVAL_STATUS_UNKNOWN",
+        "Google Calendar events were created, but RoomOps could not confirm the final Convex transaction. Check the booking and audit log before retrying.",
+      );
+    }
+    const expectedEventKeys = new Set(
+      completedEvents.map(
+        (event) => `${event.calendarId}\u0000${event.eventId}`,
+      ),
+    );
+    const storedEventKeys = new Set(
+      (current?.calendarEvents ?? []).map(
+        (event) => `${event.calendarId}\u0000${event.eventId}`,
+      ),
+    );
+    if (
+      current?.status === "approved" &&
+      expectedEventKeys.size === storedEventKeys.size &&
+      [...expectedEventKeys].every((key) => storedEventKeys.has(key))
+    ) {
+      return {
+        status: "approved",
+        calendarEventCount: created.length,
+        occurrenceCount: occurrences.length,
+      };
+    }
+
+    const cleanupErrors: string[] = [];
+    try {
+      await cleanupManagedEvents(runtime, String(booking._id), completedEvents);
+    } catch (cleanupError) {
+      cleanupErrors.push(errorMessage(cleanupError));
+    }
+    const message = [
+      errorMessage(error),
+      cleanupErrors.length
+        ? `Cleanup also failed: ${cleanupErrors.join("; ")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    if (
+      current?.status === "pending" &&
+      current.calendarSyncToken === args.syncToken
+    ) {
+      await ctx.runMutation(internal.bookings.failCalendarApproval, {
+        bookingId: booking._id,
+        syncToken: args.syncToken,
+        errorMessage: message,
+      });
+    }
+    calendarError(
+      "CALENDAR_APPROVAL_FINALIZE_FAILED",
+      `The Google events were rolled back because Convex could not finalize approval. ${message}`,
+    );
+  }
+  return {
+    status: "approved",
+    calendarEventCount: created.length,
+    occurrenceCount: occurrences.length,
+  };
 }
 
 export const inspectConfiguration = action({
@@ -529,7 +818,10 @@ export const decide = action({
       return await finish({ status: "rejected" as const });
     }
 
-    const runtime = requiredRuntime();
+    // Keep synchronous decisions fail-fast when Calendar configuration is
+    // unavailable. Background dashboard approvals record this as a durable
+    // worker failure instead.
+    requiredRuntime();
     const syncToken = crypto.randomUUID();
     const start = (await ctx.runMutation(
       internal.bookings.beginCalendarApproval,
@@ -550,48 +842,17 @@ export const decide = action({
         start.reason ===
         "approved_conflict_cleanup_required"
       ) {
-        try {
-          await cleanupManagedEvents(
-            runtime,
-            String(start.booking._id),
-            start.booking.calendarAttemptedEvents ?? [],
-          );
-          await ctx.runMutation(
-            internal.bookings
-              .markApprovedConflictAfterCalendarCleanup,
-            {
-              bookingId: start.booking._id,
-              conflictBookingId: start.conflictBookingId,
-              actorId,
-              syncToken,
-              note: args.note,
-              emailDecisionClaim: emailClaim,
-            },
-          );
-        } catch (error) {
-          const current = (await ctx.runQuery(
-            internal.bookings.getInternal,
-            { bookingId: args.bookingId },
-          )) as Booking | null;
-          if (current?.status === "unavailable") {
-            return await finish({
-              status: "unavailable" as const,
-            });
-          }
-          await ctx.runMutation(
-            internal.bookings.failCalendarApproval,
-            {
-              bookingId: args.bookingId,
-              syncToken,
-              errorMessage: errorMessage(error),
-            },
-          );
-          calendarError(
-            "GOOGLE_CALENDAR_ORPHAN_CLEANUP_FAILED",
-            `The request remains pending because its incomplete Calendar attempt could not be cleaned safely. ${errorMessage(error)}`,
-          );
-        }
-        return await finish({ status: "unavailable" as const });
+        return await finish(
+          await runCalendarApprovalAfterBegin(ctx, {
+            booking: start.booking,
+            actorId,
+            syncToken,
+            note: args.note,
+            approvedConflictBookingId:
+              start.conflictBookingId,
+            emailDecisionClaim: emailClaim,
+          }),
+        );
       }
       if (start.reason === "conflict_ack_required") {
         calendarError(
@@ -604,253 +865,15 @@ export const decide = action({
         "Another overlapping request is currently being approved. Wait for it to finish before deciding this request.",
       );
     }
-    const booking = start.booking;
-    const occurrences = occurrencesForBooking(booking);
-    let plans: CalendarEventPlan[];
-    try {
-      plans = calendarEventPlans(booking, runtime, occurrences);
-    } catch (error) {
-      const message = errorMessage(error);
-      await ctx.runMutation(internal.bookings.failCalendarApproval, {
-        bookingId: booking._id,
-        syncToken,
-        errorMessage: message,
-      });
-      calendarError(
-        "GOOGLE_CALENDAR_VENUE_RESOLUTION_FAILED",
-        `The booking venue could not be mapped to a Google Calendar. The booking remains pending. ${message}`,
-      );
-    }
-
-    const attemptedEvents = await Promise.all(
-      plans.map(async (plan) => ({
-        calendarId: plan.target.calendarId,
-        eventId: await deterministicGoogleCalendarEventId({
-          bookingId: String(booking._id),
-          calendarId: plan.target.calendarId,
-          venue: plan.target.venue,
-          generation: plan.generation,
-        }),
-        targetVenue: plan.target.venue,
-        occurrenceSequence: plan.occurrence.sequence,
-        startAt: plan.occurrence.startAt,
-        endAt: plan.occurrence.endAt,
-      })),
-    );
-
-    // A previous action may have been terminated after Google committed an
-    // event but before Convex received its response. Deterministic IDs let a
-    // new lease remove those known-orphan candidates before checking free/busy.
-    try {
-      await cleanupManagedEvents(
-        runtime,
-        String(booking._id),
-        [
-          ...(booking.calendarAttemptedEvents ?? []),
-          ...attemptedEvents,
-        ],
-      );
-      await ctx.runMutation(
-        internal.bookings.recordCalendarAttemptTargets,
-        {
-          bookingId: booking._id,
-          syncToken,
-          events: attemptedEvents,
-        },
-      );
-    } catch (error) {
-      const message = errorMessage(error);
-      await ctx.runMutation(internal.bookings.failCalendarApproval, {
-        bookingId: booking._id,
-        syncToken,
-        errorMessage: message,
-      });
-      calendarError(
-        "GOOGLE_CALENDAR_ORPHAN_CLEANUP_FAILED",
-        `RoomOps could not clear an earlier incomplete Calendar attempt. The booking remains pending. ${message}`,
-      );
-    }
-
-    let availability: GoogleCalendarAvailability;
-    let availabilityTargets: VenueCalendarTarget[];
-    try {
-      const checked = await checkBookingAvailability(
-        booking,
-        runtime,
-        occurrences,
-      );
-      availability = checked.availability;
-      availabilityTargets = checked.targets;
-    } catch (error) {
-      const message = errorMessage(error);
-      await ctx.runMutation(internal.bookings.failCalendarApproval, {
-        bookingId: booking._id,
-        syncToken,
-        errorMessage: message,
-      });
-      calendarError(
-        "GOOGLE_CALENDAR_CHECK_FAILED",
-        `Google Calendar could not be checked. The booking remains pending. ${message}`,
-      );
-    }
-    if (!availability.available) {
-      const summary = conflictSummary(
-        availabilityTargets,
-        availability.conflicts,
-      );
-      await ctx.runMutation(internal.bookings.markCalendarConflict, {
-        bookingId: booking._id,
+    return await finish(
+      await runCalendarApprovalAfterBegin(ctx, {
+        booking: start.booking,
         actorId,
         syncToken,
         note: args.note,
-        conflictSummary: summary,
         emailDecisionClaim: emailClaim,
-      });
-      return await finish({ status: "unavailable" as const });
-    }
-
-    const created: GoogleCalendarEventRef[] = [];
-    try {
-      for (const plan of plans) {
-        created.push(
-          await runtime.client.createEvent(
-            eventInput(booking, plan.target, plan.occurrence),
-            plan.generation,
-          ),
-        );
-      }
-    } catch (error) {
-      const cleanupErrors: string[] = [];
-      try {
-        await cleanupManagedEvents(
-          runtime,
-          String(booking._id),
-          attemptedEvents,
-        );
-      } catch (cleanupError) {
-        cleanupErrors.push(errorMessage(cleanupError));
-      }
-      const message = [
-        errorMessage(error),
-        cleanupErrors.length
-          ? `Cleanup also failed: ${cleanupErrors.join("; ")}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      await ctx.runMutation(internal.bookings.failCalendarApproval, {
-        bookingId: booking._id,
-        syncToken,
-        errorMessage: message,
-      });
-      calendarError(
-        "GOOGLE_CALENDAR_CREATE_FAILED",
-        `The Google Calendar event could not be created. The booking remains pending. ${message}`,
-      );
-    }
-
-    const completedEvents = created.map((event, index) => ({
-      calendarId: event.calendarId,
-      eventId: event.eventId,
-      htmlLink: event.htmlLink,
-      targetVenue: plans[index].target.venue,
-      occurrenceSequence: plans[index].occurrence.sequence,
-      startAt: plans[index].occurrence.startAt,
-      endAt: plans[index].occurrence.endAt,
-    }));
-    try {
-      await ctx.runMutation(
-        internal.bookings.completeCalendarApproval,
-        {
-          bookingId: booking._id,
-          actorId,
-          syncToken,
-          note: args.note,
-          events: completedEvents,
-          emailDecisionClaim: emailClaim,
-        },
-      );
-    } catch (error) {
-      // A mutation response can be lost after its transaction commits. Read
-      // back the authoritative booking before deleting events, so an
-      // ambiguous response never removes a successfully approved series.
-      let current: Booking | null;
-      try {
-        current = (await ctx.runQuery(
-          internal.bookings.getInternal,
-          { bookingId: booking._id },
-        )) as Booking | null;
-      } catch {
-        calendarError(
-          "CALENDAR_APPROVAL_STATUS_UNKNOWN",
-          "Google Calendar events were created, but RoomOps could not confirm the final Convex transaction. Check the booking and audit log before retrying.",
-        );
-      }
-      const expectedEventKeys = new Set(
-        completedEvents.map(
-          (event) => `${event.calendarId}\u0000${event.eventId}`,
-        ),
-      );
-      const storedEventKeys = new Set(
-        (current?.calendarEvents ?? []).map(
-          (event) => `${event.calendarId}\u0000${event.eventId}`,
-        ),
-      );
-      if (
-        current?.status === "approved" &&
-        expectedEventKeys.size === storedEventKeys.size &&
-        [...expectedEventKeys].every((key) =>
-          storedEventKeys.has(key),
-        )
-      ) {
-        return await finish({
-          status: "approved" as const,
-          calendarEventCount: created.length,
-          occurrenceCount: occurrences.length,
-        });
-      }
-
-      const cleanupErrors: string[] = [];
-      try {
-        await cleanupManagedEvents(
-          runtime,
-          String(booking._id),
-          completedEvents,
-        );
-      } catch (cleanupError) {
-        cleanupErrors.push(errorMessage(cleanupError));
-      }
-      const message = [
-        errorMessage(error),
-        cleanupErrors.length
-          ? `Cleanup also failed: ${cleanupErrors.join("; ")}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      if (
-        current?.status === "pending" &&
-        current.calendarSyncToken === syncToken
-      ) {
-        await ctx.runMutation(
-          internal.bookings.failCalendarApproval,
-          {
-            bookingId: booking._id,
-            syncToken,
-            errorMessage: message,
-          },
-        );
-      }
-      calendarError(
-        "CALENDAR_APPROVAL_FINALIZE_FAILED",
-        `The Google events were rolled back because Convex could not finalize approval. ${message}`,
-      );
-    }
-    return await finish({
-      status: "approved" as const,
-      calendarEventCount: created.length,
-      occurrenceCount: occurrences.length,
-    });
+      }),
+    );
     } catch (error) {
       if (!emailClaim) throw error;
       let current: Booking | null = null;
@@ -892,6 +915,48 @@ export const decide = action({
         // recorded after a transient Convex failure.
       }
       throw error;
+    }
+  },
+});
+
+export const processCalendarApproval = internalAction({
+  args: {
+    bookingId: v.id("bookings"),
+    actorId: v.string(),
+    syncToken: v.string(),
+    note: v.optional(v.string()),
+    approvedConflictBookingId: v.optional(v.id("bookings")),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    // The scheduler may start this action long after it was queued. Renew
+    // ownership at worker start so the 31-minute lease covers this action's
+    // runtime rather than time spent waiting in the scheduler.
+    const booking = (await ctx.runMutation(
+      internal.bookings.renewCalendarApprovalLease,
+      {
+        bookingId: args.bookingId,
+        syncToken: args.syncToken,
+      },
+    )) as Booking | null;
+    if (!booking) return;
+
+    try {
+      await runCalendarApprovalAfterBegin(ctx, {
+        booking,
+        actorId: args.actorId,
+        syncToken: args.syncToken,
+        note: args.note,
+        approvedConflictBookingId: args.approvedConflictBookingId,
+      });
+    } catch (error) {
+      // Most stage-specific failures already record the failure. This final
+      // token-guarded write also covers configuration errors and unexpected
+      // exceptions so a background request never remains locked indefinitely.
+      await ctx.runMutation(internal.bookings.failCalendarApproval, {
+        bookingId: booking._id,
+        syncToken: args.syncToken,
+        errorMessage: errorMessage(error),
+      });
     }
   },
 });

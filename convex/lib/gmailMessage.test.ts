@@ -3,6 +3,7 @@ import {
   availabilityFollowupKind,
   bookingEmailDependencyGate,
   canRevokeTokenForTerminalNotification,
+  conflictAlertEpisodeKey,
   emailDependencyGate,
   encodeGmailMime,
   initialBookingEmailDelay,
@@ -11,6 +12,7 @@ import {
   isRetryableGmailStatus,
   normalizeEmailAddress,
   requiresRequesterReceipt,
+  urgentConflictDeliveryRecoveryMode,
   type BookingEmailKind,
   type ConflictAlertBookingState,
 } from "./gmailMessage";
@@ -158,7 +160,7 @@ describe("Gmail message safety", () => {
     expect(emailDependencyGate(undefined)).toBe("block");
   });
 
-  it("classifies every booking email except the receipt as a follow-up", () => {
+  it("lets receipts and urgent conflict alerts dispatch immediately", () => {
     const kinds: BookingEmailKind[] = [
       "requester_submission_received",
       "requester_unavailable",
@@ -170,6 +172,7 @@ describe("Gmail message safety", () => {
 
     expect(kinds.filter((kind) => !requiresRequesterReceipt(kind))).toEqual([
       "requester_submission_received",
+      "approver_conflict_urgent",
     ]);
   });
 
@@ -178,7 +181,6 @@ describe("Gmail message safety", () => {
     "approver_request",
     "requester_approved",
     "requester_rejected",
-    "approver_conflict_urgent",
   ])("gates %s on the same booking's sent receipt", (kind) => {
     const receipt = {
       bookingId: "booking-1",
@@ -207,6 +209,57 @@ describe("Gmail message safety", () => {
     expect(
       bookingEmailDependencyGate(kind, "booking-1", null),
     ).toBe("block");
+  });
+
+  it("does not delay an urgent admin conflict alert behind the requester receipt", () => {
+    expect(
+      bookingEmailDependencyGate(
+        "approver_conflict_urgent",
+        "booking-1",
+        null,
+      ),
+    ).toBe("ready");
+    expect(
+      bookingEmailDependencyGate(
+        "approver_conflict_urgent",
+        "booking-1",
+        {
+          bookingId: "booking-1",
+          kind: "requester_submission_received",
+          status: "failed",
+        },
+      ),
+    ).toBe("ready");
+  });
+
+  it("revives only nonterminal urgent conflict deliveries from the old dependency gate", () => {
+    expect(
+      urgentConflictDeliveryRecoveryMode("pending", true),
+    ).toBe("requeue");
+    expect(
+      urgentConflictDeliveryRecoveryMode("blocked", true),
+    ).toBe("requeue");
+    expect(
+      urgentConflictDeliveryRecoveryMode("sending", true),
+    ).toBe("clear_dependency");
+    expect(
+      urgentConflictDeliveryRecoveryMode("sending", false),
+    ).toBe("none");
+    expect(
+      urgentConflictDeliveryRecoveryMode("pending", false),
+    ).toBe("none");
+    expect(
+      urgentConflictDeliveryRecoveryMode("blocked", false),
+    ).toBe("none");
+    for (const status of [
+      "sent",
+      "failed",
+      "cancelled",
+    ] as const) {
+      expect(
+        urgentConflictDeliveryRecoveryMode(status, true),
+      ).toBe("none");
+    }
   });
 
   it("accepts only live reciprocal pending conflict warnings", () => {
@@ -334,5 +387,67 @@ describe("Gmail message safety", () => {
         1_000,
       ),
     ).toBe(false);
+  });
+
+  it("keeps conflict-delivery retries in one persisted episode idempotent", () => {
+    const pendingConflict: ConflictAlertBookingState = {
+      id: "booking-1",
+      status: "pending",
+      revision: 7,
+      conflictWarningBookingIds: ["booking-2", "booking-3"],
+    };
+
+    expect(
+      conflictAlertEpisodeKey(pendingConflict, [
+        "booking-3",
+        "booking-2",
+        "booking-2",
+      ]),
+    ).toBe(
+      conflictAlertEpisodeKey(pendingConflict, [
+        "booking-2",
+        "booking-3",
+      ]),
+    );
+  });
+
+  it("distinguishes later RoomOps and Calendar conflict episodes", () => {
+    const pendingConflict: ConflictAlertBookingState = {
+      id: "booking-1",
+      status: "pending",
+      revision: 7,
+    };
+    expect(
+      conflictAlertEpisodeKey(pendingConflict, ["booking-2"]),
+    ).not.toBe(
+      conflictAlertEpisodeKey(
+        { ...pendingConflict, revision: 8 },
+        ["booking-2"],
+      ),
+    );
+
+    const calendarConflict: ConflictAlertBookingState = {
+      id: "booking-1",
+      status: "approved",
+      revision: 8,
+      calendarAvailabilityStatus: "conflict",
+      calendarSyncAttempts: 2,
+    };
+    expect(
+      conflictAlertEpisodeKey(calendarConflict, []),
+    ).not.toBe(
+      conflictAlertEpisodeKey(
+        { ...calendarConflict, calendarSyncAttempts: 3 },
+        [],
+      ),
+    );
+    expect(
+      conflictAlertEpisodeKey(calendarConflict, []),
+    ).not.toBe(
+      conflictAlertEpisodeKey(
+        { ...calendarConflict, status: "unavailable" },
+        [],
+      ),
+    );
   });
 });

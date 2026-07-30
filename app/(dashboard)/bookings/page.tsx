@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useAction,
   useConvex,
@@ -25,6 +25,7 @@ import {
   formatDateTime,
   messageFromError,
 } from "@/lib/ui";
+import { isBookingCalendarProcessing } from "@/lib/booking-conflict-transition";
 import { StatusBadge } from "@/components/status-badge";
 
 type Booking = {
@@ -114,30 +115,65 @@ function DecisionDialog({
 }: {
   booking: Booking;
   decision: "approve" | "reject";
-  close: () => void;
+  close: (notice?: string) => void;
 }) {
   const decide = useAction(api.googleCalendar.decide);
+  const queueCalendarApproval = useMutation(
+    api.bookings.queueCalendarApproval,
+  );
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [conflictsConfirmed, setConflictsConfirmed] = useState(false);
+  const processing = isBookingCalendarProcessing(booking);
   const hasConflictWarning =
     (booking.conflictWarningBookingIds?.length ?? 0) > 0;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (processing) {
+      setError(
+        "This booking is already being checked. Wait for the background Calendar operation to finish.",
+      );
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      await decide({
-        bookingId: booking._id,
-        decision,
-        note: note || undefined,
-        confirmConflicts:
-          decision === "approve" && hasConflictWarning
+      if (decision === "approve") {
+        const result = await queueCalendarApproval({
+          bookingId: booking._id,
+          note: note || undefined,
+          confirmConflicts: hasConflictWarning
             ? conflictsConfirmed
             : undefined,
-      });
+        });
+        if (result.state === "conflict_ack_required") {
+          setConflictsConfirmed(false);
+          setError(
+            "A pending conflict was found. Review the warning, acknowledge it, then approve again.",
+          );
+          return;
+        }
+        if (result.state === "approval_in_progress") {
+          setError(
+            "An overlapping booking is already being approved. Wait for that background check to finish.",
+          );
+          return;
+        }
+        close(
+          result.state === "unavailable"
+            ? "The booking was marked unavailable because it conflicts with an approved reservation."
+            : "The approval check is running in the background. Booking controls are locked until it finishes.",
+        );
+        return;
+      } else {
+        await decide({
+          bookingId: booking._id,
+          decision: "reject",
+          note: note || undefined,
+        });
+      }
       close();
     } catch (caught) {
       setError(messageFromError(caught));
@@ -166,7 +202,7 @@ function DecisionDialog({
           <button
             type="button"
             className="icon-button"
-            onClick={close}
+            onClick={() => close()}
             aria-label="Close"
           >
             <X size={18} />
@@ -192,9 +228,9 @@ function DecisionDialog({
         {decision === "approve" && (
           <div className="info-banner">
             All {booking.recurrenceCount} occurrence
-            {booking.recurrenceCount === 1 ? "" : "s"} will be checked
-            again. Approval completes only after every required Google
-            Calendar event is created.
+            {booking.recurrenceCount === 1 ? "" : "s"} will be checked in
+            the background. You can close this dialog as soon as the
+            approval check starts.
           </div>
         )}
         {decision === "approve" && hasConflictWarning && (
@@ -202,6 +238,7 @@ function DecisionDialog({
             <input
               type="checkbox"
               checked={conflictsConfirmed}
+              disabled={busy || processing}
               onChange={(event) =>
                 setConflictsConfirmed(event.target.checked)
               }
@@ -219,6 +256,7 @@ function DecisionDialog({
             rows={3}
             maxLength={1_000}
             value={note}
+            disabled={busy || processing}
             onChange={(event) => setNote(event.target.value)}
             placeholder="This comment will be included in the email sent to the requester."
           />
@@ -232,13 +270,14 @@ function DecisionDialog({
           <button
             type="button"
             className="button button-secondary"
-            onClick={close}
+            onClick={() => close()}
           >
             Cancel
           </button>
           <button
             disabled={
               busy ||
+              processing ||
               (decision === "approve" &&
                 hasConflictWarning &&
                 !conflictsConfirmed)
@@ -251,11 +290,13 @@ function DecisionDialog({
           >
             {busy
               ? decision === "approve"
-                ? "Checking and scheduling…"
+                ? "Starting background check…"
                 : "Saving…"
-              : decision === "approve"
-                ? "Approve request"
-                : "Reject request"}
+              : processing
+                ? "Calendar check in progress"
+                : decision === "approve"
+                  ? "Approve request"
+                  : "Reject request"}
           </button>
         </div>
       </form>
@@ -308,6 +349,7 @@ function EditDialog({
       occurrenceSequence: number;
     }>
   >([]);
+  const processing = isBookingCalendarProcessing(booking);
   const reservationEditable =
     booking.status === "pending" || booking.status === "approved";
   const occurrenceEditAvailable =
@@ -317,12 +359,14 @@ function EditDialog({
     key: Key,
     value: (typeof form)[Key],
   ) {
+    if (processing) return;
     setForm((current) => ({ ...current, [key]: value }));
     setPreviewConflicts([]);
     setConflictsConfirmed(false);
   }
 
   function selectOccurrence(sequence: number) {
+    if (processing) return;
     const occurrence = booking.occurrences.find(
       (item) => item.sequence === sequence,
     );
@@ -340,6 +384,12 @@ function EditDialog({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (processing) {
+      setError(
+        "Editing is locked while this booking is being checked and synchronized with Google Calendar.",
+      );
+      return;
+    }
     if (!irreversibleConfirmed) {
       setError(
         "Confirm that you understand the Calendar replacement cannot be automatically undone.",
@@ -447,7 +497,7 @@ function EditDialog({
           <button
             type="button"
             className="icon-button"
-            onClick={close}
+            onClick={() => close()}
             aria-label="Close"
           >
             <X size={18} />
@@ -486,12 +536,19 @@ function EditDialog({
             pending or approved.
           </div>
         )}
+        {processing && (
+          <div className="info-banner" role="status">
+            Editing is locked while this booking is being checked and
+            synchronized with Google Calendar.
+          </div>
+        )}
         <div className="form-grid">
           {occurrenceEditAvailable && (
             <>
               <label className="field form-grid-full">
                 <span>Edit</span>
                 <select
+                  disabled={busy || processing}
                   value={form.editScope}
                   onChange={(event) => {
                     const scope = event.target.value as
@@ -528,6 +585,7 @@ function EditDialog({
                 <label className="field form-grid-full">
                   <span>Occurrence</span>
                   <select
+                    disabled={busy || processing}
                     value={form.occurrenceSequence}
                     onChange={(event) =>
                       selectOccurrence(Number(event.target.value))
@@ -554,6 +612,7 @@ function EditDialog({
             <span>Requester name</span>
             <input
               required
+              disabled={busy || processing}
               value={form.requesterName}
               onChange={(event) =>
                 update("requesterName", event.target.value)
@@ -564,6 +623,7 @@ function EditDialog({
             <span>Requester email</span>
             <input
               required
+              disabled={busy || processing}
               type="email"
               value={form.requesterEmail}
               onChange={(event) =>
@@ -575,7 +635,7 @@ function EditDialog({
             <span>Room</span>
             <input
               required
-              disabled={!reservationEditable}
+              disabled={busy || processing || !reservationEditable}
               value={form.room}
               onChange={(event) => update("room", event.target.value)}
             />
@@ -584,7 +644,7 @@ function EditDialog({
             <span>Start ({booking.timezone})</span>
             <input
               required
-              disabled={!reservationEditable}
+              disabled={busy || processing || !reservationEditable}
               type="datetime-local"
               value={form.start}
               onChange={(event) => update("start", event.target.value)}
@@ -594,7 +654,7 @@ function EditDialog({
             <span>End ({booking.timezone})</span>
             <input
               required
-              disabled={!reservationEditable}
+              disabled={busy || processing || !reservationEditable}
               type="datetime-local"
               value={form.end}
               onChange={(event) => update("end", event.target.value)}
@@ -603,6 +663,7 @@ function EditDialog({
           <label className="field form-grid-full">
             <span>Event name</span>
             <input
+              disabled={busy || processing}
               value={form.eventName}
               onChange={(event) =>
                 update("eventName", event.target.value)
@@ -613,6 +674,7 @@ function EditDialog({
             <span>Purpose</span>
             <textarea
               rows={3}
+              disabled={busy || processing}
               value={form.purpose}
               onChange={(event) => update("purpose", event.target.value)}
             />
@@ -620,6 +682,7 @@ function EditDialog({
           <label className="field form-grid-full">
             <span>Ministry</span>
             <input
+              disabled={busy || processing}
               value={form.ministry}
               onChange={(event) =>
                 update("ministry", event.target.value)
@@ -631,7 +694,7 @@ function EditDialog({
               <label className="field form-grid-full">
                 <span>Repeat</span>
                 <select
-                  disabled={!reservationEditable}
+                  disabled={busy || processing || !reservationEditable}
                   value={form.recurrenceFrequency}
                   onChange={(event) =>
                     update(
@@ -662,7 +725,9 @@ function EditDialog({
                       Does this recurring booking have an end date?
                     </span>
                     <select
-                      disabled={!reservationEditable}
+                      disabled={
+                        busy || processing || !reservationEditable
+                      }
                       value={form.recurrenceHasEndDate}
                       onChange={(event) =>
                         update(
@@ -680,7 +745,9 @@ function EditDialog({
                       <span>Last date required</span>
                       <input
                         required
-                        disabled={!reservationEditable}
+                        disabled={
+                          busy || processing || !reservationEditable
+                        }
                         type="date"
                         min={form.start.slice(0, 10)}
                         value={form.recurrenceUntil}
@@ -727,6 +794,7 @@ function EditDialog({
             <label className="confirmation-check">
               <input
                 type="checkbox"
+                disabled={busy || processing}
                 checked={conflictsConfirmed}
                 onChange={(event) =>
                   setConflictsConfirmed(event.target.checked)
@@ -741,6 +809,7 @@ function EditDialog({
         <label className="confirmation-check">
           <input
             type="checkbox"
+            disabled={busy || processing}
             checked={irreversibleConfirmed}
             onChange={(event) =>
               setIrreversibleConfirmed(event.target.checked)
@@ -756,15 +825,19 @@ function EditDialog({
           <button
             type="button"
             className="button button-secondary"
-            onClick={close}
+            onClick={() => close()}
           >
             Cancel
           </button>
           <button
-            disabled={busy || !irreversibleConfirmed}
+            disabled={busy || processing || !irreversibleConfirmed}
             className="button button-primary"
           >
-            {busy ? "Saving…" : "Save changes"}
+            {processing
+              ? "Calendar processing in progress"
+              : busy
+                ? "Saving…"
+                : "Save changes"}
           </button>
         </div>
       </form>
@@ -801,6 +874,45 @@ export default function BookingsPage() {
     profile?.capabilities.includes("bookings.approve") ?? false;
   const canEdit =
     profile?.capabilities.includes("bookings.edit") ?? false;
+  const currentEditingBooking = editing
+    ? bookings?.find((booking) => booking._id === editing._id) ??
+      editing
+    : null;
+  const currentDecisionBooking = decision
+    ? bookings?.find(
+        (booking) => booking._id === decision.booking._id,
+      ) ?? decision.booking
+    : null;
+
+  useEffect(() => {
+    if (
+      currentEditingBooking &&
+      isBookingCalendarProcessing(currentEditingBooking)
+    ) {
+      const timer = setTimeout(() => {
+        setEditing(null);
+        setPageNotice(
+          "Editing closed because this booking is being checked in the background. Its controls will unlock when Calendar processing finishes.",
+        );
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [currentEditingBooking]);
+
+  useEffect(() => {
+    if (
+      currentDecisionBooking &&
+      isBookingCalendarProcessing(currentDecisionBooking)
+    ) {
+      const timer = setTimeout(() => {
+        setDecision(null);
+        setPageNotice(
+          "The approval check is running in the background. Booking controls are locked until it finishes.",
+        );
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [currentDecisionBooking]);
 
   async function retryCalendar(booking: Booking) {
     setRetryingBookingId(booking._id);
@@ -815,6 +927,12 @@ export default function BookingsPage() {
   }
 
   async function removeBooking(booking: Booking) {
+    if (isBookingCalendarProcessing(booking)) {
+      setPageError(
+        "Wait for the background Calendar operation to finish before deleting this booking.",
+      );
+      return;
+    }
     if (
       !window.confirm(
         `Permanently delete booking ${booking.jotformSubmissionId}? RoomOps will first remove every managed Google Calendar event, then delete the Convex record. This cannot be undone.`,
@@ -1086,7 +1204,7 @@ export default function BookingsPage() {
                             aria-label={`Edit ${booking.room} booking`}
                             disabled={
                               booking.availabilityCheckPending ||
-                              booking.calendarSyncStatus === "creating" ||
+                              isBookingCalendarProcessing(booking) ||
                               booking.deletionInProgress
                             }
                             title={
@@ -1094,9 +1212,9 @@ export default function BookingsPage() {
                                 ? "Wait for the intake availability check to finish."
                                 : booking.deletionInProgress
                                   ? "Safe Calendar and booking deletion is in progress."
-                                : booking.calendarSyncStatus === "creating"
-                                ? "Wait for Google Calendar synchronization to finish."
-                                : "Edit booking"
+                                  : isBookingCalendarProcessing(booking)
+                                    ? "Wait for the background Calendar operation to finish."
+                                    : "Edit booking"
                             }
                             onClick={() => setEditing(booking)}
                           >
@@ -1112,6 +1230,7 @@ export default function BookingsPage() {
                               title="Retry Google Calendar synchronization"
                               disabled={
                                 retryingBookingId === booking._id ||
+                                isBookingCalendarProcessing(booking) ||
                                 booking.deletionInProgress
                               }
                               onClick={() =>
@@ -1126,11 +1245,14 @@ export default function BookingsPage() {
                             className="icon-button action-reject"
                             aria-label={`Delete ${booking.room} booking`}
                             title={
-                              booking.deletionInProgress
-                                ? "Safe Calendar and booking deletion is already in progress."
-                                : "Delete booking and managed Calendar events"
+                              isBookingCalendarProcessing(booking)
+                                ? "Wait for the background Calendar operation to finish."
+                                : booking.deletionInProgress
+                                  ? "Safe Calendar and booking deletion is already in progress."
+                                  : "Delete booking and managed Calendar events"
                             }
                             disabled={
+                              isBookingCalendarProcessing(booking) ||
                               booking.deletionInProgress ||
                               deletingBookingId === booking._id
                             }
@@ -1158,7 +1280,10 @@ export default function BookingsPage() {
                                   decision: "approve",
                                 })
                               }
-                              disabled={booking.deletionInProgress}
+                              disabled={
+                                isBookingCalendarProcessing(booking) ||
+                                booking.deletionInProgress
+                              }
                             >
                               <Check size={17} />
                             </button>
@@ -1177,7 +1302,10 @@ export default function BookingsPage() {
                                   decision: "reject",
                                 })
                               }
-                              disabled={booking.deletionInProgress}
+                              disabled={
+                                isBookingCalendarProcessing(booking) ||
+                                booking.deletionInProgress
+                              }
                             >
                               <X size={17} />
                             </button>
@@ -1189,6 +1317,11 @@ export default function BookingsPage() {
                               Availability check pending
                             </span>
                           )}
+                        {isBookingCalendarProcessing(booking) && (
+                          <span className="view-only-label" role="status">
+                            Calendar processing in progress
+                          </span>
+                        )}
                         {!canEdit &&
                           (!canApprove ||
                             booking.status !== "pending") &&
@@ -1209,18 +1342,17 @@ export default function BookingsPage() {
 
       {decision && (
         <DecisionDialog
-          booking={
-            bookings?.find(
-              (booking) => booking._id === decision.booking._id,
-            ) ?? decision.booking
-          }
+          booking={currentDecisionBooking ?? decision.booking}
           decision={decision.decision}
-          close={() => setDecision(null)}
+          close={(notice) => {
+            setDecision(null);
+            if (notice) setPageNotice(notice);
+          }}
         />
       )}
-      {editing && (
+      {editing && currentEditingBooking && (
         <EditDialog
-          booking={editing}
+          booking={currentEditingBooking}
           close={() => setEditing(null)}
         />
       )}

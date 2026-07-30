@@ -20,6 +20,7 @@ import {
   bookingEmailDependencyGate,
   canRevokeTokenForTerminalNotification,
   cleanEmailLine,
+  conflictAlertEpisodeKey,
   encodeGmailMime,
   initialBookingEmailDelay,
   isCurrentConflictAlertPair,
@@ -27,6 +28,7 @@ import {
   isRetryableGmailStatus,
   normalizeEmailAddress,
   requiresRequesterReceipt,
+  urgentConflictDeliveryRecoveryMode,
   type ConflictAlertBookingState,
 } from "./lib/gmailMessage";
 import { bookingDeletionInProgress } from "./lib/bookingDeletion";
@@ -76,6 +78,7 @@ function conflictAlertState(
     status: booking.status,
     availabilityCheckPending: booking.availabilityCheckPending,
     calendarAvailabilityStatus: booking.calendarAvailabilityStatus,
+    calendarSyncAttempts: booking.calendarSyncAttempts,
     conflictBookingId: booking.conflictBookingId
       ? String(booking.conflictBookingId)
       : undefined,
@@ -83,6 +86,7 @@ function conflictAlertState(
       booking.conflictWarningBookingIds?.map(String),
     deletionToken: booking.deletionToken,
     deletionLeaseExpiresAt: booking.deletionLeaseExpiresAt,
+    revision: booking.revision,
   };
 }
 
@@ -753,16 +757,19 @@ function deliveryDedupeKey(
   kind: EmailDeliveryKind,
   recipientEmail: string,
   relatedBookingIds: readonly Id<"bookings">[] = [],
+  discriminator?: string,
 ): string {
   const related = [...new Set(relatedBookingIds.map(String))]
     .sort()
     .join(",");
-  return [
+  const parts = [
     String(bookingId),
     kind,
     recipientEmail.toLowerCase(),
     related,
-  ].join(":");
+  ];
+  if (discriminator) parts.push(discriminator);
+  return parts.join(":");
 }
 
 async function enqueueDelivery(
@@ -774,6 +781,7 @@ async function enqueueDelivery(
     kind: EmailDeliveryKind;
     recipientEmail: string;
     relatedBookingIds?: Id<"bookings">[];
+    dedupeDiscriminator?: string;
   },
 ): Promise<Id<"emailDeliveries">> {
   const dependsOnDeliveryId = requiresRequesterReceipt(input.kind)
@@ -809,14 +817,72 @@ async function enqueueDelivery(
     input.kind,
     recipientEmail,
     relatedBookingIds,
+    input.dedupeDiscriminator,
   );
-  const existing = await ctx.db
+  let existing = await ctx.db
     .query("emailDeliveries")
     .withIndex("by_dedupe_key", (range) =>
       range.eq("dedupeKey", dedupeKey),
     )
     .unique();
+  if (
+    !existing &&
+    input.kind === "approver_conflict_urgent" &&
+    input.dedupeDiscriminator
+  ) {
+    const legacyDedupeKey = deliveryDedupeKey(
+      input.bookingId,
+      input.kind,
+      recipientEmail,
+      relatedBookingIds,
+    );
+    const legacyDelivery = await ctx.db
+      .query("emailDeliveries")
+      .withIndex("by_dedupe_key", (range) =>
+        range.eq("dedupeKey", legacyDedupeKey),
+      )
+      .unique();
+    if (
+      legacyDelivery &&
+      (legacyDelivery.status === "pending" ||
+        legacyDelivery.status === "sending" ||
+        legacyDelivery.status === "blocked")
+    ) {
+      await ctx.db.patch(legacyDelivery._id, { dedupeKey });
+      existing = { ...legacyDelivery, dedupeKey };
+    }
+  }
   if (existing) {
+    const urgentConflictRecovery =
+      input.kind === "approver_conflict_urgent"
+        ? urgentConflictDeliveryRecoveryMode(
+            existing.status,
+            existing.dependsOnDeliveryId !== undefined,
+          )
+        : "none";
+    if (urgentConflictRecovery !== "none") {
+      const now = Date.now();
+      const requeue = urgentConflictRecovery === "requeue";
+      await ctx.db.patch(existing._id, {
+        dependsOnDeliveryId: undefined,
+        status: requeue ? "pending" : existing.status,
+        nextAttemptAt: requeue ? now : existing.nextAttemptAt,
+        lastError: requeue ? undefined : existing.lastError,
+        leaseToken: requeue ? undefined : existing.leaseToken,
+        leaseExpiresAt: requeue
+          ? undefined
+          : existing.leaseExpiresAt,
+        updatedAt: now,
+      });
+      if (requeue) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.emailNotifications.dispatchDelivery,
+          { deliveryId: existing._id },
+        );
+      }
+      return existing._id;
+    }
     if (
       dependsOnDeliveryId &&
       existing.dependsOnDeliveryId !== dependsOnDeliveryId &&
@@ -1147,6 +1213,10 @@ export const prepareConflictAlert = internalMutation({
     const relatedBookingIds = relatedBookings.map(
       (related) => related._id,
     );
+    const dedupeDiscriminator = conflictAlertEpisodeKey(
+      conflictAlertState(booking),
+      relatedBookingIds.map(String),
+    );
     const conflictAdmins = await ctx.db
       .query("conflictAdmins")
       .withIndex("by_active", (range) => range.eq("active", true))
@@ -1172,6 +1242,7 @@ export const prepareConflictAlert = internalMutation({
       await enqueueDelivery(ctx, {
         bookingId: booking._id,
         relatedBookingIds,
+        dedupeDiscriminator,
         kind: "approver_conflict_urgent",
         recipientEmail: conflictAdmin.email,
       });

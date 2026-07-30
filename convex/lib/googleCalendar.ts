@@ -20,6 +20,19 @@ export const GOOGLE_CALENDAR_VENUES = [
   "Shema Space",
 ] as const;
 
+// These are the only venues exposed for new bookings and on the Calendar
+// page. The three office venues remain in GOOGLE_CALENDAR_VENUES so existing
+// bookings can still be reconciled or safely removed from Google Calendar.
+export const BOOKABLE_GOOGLE_CALENDAR_VENUES = [
+  "Board Room",
+  "Counselling / Music Room",
+  "L1 Ministry Space",
+  "Ministry Centre A",
+  "Ministry Centre B",
+  "Ministry Centre C",
+  "Shema Space",
+] as const;
+
 export type GoogleCalendarVenue =
   (typeof GOOGLE_CALENDAR_VENUES)[number];
 
@@ -238,6 +251,25 @@ export function resolveVenueSelection(input: string): VenueSelection {
     throw calendarConfigurationError(
       "GOOGLE_CALENDAR_VENUE_UNKNOWN",
       `Unsupported venue "${cleanSingleLine(input, 160)}".`,
+    );
+  }
+  return selection;
+}
+
+const bookableVenueSet = new Set<string>(
+  BOOKABLE_GOOGLE_CALENDAR_VENUES,
+);
+
+export function resolveBookableVenueSelection(
+  input: string,
+): VenueSelection {
+  const selection = resolveVenueSelection(input);
+  if (
+    selection.venues.some((venue) => !bookableVenueSet.has(venue))
+  ) {
+    throw calendarConfigurationError(
+      "GOOGLE_CALENDAR_VENUE_NOT_BOOKABLE",
+      `"${selection.displayName}" is retained for historical bookings but no longer accepts new bookings.`,
     );
   }
   return selection;

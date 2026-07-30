@@ -13,11 +13,17 @@ import {
   Menu,
   Settings2,
   TableProperties,
+  TriangleAlert,
   Users,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/convex/_generated/api";
+import {
+  claimPendingConflictEdges,
+  detectBookingConflictTransition,
+  type BookingConflictSnapshot,
+} from "@/lib/booking-conflict-transition";
 import type { Capability, Role } from "@/shared/roles";
 import { Brand } from "./brand";
 import { StatusBadge } from "./status-badge";
@@ -76,6 +82,207 @@ const navigation: Array<{
     capability: "integrations.manage",
   },
 ];
+
+type ConflictToastBooking = {
+  _id: string;
+  requesterName: string;
+  room: string;
+  revision: number;
+  updatedAt: number;
+  calendarAvailabilityStatus?:
+    | "unchecked"
+    | "available"
+    | "conflict";
+  calendarConflictSummary?: string;
+  calendarSyncStatus?:
+    | "disabled"
+    | "not_created"
+    | "creating"
+    | "synced"
+    | "failed"
+    | "conflict";
+  conflictWarningBookingIds?: string[];
+};
+
+type ConflictToast = {
+  id: string;
+  message: string;
+  title: string;
+};
+
+function conflictSnapshot(
+  booking: ConflictToastBooking,
+): BookingConflictSnapshot {
+  return {
+    id: String(booking._id),
+    revision: booking.revision,
+    updatedAt: booking.updatedAt,
+    calendarAvailabilityStatus:
+      booking.calendarAvailabilityStatus,
+    calendarConflictSummary: booking.calendarConflictSummary,
+    calendarSyncStatus: booking.calendarSyncStatus,
+    conflictWarningBookingIds:
+      booking.conflictWarningBookingIds?.map(String),
+  };
+}
+
+function ConflictToastMonitor({ enabled }: { enabled: boolean }) {
+  const bookings = useQuery(
+    api.bookings.listConflictNotificationFeed,
+    enabled ? {} : "skip",
+  ) as ConflictToastBooking[] | undefined;
+  const previousRef = useRef<
+    Map<string, BookingConflictSnapshot> | undefined
+  >(undefined);
+  const seenRef = useRef(new Set<string>());
+  const publishTimersRef = useRef(
+    new Set<ReturnType<typeof setTimeout>>(),
+  );
+  const timersRef = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
+  const [toasts, setToasts] = useState<ConflictToast[]>([]);
+
+  useEffect(() => {
+    if (!bookings) return;
+    const next = new Map(
+      bookings.map((booking) => [
+        String(booking._id),
+        conflictSnapshot(booking),
+      ]),
+    );
+    const previous = previousRef.current;
+    previousRef.current = next;
+    if (!previous) return;
+
+    const additions: ConflictToast[] = [];
+    const claimedPendingEdges = new Set<string>();
+    for (const booking of bookings) {
+      const bookingId = String(booking._id);
+      const transition = detectBookingConflictTransition(
+        previous.get(bookingId),
+        next.get(bookingId)!,
+      );
+      if (!transition) continue;
+
+      if (transition.kind === "pending") {
+        const conflictBookingIds = claimPendingConflictEdges(
+          bookingId,
+          transition.addedPendingConflictBookingIds,
+          claimedPendingEdges,
+        );
+        if (
+          conflictBookingIds.length === 0 ||
+          seenRef.current.has(transition.key)
+        ) {
+          continue;
+        }
+        additions.push({
+          id: transition.key,
+          title: "Pending booking conflict",
+          message: `${booking.room} for ${booking.requesterName} now overlaps ${conflictBookingIds.length} additional pending ${
+            conflictBookingIds.length === 1 ? "request" : "requests"
+          }.`,
+        });
+        continue;
+      }
+
+      if (seenRef.current.has(transition.key)) continue;
+      additions.push({
+        id: transition.key,
+        title: "Calendar conflict detected",
+        message: `${booking.room} for ${booking.requesterName} conflicts with an existing Calendar event.${
+          booking.calendarConflictSummary
+            ? ` ${booking.calendarConflictSummary}`
+            : ""
+        }`,
+      });
+    }
+    if (additions.length === 0) return;
+
+    for (const toast of additions) {
+      seenRef.current.add(toast.id);
+    }
+    const publishTimer = setTimeout(() => {
+      publishTimersRef.current.delete(publishTimer);
+      setToasts((current) => [...current, ...additions].slice(-4));
+      for (const toast of additions) {
+        const timer = setTimeout(() => {
+          timersRef.current.delete(toast.id);
+          setToasts((current) =>
+            current.filter((item) => item.id !== toast.id),
+          );
+        }, 10_000);
+        timersRef.current.set(toast.id, timer);
+      }
+    }, 0);
+    publishTimersRef.current.add(publishTimer);
+  }, [bookings]);
+
+  useEffect(
+    () => () => {
+      for (const timer of publishTimersRef.current) {
+        clearTimeout(timer);
+      }
+      publishTimersRef.current.clear();
+      for (const timer of timersRef.current.values()) {
+        clearTimeout(timer);
+      }
+      timersRef.current.clear();
+    },
+    [],
+  );
+
+  function dismissToast(toastId: string) {
+    const timer = timersRef.current.get(toastId);
+    if (timer) clearTimeout(timer);
+    timersRef.current.delete(toastId);
+    setToasts((current) =>
+      current.filter((toast) => toast.id !== toastId),
+    );
+  }
+
+  if (toasts.length === 0) return null;
+
+  return (
+    <aside
+      className="conflict-toast-stack"
+      aria-label="Booking conflict notifications"
+      aria-live="assertive"
+      aria-relevant="additions"
+    >
+      {toasts.map((toast) => (
+        <div
+          className="conflict-toast"
+          key={toast.id}
+          role="alert"
+          aria-atomic="true"
+        >
+          <TriangleAlert size={20} aria-hidden="true" />
+          <div className="conflict-toast-copy">
+            <strong>{toast.title}</strong>
+            <span>{toast.message}</span>
+            <Link
+              href="/bookings"
+              className="text-link"
+              onClick={() => dismissToast(toast.id)}
+            >
+              Review bookings
+            </Link>
+          </div>
+          <button
+            type="button"
+            className="icon-button conflict-toast-close"
+            aria-label={`Dismiss ${toast.title}`}
+            onClick={() => dismissToast(toast.id)}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      ))}
+    </aside>
+  );
+}
 
 function LoadingShell() {
   return (
@@ -225,6 +432,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="workspace">
+      <ConflictToastMonitor
+        enabled={profile.capabilities.includes("bookings.view")}
+      />
       <button
         className="mobile-menu-button"
         aria-label="Open navigation"

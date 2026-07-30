@@ -211,7 +211,8 @@ export default defineSchema({
     .index("by_room_start", ["roomKey", "startAt"])
     .index("by_status", ["status"])
     .index("by_conflict_booking", ["conflictBookingId"])
-    .index("by_created_at", ["createdAt"]),
+    .index("by_created_at", ["createdAt"])
+    .index("by_updated_at", ["updatedAt"]),
 
   // Form-level metadata lets an editor add a value for a known optional
   // question even when that particular submission had no stored response.

@@ -18,8 +18,9 @@ for booking data, authorization, and audit logs.
   are marked on both rows
 - Google Calendar free/busy checks during intake and immediately before
   approval
-- Approved-event creation and reconciliation across the ten venue
-  calendars
+- Approved-event creation across seven bookable venue calendars, with
+  historical reconciliation and safe deletion retained for three retired
+  office-venue calendars
 - Durable Calendar synchronization recovery and an administrator retry
   control for failed approved-booking updates
 - No-repeat, daily, weekly, every-two-weeks, ordinal-weekday monthly,

@@ -37,10 +37,11 @@ GOOGLE_CALENDAR_ENABLED=false
 # Do not put the key file or encoded value in .env.local, Vercel, or git.
 GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON_B64=
 
-# JSON object mapping all ten individual venue names to real Calendar IDs.
-# Required keys: Board Room; Counselling / Music Room; L1 Ministry Space;
-# Ministry Centre A; Ministry Centre B; Ministry Centre C; Office L2 Main Area;
-# Pastor Office; PIC Office; Shema Space.
+# JSON object mapping all ten managed venue names to real Calendar IDs.
+# Bookable: Board Room; Counselling / Music Room; L1 Ministry Space;
+# Ministry Centre A; Ministry Centre B; Ministry Centre C; Shema Space.
+# Historical-only, but still required for managed-event cleanup/reconciliation:
+# Office L2 Main Area; Pastor Office; PIC Office.
 # Do not add Ministry Centre A & B or ABC; RoomOps fans those out itself.
 GOOGLE_CALENDAR_VENUE_MAP_JSON=
 

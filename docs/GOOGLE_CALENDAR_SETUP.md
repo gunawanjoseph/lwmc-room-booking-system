@@ -119,12 +119,29 @@ Copy the `client_email` value from the JSON file. It resembles:
 roomops-calendar@YOUR_PROJECT.iam.gserviceaccount.com
 ```
 
-## 3. Share every venue calendar
+## 3. Share every managed venue calendar
 
 The check marks in Google Calendar show which calendars are visible in
 the current browser. They do not give the service account access.
 
-For each of the following ten calendars:
+RoomOps exposes these seven individual venues for new bookings and on the
+Calendar page:
+
+- Board Room
+- Counselling / Music Room
+- L1 Ministry Space
+- Ministry Centre A
+- Ministry Centre B
+- Ministry Centre C
+- Shema Space
+
+Office L2 Main Area, Pastor Office, and PIC Office are retired. New
+submissions and reservation changes for those venues are rejected. Remove
+them from the Jotform room choices, but keep their existing Calendar
+mappings and service-account access so RoomOps can reconcile or delete
+historical managed events safely.
+
+For each of the following ten managed calendars:
 
 1. Open Google Calendar on a computer.
 2. Under **My calendars**, point to the calendar and select
@@ -134,7 +151,7 @@ For each of the following ten calendars:
 4. Grant **Make changes to events**. Read-only or free/busy-only access
    is not sufficient because RoomOps creates and updates approved events.
 
-Share these calendars:
+Share the seven bookable calendars:
 
 - Board Room
 - Counselling / Music Room
@@ -142,10 +159,13 @@ Share these calendars:
 - Ministry Centre A
 - Ministry Centre B
 - Ministry Centre C
+- Shema Space
+
+Also retain access to these three historical-only calendars:
+
 - Office L2 Main Area
 - Pastor Office
 - PIC Office
-- Shema Space
 
 Do not substitute LWMC Shared Calendar, Birthdays, or Tasks. They are not
 venue calendars in this integration.
@@ -159,7 +179,7 @@ Reference: [Share your calendar](https://support.google.com/calendar/answer/3708
 
 ## 4. Copy the real Calendar IDs
 
-Repeat these steps for each of the same ten calendars:
+Repeat these steps for each of the same ten managed calendars:
 
 1. Open **Settings and sharing**.
 2. Scroll to **Integrate calendar**.
@@ -187,9 +207,11 @@ repository:
 }
 ```
 
-All ten keys are required. Each Calendar ID must be assigned to only one
-individual venue. Do not add combined entries such as Ministry Centre
-A & B or Ministry Centre ABC; RoomOps performs that fan-out itself.
+All ten keys remain required: seven are bookable and the three office
+venue keys are historical-only. Each Calendar ID must be assigned to only
+one individual venue. Do not add combined entries such as Ministry
+Centre A & B or Ministry Centre ABC; RoomOps performs that fan-out
+itself.
 
 ## 5. Set the Convex development variables
 
@@ -444,8 +466,9 @@ npx convex env --prod set GOOGLE_CALENDAR_ENABLED true
 
 7. Return to `/admin/integrations` and run the Google Calendar
    configuration check.
-8. Confirm it reports the service-account email, ten venues, and the
-   expected number of calendars.
+8. Confirm it reports the service-account email, all ten managed venues
+   (seven bookable and three historical-only), and the expected number of
+   calendars.
 
 The connection check verifies free/busy access, reads each Google
 calendar's actual name, and requires the service account's effective
@@ -576,8 +599,10 @@ file. Do not encode only `private_key`, and do not manually alter
 
 ### `GOOGLE_CALENDAR_VENUE_MAP_INCOMPLETE`
 
-The map must contain every one of the ten individual venue keys listed in
-this guide. Combined A & B and ABC are not map keys.
+The map must contain every one of the ten managed venue keys listed in
+this guide. The three retired office venues remain required only for
+historical managed-event reconciliation and deletion. Combined A & B and
+ABC are not map keys.
 
 ### `GOOGLE_CALENDAR_VENUE_MAP_INVALID`
 
@@ -703,7 +728,8 @@ production Convex functions.
 - Keep the service-account JSON only in the Convex server environment.
 - Use separate keys for development and production where practical.
 - Revoke unused keys in Google Cloud.
-- Grant Calendar access only to the ten venue calendars.
+- Grant Calendar access only to the ten managed venue calendars: seven
+  bookable and three retained for historical managed events.
 - Do not grant Project Owner/Editor or Calendar sharing-management access.
 - Review `google_calendar` entries in `/logs` after failures.
 - When rotating a key, set the new base64 JSON in Convex, verify the
