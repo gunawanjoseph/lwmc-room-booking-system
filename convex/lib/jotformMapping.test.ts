@@ -300,6 +300,35 @@ describe("Jotform mapping", () => {
     },
   );
 
+  it("does not evaluate the default count for a non-repeating answer", () => {
+    // A misconfigured BOOKING_RECURRENCE_DEFAULT_COUNT must not block a
+    // "Does not repeat" submission: the default-count thunk should never
+    // be invoked when the frequency resolves to "none".
+    const mapped = mapJotformBooking(
+      {
+        ...answers,
+        "9": { answer: "Does not repeat" },
+      },
+      {
+        ...splitFieldMap,
+        recurrence: "9",
+      },
+      "Asia/Singapore",
+      {
+        defaultRecurrenceCount: () => {
+          throw new Error("BOOKING_RECURRENCE_DEFAULT_COUNT_INVALID");
+        },
+      },
+    );
+
+    expect(mapped).toMatchObject({
+      recurrenceFrequency: "none",
+      recurrenceHasEndDate: false,
+      recurrenceCount: 1,
+      recurrenceUntilAt: undefined,
+    });
+  });
+
   it("uses the configured default count when a recurring answer has no bound", () => {
     const mapped = mapJotformBooking(
       {
@@ -311,7 +340,7 @@ describe("Jotform mapping", () => {
         recurrence: "9",
       },
       "Asia/Singapore",
-      { defaultRecurrenceCount: 24 },
+      { defaultRecurrenceCount: () => 24 },
     );
 
     expect(mapped).toMatchObject({
@@ -378,7 +407,7 @@ describe("Jotform mapping", () => {
             recurrence: "9",
           },
           "Asia/Singapore",
-          { defaultRecurrenceCount },
+          { defaultRecurrenceCount: () => defaultRecurrenceCount },
         ),
       ).toThrow("BOOKING_RECURRENCE_DEFAULT_COUNT_INVALID");
     },
@@ -491,7 +520,7 @@ describe("Jotform mapping", () => {
         recurrenceUntil: "11",
       },
       "Asia/Singapore",
-      { defaultRecurrenceCount: 20 },
+      { defaultRecurrenceCount: () => 20 },
     );
 
     expect(mapped).toMatchObject({
@@ -520,7 +549,7 @@ describe("Jotform mapping", () => {
       },
       fieldMap,
       "Asia/Singapore",
-      { defaultRecurrenceCount: 20 },
+      { defaultRecurrenceCount: () => 20 },
     );
     const no = mapJotformBooking(
       {
@@ -532,7 +561,7 @@ describe("Jotform mapping", () => {
       },
       fieldMap,
       "Asia/Singapore",
-      { defaultRecurrenceCount: 20 },
+      { defaultRecurrenceCount: () => 20 },
     );
 
     expect(yes.recurrenceCount).toBeUndefined();

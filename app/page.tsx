@@ -7,6 +7,7 @@ import {
   TableProperties,
 } from "lucide-react";
 import { Brand } from "@/components/brand";
+import { JOTFORM_FORM_ID, JOTFORM_FORM_URL } from "@/shared/jotformConstants";
 
 const features = [
   {
@@ -34,7 +35,7 @@ export default function LandingPage() {
         <div className="landing-actions">
           <a
             className="text-link hide-mobile"
-            href="https://submit.jotform.com/261740998492068"
+            href={JOTFORM_FORM_URL}
             target="_blank"
             rel="noreferrer"
           >
@@ -66,7 +67,7 @@ export default function LandingPage() {
               Open admin workspace <ArrowRight size={17} />
             </Link>
             <a
-              href="https://submit.jotform.com/261740998492068"
+              href={JOTFORM_FORM_URL}
               target="_blank"
               rel="noreferrer"
               className="button button-secondary"

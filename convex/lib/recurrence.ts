@@ -1,4 +1,5 @@
 import { DateTime } from "luxon";
+import { JOTFORM_RECURRENCE_ALIASES } from "../../shared/jotformConstants";
 
 export const RECURRENCE_FREQUENCIES = [
   "none",
@@ -126,44 +127,8 @@ export function parseRecurrenceFrequency(
     .trim()
     .replace(/\s+/g, "_");
 
-  const aliases: Record<string, RecurrenceFrequency> = {
-    "": "none",
-    none: "none",
-    no: "none",
-    no_repeat: "none",
-    does_not_repeat: "none",
-    one_time: "none",
-    once: "none",
-    daily: "daily",
-    every_day: "daily",
-    weekly: "weekly_same_day",
-    every_week: "weekly_same_day",
-    weekly_same_day: "weekly_same_day",
-    weekly_on_same_day: "weekly_same_day",
-    weekly_on_the_same_day: "weekly_same_day",
-    biweekly: "biweekly_same_day",
-    fortnightly: "biweekly_same_day",
-    fortnightly_every_2_weeks: "biweekly_same_day",
-    every_2_weeks: "biweekly_same_day",
-    every_two_weeks: "biweekly_same_day",
-    every_other_week: "biweekly_same_day",
-    biweekly_same_day: "biweekly_same_day",
-    biweekly_on_same_day: "biweekly_same_day",
-    biweekly_on_the_same_day: "biweekly_same_day",
-    every_month_on_same_day: "monthly_same_day",
-    every_month_on_the_same_day: "monthly_same_day",
-    monthly_same_day: "monthly_same_day",
-    monthly_same_weekday: "monthly_same_day",
-    monthly_on_same_day: "monthly_same_day",
-    monthly_on_the_same_day: "monthly_same_day",
-    monthly_on_same_weekday: "monthly_same_day",
-    monthly_on_the_same_weekday: "monthly_same_day",
-    every_month_on_same_date: "monthly_same_date",
-    every_month_on_the_same_date: "monthly_same_date",
-    monthly_same_date: "monthly_same_date",
-    monthly_on_same_date: "monthly_same_date",
-    monthly_on_the_same_date: "monthly_same_date",
-  };
+  const aliases: Record<string, RecurrenceFrequency> =
+    JOTFORM_RECURRENCE_ALIASES;
   const frequency = aliases[normalized];
   if (!frequency) {
     recurrenceError("RECURRENCE_FREQUENCY_INVALID");

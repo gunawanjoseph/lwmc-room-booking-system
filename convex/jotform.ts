@@ -1,5 +1,9 @@
 import { ConvexError, v } from "convex/values";
 import {
+  JOTFORM_API_BASE_URLS,
+  JOTFORM_DEFAULT_API_BASE_URL,
+} from "../shared/jotformConstants";
+import {
   action,
   internalAction,
   internalMutation,
@@ -59,11 +63,7 @@ type FormInspection = {
   }>;
 };
 
-const ALLOWED_API_BASES = new Set([
-  "https://api.jotform.com",
-  "https://eu-api.jotform.com",
-  "https://hipaa-api.jotform.com",
-]);
+const ALLOWED_API_BASES = new Set<string>(JOTFORM_API_BASE_URLS);
 const MAX_PROCESSING_ATTEMPTS = 3;
 const PROCESSING_LEASE_MS = 5 * 60_000;
 
@@ -75,7 +75,7 @@ function requiredEnv(name: string): string {
 
 function apiBase(): string {
   const base = (
-    process.env.JOTFORM_API_BASE_URL ?? "https://api.jotform.com"
+    process.env.JOTFORM_API_BASE_URL ?? JOTFORM_DEFAULT_API_BASE_URL
   ).replace(/\/+$/, "");
   if (!ALLOWED_API_BASES.has(base)) {
     throw new Error("JOTFORM_API_BASE_URL_NOT_ALLOWED");
@@ -401,7 +401,10 @@ export const processSubmission = internalAction({
         content.answers,
         fieldMap,
         timezone,
-        { defaultRecurrenceCount: defaultRecurrenceCount() },
+        // Passed lazily so a misconfigured BOOKING_RECURRENCE_DEFAULT_COUNT
+        // only fails recurring submissions that actually need the default,
+        // not every submission (including "Does not repeat" ones).
+        { defaultRecurrenceCount },
       );
       const snapshot = snapshotJotformAnswers(
         content.answers,

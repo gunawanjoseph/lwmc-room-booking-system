@@ -1,0 +1,578 @@
+diff --git a/app/(dashboard)/admin/integrations/page.tsx b/app/(dashboard)/admin/integrations/page.tsx
+index 392b340..2c860db 100644
+--- a/app/(dashboard)/admin/integrations/page.tsx
++++ b/app/(dashboard)/admin/integrations/page.tsx
+@@ -18,6 +18,7 @@ import {
+ import { api } from "@/convex/_generated/api";
+ import { messageFromError } from "@/lib/ui";
+ 
++import { JOTFORM_FORM_ID, JOTFORM_FORM_URL } from "@/shared/jotformConstants";
+ type Question = {
+   qid: string;
+   type: string;
+@@ -396,11 +397,11 @@ export default function IntegrationsPage() {
+               <dt>Form</dt>
+               <dd>
+                 <a
+-                  href="https://submit.jotform.com/261740998492068"
++                  href={JOTFORM_FORM_URL}
+                   target="_blank"
+                   rel="noreferrer"
+                 >
+-                  261740998492068 <ExternalLink size={13} />
++                  {JOTFORM_FORM_ID} <ExternalLink size={13} />
+                 </a>
+               </dd>
+             </div>
+diff --git a/app/(dashboard)/home/page.tsx b/app/(dashboard)/home/page.tsx
+index 40336fe..72396a1 100644
+--- a/app/(dashboard)/home/page.tsx
++++ b/app/(dashboard)/home/page.tsx
+@@ -15,6 +15,7 @@ import { api } from "@/convex/_generated/api";
+ import { formatDateTime } from "@/lib/ui";
+ import { StatusBadge } from "@/components/status-badge";
+ 
++import { JOTFORM_FORM_ID, JOTFORM_FORM_URL } from "@/shared/jotformConstants";
+ type Booking = {
+   _id: string;
+   room: string;
+@@ -68,7 +69,7 @@ export default function HomePage() {
+         </div>
+         <a
+           className="button button-secondary"
+-          href="https://submit.jotform.com/261740998492068"
++          href={JOTFORM_FORM_URL}
+           target="_blank"
+           rel="noreferrer"
+         >
+diff --git a/app/page.tsx b/app/page.tsx
+index 1b770e6..843d190 100644
+--- a/app/page.tsx
++++ b/app/page.tsx
+@@ -7,6 +7,7 @@ import {
+   TableProperties,
+ } from "lucide-react";
+ import { Brand } from "@/components/brand";
++import { JOTFORM_FORM_ID, JOTFORM_FORM_URL } from "@/shared/jotformConstants";
+ 
+ const features = [
+   {
+@@ -34,7 +35,7 @@ export default function LandingPage() {
+         <div className="landing-actions">
+           <a
+             className="text-link hide-mobile"
+-            href="https://submit.jotform.com/261740998492068"
++            href={JOTFORM_FORM_URL}
+             target="_blank"
+             rel="noreferrer"
+           >
+@@ -66,7 +67,7 @@ export default function LandingPage() {
+               Open admin workspace <ArrowRight size={17} />
+             </Link>
+             <a
+-              href="https://submit.jotform.com/261740998492068"
++              href={JOTFORM_FORM_URL}
+               target="_blank"
+               rel="noreferrer"
+               className="button button-secondary"
+diff --git a/convex/bookings.ts b/convex/bookings.ts
+index 4ab07f0..66ef81e 100644
+--- a/convex/bookings.ts
++++ b/convex/bookings.ts
+@@ -1,4 +1,5 @@
+ import { DateTime } from "luxon";
++import { JOTFORM_LEGACY_COMBINED_VENUE_ALIASES } from "../shared/jotformConstants";
+ import { paginationOptsValidator } from "convex/server";
+ import { ConvexError, v } from "convex/values";
+ import {
+@@ -516,34 +517,7 @@ function claimRoomKeysForVenue(targetVenue: string): string[] {
+   // bookings fan out to physical A/B/C claims, but these aliases keep existing
+   // pending or approved combined bookings protective during the in-place
+   // upgrade.
+-  const legacyCombinations: Record<string, string[]> = {
+-    "Ministry Centre A": [
+-      "Ministry Centre A&B",
+-      "Ministry Centre A & B",
+-      "Ministry Center A&B",
+-      "Ministry Center A & B",
+-      "Ministry Centre ABC",
+-      "Ministry Center ABC",
+-      "Ministry Centre A, B & C",
+-      "Ministry Center A, B & C",
+-    ],
+-    "Ministry Centre B": [
+-      "Ministry Centre A&B",
+-      "Ministry Centre A & B",
+-      "Ministry Center A&B",
+-      "Ministry Center A & B",
+-      "Ministry Centre ABC",
+-      "Ministry Center ABC",
+-      "Ministry Centre A, B & C",
+-      "Ministry Center A, B & C",
+-    ],
+-    "Ministry Centre C": [
+-      "Ministry Centre ABC",
+-      "Ministry Center ABC",
+-      "Ministry Centre A, B & C",
+-      "Ministry Center A, B & C",
+-    ],
+-  };
++  const legacyCombinations = JOTFORM_LEGACY_COMBINED_VENUE_ALIASES;
+   for (const legacyRoom of legacyCombinations[targetVenue] ?? []) {
+     roomKeys.add(normalizeRoomKey(legacyRoom));
+   }
+diff --git a/convex/jotform.ts b/convex/jotform.ts
+index 1d081bd..13e6cb5 100644
+--- a/convex/jotform.ts
++++ b/convex/jotform.ts
+@@ -1,4 +1,8 @@
+ import { ConvexError, v } from "convex/values";
++import {
++  JOTFORM_API_BASE_URLS,
++  JOTFORM_DEFAULT_API_BASE_URL,
++} from "../shared/jotformConstants";
+ import {
+   action,
+   internalAction,
+@@ -59,11 +63,7 @@ type FormInspection = {
+   }>;
+ };
+ 
+-const ALLOWED_API_BASES = new Set([
+-  "https://api.jotform.com",
+-  "https://eu-api.jotform.com",
+-  "https://hipaa-api.jotform.com",
+-]);
++const ALLOWED_API_BASES = new Set(JOTFORM_API_BASE_URLS);
+ const MAX_PROCESSING_ATTEMPTS = 3;
+ const PROCESSING_LEASE_MS = 5 * 60_000;
+ 
+@@ -75,7 +75,7 @@ function requiredEnv(name: string): string {
+ 
+ function apiBase(): string {
+   const base = (
+-    process.env.JOTFORM_API_BASE_URL ?? "https://api.jotform.com"
++    process.env.JOTFORM_API_BASE_URL ?? JOTFORM_DEFAULT_API_BASE_URL
+   ).replace(/\/+$/, "");
+   if (!ALLOWED_API_BASES.has(base)) {
+     throw new Error("JOTFORM_API_BASE_URL_NOT_ALLOWED");
+diff --git a/convex/lib/googleCalendar.ts b/convex/lib/googleCalendar.ts
+index c290e30..e2a940d 100644
+--- a/convex/lib/googleCalendar.ts
++++ b/convex/lib/googleCalendar.ts
+@@ -7,31 +7,18 @@
+  * supplied through environment variables by the calling action.
+  */
+ 
+-export const GOOGLE_CALENDAR_VENUES = [
+-  "Board Room",
+-  "Counselling / Music Room",
+-  "L1 Ministry Space",
+-  "Ministry Centre A",
+-  "Ministry Centre B",
+-  "Ministry Centre C",
+-  "Office L2 Main Area",
+-  "Pastor Office",
+-  "PIC Office",
+-  "Shema Space",
+-] as const;
++import {
++  JOTFORM_BOOKABLE_VENUES,
++  JOTFORM_VENUE_ALIASES,
++  JOTFORM_VENUES,
++} from "../../shared/jotformConstants";
++
++export const GOOGLE_CALENDAR_VENUES = JOTFORM_VENUES;
+ 
+ // These are the only venues exposed for new bookings and on the Calendar
+ // page. The three office venues remain in GOOGLE_CALENDAR_VENUES so existing
+ // bookings can still be reconciled or safely removed from Google Calendar.
+-export const BOOKABLE_GOOGLE_CALENDAR_VENUES = [
+-  "Board Room",
+-  "Counselling / Music Room",
+-  "L1 Ministry Space",
+-  "Ministry Centre A",
+-  "Ministry Centre B",
+-  "Ministry Centre C",
+-  "Shema Space",
+-] as const;
++export const BOOKABLE_GOOGLE_CALENDAR_VENUES = JOTFORM_BOOKABLE_VENUES;
+ 
+ export type GoogleCalendarVenue =
+   (typeof GOOGLE_CALENDAR_VENUES)[number];
+@@ -148,55 +135,15 @@ const individualVenueSelections = Object.fromEntries(
+ 
+ const venueAliases: Record<string, VenueSelection> = {
+   ...individualVenueSelections,
+-  [venueKey("Church Office L1 Ministry Space")]:
+-    individualVenueSelections[venueKey("L1 Ministry Space")],
+-  [venueKey("Ministry Space L1")]:
+-    individualVenueSelections[venueKey("L1 Ministry Space")],
+-  [venueKey("Church Office L2 Main Area")]:
+-    individualVenueSelections[venueKey("Office L2 Main Area")],
+-  [venueKey("L2 Main Area")]:
+-    individualVenueSelections[venueKey("Office L2 Main Area")],
+-  [venueKey("Ministry Centre A & B")]: {
+-    displayName: "Ministry Centre A & B",
+-    venues: ["Ministry Centre A", "Ministry Centre B"],
+-  },
+-  [venueKey("Ministry Centre AB")]: {
+-    displayName: "Ministry Centre A & B",
+-    venues: ["Ministry Centre A", "Ministry Centre B"],
+-  },
+-  // The current Jotform workflow also exposes an "ABC" combination.
+-  [venueKey("Ministry Centre ABC")]: {
+-    displayName: "Ministry Centre A, B & C",
+-    venues: [
+-      "Ministry Centre A",
+-      "Ministry Centre B",
+-      "Ministry Centre C",
+-    ],
+-  },
+-  [venueKey("Ministry Centre A, B & C")]: {
+-    displayName: "Ministry Centre A, B & C",
+-    venues: [
+-      "Ministry Centre A",
+-      "Ministry Centre B",
+-      "Ministry Centre C",
+-    ],
+-  },
+-  [venueKey("Ministry Centre A, B, & C")]: {
+-    displayName: "Ministry Centre A, B & C",
+-    venues: [
+-      "Ministry Centre A",
+-      "Ministry Centre B",
+-      "Ministry Centre C",
+-    ],
+-  },
+-  [venueKey("Ministry Centre A&B&C")]: {
+-    displayName: "Ministry Centre A, B & C",
+-    venues: [
+-      "Ministry Centre A",
+-      "Ministry Centre B",
+-      "Ministry Centre C",
+-    ],
+-  },
++  ...Object.fromEntries(
++    Object.entries(JOTFORM_VENUE_ALIASES).map(([alias, venues]) => [
++      venueKey(alias),
++      {
++        displayName: venues.length === 1 ? venues[0] : alias,
++        venues: venues as readonly GoogleCalendarVenue[],
++      },
++    ]),
++  ),
+ };
+ 
+ function venueKey(value: string): string {
+diff --git a/convex/lib/jotformMapping.ts b/convex/lib/jotformMapping.ts
+index 3e8cc06..7174ea2 100644
+--- a/convex/lib/jotformMapping.ts
++++ b/convex/lib/jotformMapping.ts
+@@ -1,4 +1,9 @@
+ import { DateTime } from "luxon";
++import {
++  JOTFORM_CANONICAL_FIELDS,
++  JOTFORM_NAME_PART_ORDER,
++  JOTFORM_STRUCTURAL_TYPES,
++} from "../../shared/jotformConstants";
+ import {
+   MAX_RECURRENCE_OCCURRENCES,
+   parseRecurrenceFrequency,
+@@ -51,25 +56,6 @@ export type MappedBooking = {
+   timezone: string;
+ };
+ 
+-export const JOTFORM_CANONICAL_FIELDS = [
+-  "requesterName",
+-  "requesterEmail",
+-  "room",
+-  "eventName",
+-  "purpose",
+-  "ministry",
+-  "recurrence",
+-  "recurrenceHasEndDate",
+-  "recurrenceCount",
+-  "recurrenceUntil",
+-  "start",
+-  "end",
+-  "date",
+-  "startTime",
+-  "endDate",
+-  "endTime",
+-] as const;
+-
+ export type JotformCanonicalField =
+   (typeof JOTFORM_CANONICAL_FIELDS)[number];
+ 
+@@ -143,23 +129,8 @@ function findOptionalAnswer(
+ const MAX_SERIALIZED_ANSWER_DEPTH = 6;
+ const MAX_SERIALIZED_ANSWER_VALUES = 200;
+ const MAX_SERIALIZED_ANSWER_CHARS = 20_000;
+-const NAME_PART_ORDER = [
+-  "prefix",
+-  "first",
+-  "middle",
+-  "last",
+-  "suffix",
+-] as const;
+-const NAME_PART_KEYS = new Set<string>(NAME_PART_ORDER);
+-const STRUCTURAL_JOTFORM_TYPES = new Set([
+-  "control_button",
+-  "control_collapse",
+-  "control_divider",
+-  "control_head",
+-  "control_image",
+-  "control_pagebreak",
+-  "control_text",
+-]);
++const NAME_PART_KEYS = new Set<string>(JOTFORM_NAME_PART_ORDER);
++const STRUCTURAL_JOTFORM_TYPES = new Set<string>(JOTFORM_STRUCTURAL_TYPES);
+ 
+ type SerializedAnswer = {
+   text: string;
+diff --git a/convex/lib/recurrence.ts b/convex/lib/recurrence.ts
+index 1b8f4c0..487e1f6 100644
+--- a/convex/lib/recurrence.ts
++++ b/convex/lib/recurrence.ts
+@@ -1,4 +1,5 @@
+ import { DateTime } from "luxon";
++import { JOTFORM_RECURRENCE_ALIASES } from "../../shared/jotformConstants";
+ 
+ export const RECURRENCE_FREQUENCIES = [
+   "none",
+@@ -126,44 +127,7 @@ export function parseRecurrenceFrequency(
+     .trim()
+     .replace(/\s+/g, "_");
+ 
+-  const aliases: Record<string, RecurrenceFrequency> = {
+-    "": "none",
+-    none: "none",
+-    no: "none",
+-    no_repeat: "none",
+-    does_not_repeat: "none",
+-    one_time: "none",
+-    once: "none",
+-    daily: "daily",
+-    every_day: "daily",
+-    weekly: "weekly_same_day",
+-    every_week: "weekly_same_day",
+-    weekly_same_day: "weekly_same_day",
+-    weekly_on_same_day: "weekly_same_day",
+-    weekly_on_the_same_day: "weekly_same_day",
+-    biweekly: "biweekly_same_day",
+-    fortnightly: "biweekly_same_day",
+-    fortnightly_every_2_weeks: "biweekly_same_day",
+-    every_2_weeks: "biweekly_same_day",
+-    every_two_weeks: "biweekly_same_day",
+-    every_other_week: "biweekly_same_day",
+-    biweekly_same_day: "biweekly_same_day",
+-    biweekly_on_same_day: "biweekly_same_day",
+-    biweekly_on_the_same_day: "biweekly_same_day",
+-    every_month_on_same_day: "monthly_same_day",
+-    every_month_on_the_same_day: "monthly_same_day",
+-    monthly_same_day: "monthly_same_day",
+-    monthly_same_weekday: "monthly_same_day",
+-    monthly_on_same_day: "monthly_same_day",
+-    monthly_on_the_same_day: "monthly_same_day",
+-    monthly_on_same_weekday: "monthly_same_day",
+-    monthly_on_the_same_weekday: "monthly_same_day",
+-    every_month_on_same_date: "monthly_same_date",
+-    every_month_on_the_same_date: "monthly_same_date",
+-    monthly_same_date: "monthly_same_date",
+-    monthly_on_same_date: "monthly_same_date",
+-    monthly_on_the_same_date: "monthly_same_date",
+-  };
++  const aliases = JOTFORM_RECURRENCE_ALIASES;
+   const frequency = aliases[normalized];
+   if (!frequency) {
+     recurrenceError("RECURRENCE_FREQUENCY_INVALID");
+diff --git a/shared/jotformConstants.ts b/shared/jotformConstants.ts
+new file mode 100644
+index 0000000..be44976
+--- /dev/null
++++ b/shared/jotformConstants.ts
+@@ -0,0 +1,183 @@
++/**
++ * Single source of truth for values owned by the Jotform intake contract.
++ *
++ * Keep labels/aliases that may be changed in Jotform here. Internal domain
++ * code should consume these constants rather than repeating the external
++ * strings throughout the application.
++ */
++
++export const JOTFORM_FORM_ID = "261740998492068";
++export const JOTFORM_FORM_URL = `https://submit.jotform.com/${JOTFORM_FORM_ID}`;
++
++export const JOTFORM_API_BASE_URLS = [
++  "https://api.jotform.com",
++  "https://eu-api.jotform.com",
++  "https://hipaa-api.jotform.com",
++] as const;
++
++export const JOTFORM_DEFAULT_API_BASE_URL = JOTFORM_API_BASE_URLS[0];
++
++export const JOTFORM_CANONICAL_FIELDS = [
++  "requesterName",
++  "requesterEmail",
++  "room",
++  "eventName",
++  "purpose",
++  "ministry",
++  "recurrence",
++  "recurrenceHasEndDate",
++  "recurrenceCount",
++  "recurrenceUntil",
++  "start",
++  "end",
++  "date",
++  "startTime",
++  "endDate",
++  "endTime",
++] as const;
++
++export const JOTFORM_NAME_PART_ORDER = [
++  "prefix",
++  "first",
++  "middle",
++  "last",
++  "suffix",
++] as const;
++
++export const JOTFORM_STRUCTURAL_TYPES = [
++  "control_button",
++  "control_collapse",
++  "control_divider",
++  "control_head",
++  "control_image",
++  "control_pagebreak",
++  "control_text",
++] as const;
++
++/** Labels accepted from the current/legacy Jotform recurrence question. */
++export const JOTFORM_RECURRENCE_ALIASES = {
++  "": "none",
++  none: "none",
++  no: "none",
++  no_repeat: "none",
++  does_not_repeat: "none",
++  one_time: "none",
++  once: "none",
++  daily: "daily",
++  every_day: "daily",
++  weekly: "weekly_same_day",
++  every_week: "weekly_same_day",
++  weekly_same_day: "weekly_same_day",
++  weekly_on_same_day: "weekly_same_day",
++  weekly_on_the_same_day: "weekly_same_day",
++  biweekly: "biweekly_same_day",
++  fortnightly: "biweekly_same_day",
++  fortnightly_every_2_weeks: "biweekly_same_day",
++  every_2_weeks: "biweekly_same_day",
++  every_two_weeks: "biweekly_same_day",
++  every_other_week: "biweekly_same_day",
++  biweekly_same_day: "biweekly_same_day",
++  biweekly_on_same_day: "biweekly_same_day",
++  biweekly_on_the_same_day: "biweekly_same_day",
++  every_month_on_same_day: "monthly_same_day",
++  every_month_on_the_same_day: "monthly_same_day",
++  monthly_same_day: "monthly_same_day",
++  monthly_same_weekday: "monthly_same_day",
++  monthly_on_same_day: "monthly_same_day",
++  monthly_on_the_same_day: "monthly_same_day",
++  monthly_on_same_weekday: "monthly_same_day",
++  monthly_on_the_same_weekday: "monthly_same_day",
++  every_month_on_same_date: "monthly_same_date",
++  every_month_on_the_same_date: "monthly_same_date",
++  monthly_same_date: "monthly_same_date",
++  monthly_on_same_date: "monthly_same_date",
++  monthly_on_the_same_date: "monthly_same_date",
++} as const;
++
++/** Venue labels currently exposed by the Jotform room question. */
++export const JOTFORM_VENUES = [
++  "Board Room",
++  "Counselling / Music Room",
++  "L1 Ministry Space",
++  "Ministry Centre A",
++  "Ministry Centre B",
++  "Ministry Centre C",
++  "Office L2 Main Area",
++  "Pastor Office",
++  "PIC Office",
++  "Shema Space",
++] as const;
++
++export const JOTFORM_BOOKABLE_VENUES = [
++  "Board Room",
++  "Counselling / Music Room",
++  "L1 Ministry Space",
++  "Ministry Centre A",
++  "Ministry Centre B",
++  "Ministry Centre C",
++  "Shema Space",
++] as const;
++
++/**
++ * Historical/current spellings emitted by Jotform and mapped to canonical
++ * physical venues. Values are kept as plain strings so this module remains
++ * usable by both Next.js and Convex code.
++ */
++export const JOTFORM_VENUE_ALIASES = {
++  "Church Office L1 Ministry Space": ["L1 Ministry Space"],
++  "Ministry Space L1": ["L1 Ministry Space"],
++  "Church Office L2 Main Area": ["Office L2 Main Area"],
++  "L2 Main Area": ["Office L2 Main Area"],
++  "Ministry Centre A & B": ["Ministry Centre A", "Ministry Centre B"],
++  "Ministry Centre AB": ["Ministry Centre A", "Ministry Centre B"],
++  "Ministry Centre ABC": [
++    "Ministry Centre A",
++    "Ministry Centre B",
++    "Ministry Centre C",
++  ],
++  "Ministry Centre A, B & C": [
++    "Ministry Centre A",
++    "Ministry Centre B",
++    "Ministry Centre C",
++  ],
++  "Ministry Centre A, B, & C": [
++    "Ministry Centre A",
++    "Ministry Centre B",
++    "Ministry Centre C",
++  ],
++  "Ministry Centre A&B&C": [
++    "Ministry Centre A",
++    "Ministry Centre B",
++    "Ministry Centre C",
++  ],
++} as const;
++
++/** Legacy combined-room labels retained for v0.3 claim compatibility. */
++export const JOTFORM_LEGACY_COMBINED_VENUE_ALIASES = {
++  "Ministry Centre A": [
++    "Ministry Centre A&B",
++    "Ministry Centre A & B",
++    "Ministry Center A&B",
++    "Ministry Center A & B",
++    "Ministry Centre ABC",
++    "Ministry Center ABC",
++    "Ministry Centre A, B & C",
++    "Ministry Center A, B & C",
++  ],
++  "Ministry Centre B": [
++    "Ministry Centre A&B",
++    "Ministry Centre A & B",
++    "Ministry Center A&B",
++    "Ministry Center A & B",
++    "Ministry Centre ABC",
++    "Ministry Center ABC",
++    "Ministry Centre A, B & C",
++    "Ministry Center A, B & C",
++  ],
++  "Ministry Centre C": [
++    "Ministry Centre ABC",
++    "Ministry Center ABC",
++    "Ministry Centre A, B & C",
++    "Ministry Center A, B & C",
++  ],
++} as const;

@@ -1,4 +1,5 @@
 import { DateTime } from "luxon";
+import { JOTFORM_LEGACY_COMBINED_VENUE_ALIASES } from "../shared/jotformConstants";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import {
@@ -516,34 +517,8 @@ function claimRoomKeysForVenue(targetVenue: string): string[] {
   // bookings fan out to physical A/B/C claims, but these aliases keep existing
   // pending or approved combined bookings protective during the in-place
   // upgrade.
-  const legacyCombinations: Record<string, string[]> = {
-    "Ministry Centre A": [
-      "Ministry Centre A&B",
-      "Ministry Centre A & B",
-      "Ministry Center A&B",
-      "Ministry Center A & B",
-      "Ministry Centre ABC",
-      "Ministry Center ABC",
-      "Ministry Centre A, B & C",
-      "Ministry Center A, B & C",
-    ],
-    "Ministry Centre B": [
-      "Ministry Centre A&B",
-      "Ministry Centre A & B",
-      "Ministry Center A&B",
-      "Ministry Center A & B",
-      "Ministry Centre ABC",
-      "Ministry Center ABC",
-      "Ministry Centre A, B & C",
-      "Ministry Center A, B & C",
-    ],
-    "Ministry Centre C": [
-      "Ministry Centre ABC",
-      "Ministry Center ABC",
-      "Ministry Centre A, B & C",
-      "Ministry Center A, B & C",
-    ],
-  };
+  const legacyCombinations: Record<string, readonly string[]> =
+    JOTFORM_LEGACY_COMBINED_VENUE_ALIASES;
   for (const legacyRoom of legacyCombinations[targetVenue] ?? []) {
     roomKeys.add(normalizeRoomKey(legacyRoom));
   }

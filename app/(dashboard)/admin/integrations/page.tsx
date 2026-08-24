@@ -18,6 +18,7 @@ import {
 import { api } from "@/convex/_generated/api";
 import { messageFromError } from "@/lib/ui";
 
+import { JOTFORM_FORM_ID, JOTFORM_FORM_URL } from "@/shared/jotformConstants";
 type Question = {
   qid: string;
   type: string;
@@ -396,11 +397,11 @@ export default function IntegrationsPage() {
               <dt>Form</dt>
               <dd>
                 <a
-                  href="https://submit.jotform.com/261740998492068"
+                  href={JOTFORM_FORM_URL}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  261740998492068 <ExternalLink size={13} />
+                  {JOTFORM_FORM_ID} <ExternalLink size={13} />
                 </a>
               </dd>
             </div>

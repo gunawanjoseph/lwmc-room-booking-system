@@ -7,31 +7,18 @@
  * supplied through environment variables by the calling action.
  */
 
-export const GOOGLE_CALENDAR_VENUES = [
-  "Board Room",
-  "Counselling / Music Room",
-  "L1 Ministry Space",
-  "Ministry Centre A",
-  "Ministry Centre B",
-  "Ministry Centre C",
-  "Office L2 Main Area",
-  "Pastor Office",
-  "PIC Office",
-  "Shema Space",
-] as const;
+import {
+  JOTFORM_BOOKABLE_VENUES,
+  JOTFORM_VENUE_ALIASES,
+  JOTFORM_VENUES,
+} from "../../shared/jotformConstants";
+
+export const GOOGLE_CALENDAR_VENUES = JOTFORM_VENUES;
 
 // These are the only venues exposed for new bookings and on the Calendar
 // page. The three office venues remain in GOOGLE_CALENDAR_VENUES so existing
 // bookings can still be reconciled or safely removed from Google Calendar.
-export const BOOKABLE_GOOGLE_CALENDAR_VENUES = [
-  "Board Room",
-  "Counselling / Music Room",
-  "L1 Ministry Space",
-  "Ministry Centre A",
-  "Ministry Centre B",
-  "Ministry Centre C",
-  "Shema Space",
-] as const;
+export const BOOKABLE_GOOGLE_CALENDAR_VENUES = JOTFORM_BOOKABLE_VENUES;
 
 export type GoogleCalendarVenue =
   (typeof GOOGLE_CALENDAR_VENUES)[number];
@@ -148,55 +135,15 @@ const individualVenueSelections = Object.fromEntries(
 
 const venueAliases: Record<string, VenueSelection> = {
   ...individualVenueSelections,
-  [venueKey("Church Office L1 Ministry Space")]:
-    individualVenueSelections[venueKey("L1 Ministry Space")],
-  [venueKey("Ministry Space L1")]:
-    individualVenueSelections[venueKey("L1 Ministry Space")],
-  [venueKey("Church Office L2 Main Area")]:
-    individualVenueSelections[venueKey("Office L2 Main Area")],
-  [venueKey("L2 Main Area")]:
-    individualVenueSelections[venueKey("Office L2 Main Area")],
-  [venueKey("Ministry Centre A & B")]: {
-    displayName: "Ministry Centre A & B",
-    venues: ["Ministry Centre A", "Ministry Centre B"],
-  },
-  [venueKey("Ministry Centre AB")]: {
-    displayName: "Ministry Centre A & B",
-    venues: ["Ministry Centre A", "Ministry Centre B"],
-  },
-  // The current Jotform workflow also exposes an "ABC" combination.
-  [venueKey("Ministry Centre ABC")]: {
-    displayName: "Ministry Centre A, B & C",
-    venues: [
-      "Ministry Centre A",
-      "Ministry Centre B",
-      "Ministry Centre C",
-    ],
-  },
-  [venueKey("Ministry Centre A, B & C")]: {
-    displayName: "Ministry Centre A, B & C",
-    venues: [
-      "Ministry Centre A",
-      "Ministry Centre B",
-      "Ministry Centre C",
-    ],
-  },
-  [venueKey("Ministry Centre A, B, & C")]: {
-    displayName: "Ministry Centre A, B & C",
-    venues: [
-      "Ministry Centre A",
-      "Ministry Centre B",
-      "Ministry Centre C",
-    ],
-  },
-  [venueKey("Ministry Centre A&B&C")]: {
-    displayName: "Ministry Centre A, B & C",
-    venues: [
-      "Ministry Centre A",
-      "Ministry Centre B",
-      "Ministry Centre C",
-    ],
-  },
+  ...Object.fromEntries(
+    Object.entries(JOTFORM_VENUE_ALIASES).map(([alias, venues]) => [
+      venueKey(alias),
+      {
+        displayName: venues.length === 1 ? venues[0] : alias,
+        venues: venues as readonly GoogleCalendarVenue[],
+      },
+    ]),
+  ),
 };
 
 function venueKey(value: string): string {

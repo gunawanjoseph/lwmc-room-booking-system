@@ -1,5 +1,10 @@
 import { DateTime } from "luxon";
 import {
+  JOTFORM_CANONICAL_FIELDS,
+  JOTFORM_NAME_PART_ORDER,
+  JOTFORM_STRUCTURAL_TYPES,
+} from "../../shared/jotformConstants";
+import {
   MAX_RECURRENCE_OCCURRENCES,
   parseRecurrenceFrequency,
   type RecurrenceFrequency,
@@ -50,25 +55,6 @@ export type MappedBooking = {
   endAt: number;
   timezone: string;
 };
-
-export const JOTFORM_CANONICAL_FIELDS = [
-  "requesterName",
-  "requesterEmail",
-  "room",
-  "eventName",
-  "purpose",
-  "ministry",
-  "recurrence",
-  "recurrenceHasEndDate",
-  "recurrenceCount",
-  "recurrenceUntil",
-  "start",
-  "end",
-  "date",
-  "startTime",
-  "endDate",
-  "endTime",
-] as const;
 
 export type JotformCanonicalField =
   (typeof JOTFORM_CANONICAL_FIELDS)[number];
@@ -143,23 +129,8 @@ function findOptionalAnswer(
 const MAX_SERIALIZED_ANSWER_DEPTH = 6;
 const MAX_SERIALIZED_ANSWER_VALUES = 200;
 const MAX_SERIALIZED_ANSWER_CHARS = 20_000;
-const NAME_PART_ORDER = [
-  "prefix",
-  "first",
-  "middle",
-  "last",
-  "suffix",
-] as const;
-const NAME_PART_KEYS = new Set<string>(NAME_PART_ORDER);
-const STRUCTURAL_JOTFORM_TYPES = new Set([
-  "control_button",
-  "control_collapse",
-  "control_divider",
-  "control_head",
-  "control_image",
-  "control_pagebreak",
-  "control_text",
-]);
+const NAME_PART_KEYS = new Set<string>(JOTFORM_NAME_PART_ORDER);
+const STRUCTURAL_JOTFORM_TYPES = new Set<string>(JOTFORM_STRUCTURAL_TYPES);
 
 type SerializedAnswer = {
   text: string;
@@ -231,7 +202,7 @@ function serializeAnswerValue(
     if (isNameObject) {
       const record = value as Record<string, unknown>;
       return capSerializedText(
-        NAME_PART_ORDER
+        JOTFORM_NAME_PART_ORDER
           .filter((key) =>
             Object.prototype.hasOwnProperty.call(record, key),
           )
@@ -682,7 +653,7 @@ export function mapJotformBooking(
   answers: JotformAnswers,
   fieldMap: JotformFieldMap,
   timezone: string,
-  options: { defaultRecurrenceCount?: number } = {},
+  options: { defaultRecurrenceCount?: () => number } = {},
 ): MappedBooking {
   const requesterName = answerAsText(
     findAnswer(answers, fieldMap.requesterName),
@@ -791,7 +762,7 @@ export function mapJotformBooking(
       recurrenceCount === undefined &&
       recurrenceUntilAt === undefined
     ) {
-      const defaultCount = options.defaultRecurrenceCount ?? 12;
+      const defaultCount = options.defaultRecurrenceCount?.() ?? 12;
       if (
         !Number.isInteger(defaultCount) ||
         defaultCount < 2 ||

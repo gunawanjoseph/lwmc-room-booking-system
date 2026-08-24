@@ -15,6 +15,7 @@ import { api } from "@/convex/_generated/api";
 import { formatDateTime } from "@/lib/ui";
 import { StatusBadge } from "@/components/status-badge";
 
+import { JOTFORM_FORM_ID, JOTFORM_FORM_URL } from "@/shared/jotformConstants";
 type Booking = {
   _id: string;
   room: string;
@@ -68,7 +69,7 @@ export default function HomePage() {
         </div>
         <a
           className="button button-secondary"
-          href="https://submit.jotform.com/261740998492068"
+          href={JOTFORM_FORM_URL}
           target="_blank"
           rel="noreferrer"
         >
