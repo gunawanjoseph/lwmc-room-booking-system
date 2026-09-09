@@ -20,7 +20,10 @@ import {
   type GoogleCalendarVenue,
   type VenueCalendarTarget,
 } from "./lib/googleCalendar";
-import type { ManagedCalendarEventReference } from "./lib/bookingDeletion";
+import {
+  managedCalendarEventsExcluding,
+  type ManagedCalendarEventReference,
+} from "./lib/bookingDeletion";
 import { partitionManagedEventsForFutureReplacement } from "./lib/bookingEdit";
 
 type Booking = Doc<"bookings">;
@@ -130,6 +133,7 @@ function calendarEventPlans(
   booking: Booking,
   runtime: GoogleCalendarRuntime,
   occurrences: readonly CalendarOccurrence[],
+  syncToken: string,
 ): CalendarEventPlan[] {
   return occurrences.flatMap((occurrence) =>
     calendarTargetsForVenue(
@@ -138,7 +142,10 @@ function calendarEventPlans(
     ).map((target) => ({
       occurrence,
       target,
-      generation: `occurrence-${occurrence.sequence}-${occurrence.startAt}`,
+      // Google retains deleted event IDs as cancelled tombstones. Including
+      // the durable attempt token keeps IDs stable within one worker attempt
+      // while ensuring a later retry never reuses a deleted ID.
+      generation: `occurrence-${occurrence.sequence}-${occurrence.startAt}:${syncToken}`,
     })),
   );
 }
@@ -320,7 +327,12 @@ async function runCalendarApprovalAfterBegin(
   const occurrences = occurrencesForBooking(booking);
   let plans: CalendarEventPlan[];
   try {
-    plans = calendarEventPlans(booking, runtime, occurrences);
+    plans = calendarEventPlans(
+      booking,
+      runtime,
+      occurrences,
+      args.syncToken,
+    );
   } catch (error) {
     const message = errorMessage(error);
     await ctx.runMutation(internal.bookings.failCalendarApproval, {
@@ -351,13 +363,18 @@ async function runCalendarApprovalAfterBegin(
   );
 
   // A previous action may have been terminated after Google committed an
-  // event but before Convex received its response. Deterministic IDs let a
-  // new lease remove those known-orphan candidates before checking free/busy.
+  // event but before Convex received its response. Remove candidates from
+  // older attempts, but never delete an ID this attempt is about to create:
+  // Google keeps deleted IDs as cancelled tombstones and cannot recreate them.
   try {
-    await cleanupManagedEvents(runtime, String(booking._id), [
-      ...(booking.calendarAttemptedEvents ?? []),
-      ...attemptedEvents,
-    ]);
+    await cleanupManagedEvents(
+      runtime,
+      String(booking._id),
+      managedCalendarEventsExcluding(
+        booking.calendarAttemptedEvents,
+        attemptedEvents,
+      ),
+    );
     await ctx.runMutation(internal.bookings.recordCalendarAttemptTargets, {
       bookingId: booking._id,
       syncToken: args.syncToken,
@@ -1119,6 +1136,7 @@ export const reconcileApprovedBooking = internalAction({
         booking,
         runtime,
         futureOccurrences,
+        args.syncToken,
       );
       const replacementCandidates = await Promise.all(
         plans.map(async (plan) => ({
@@ -1136,8 +1154,9 @@ export const reconcileApprovedBooking = internalAction({
         })),
       );
       // Persist every deterministic replacement before the first external
-      // PATCH/POST. If this worker dies after Google creates a repair, safe
-      // deletion and later retries retain a durable cleanup candidate.
+      // POST. If this worker dies after Google creates a repair, later attempts
+      // retain the candidate for cleanup. The current attempt's candidates
+      // must not be deleted because Google cannot reuse a deleted event ID.
       const reconciliationCandidates = (await ctx.runMutation(
         internal.bookings.recordCalendarReconciliationTargets,
         {
@@ -1155,7 +1174,10 @@ export const reconcileApprovedBooking = internalAction({
       await cleanupManagedEvents(
         runtime,
         String(booking._id),
-        [...replace, ...reconciliationCandidates],
+        managedCalendarEventsExcluding(
+          [...replace, ...reconciliationCandidates],
+          replacementCandidates,
+        ),
       );
 
       const checked = await checkBookingAvailability(
