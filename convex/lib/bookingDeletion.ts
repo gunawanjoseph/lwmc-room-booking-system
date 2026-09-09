@@ -1,6 +1,7 @@
 export type ManagedCalendarEventReference = {
   calendarId: string;
   eventId: string;
+  htmlLink?: string;
   targetVenue: string;
   occurrenceSequence?: number;
   startAt?: number;
