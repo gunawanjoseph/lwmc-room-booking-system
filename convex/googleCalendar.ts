@@ -239,6 +239,32 @@ async function cleanupManagedEvents(
   }
 }
 
+async function verifyManagedEvents(
+  runtime: GoogleCalendarRuntime,
+  bookingId: string,
+  events: readonly ManagedCalendarEventReference[],
+): Promise<ManagedCalendarEventReference[]> {
+  return await Promise.all(
+    events.map(async (event) => {
+      if (!isGoogleCalendarVenue(event.targetVenue)) {
+        throw new Error(
+          "GOOGLE_CALENDAR_VENUE_UNKNOWN:Stored verification venue is invalid.",
+        );
+      }
+      const verified = await runtime.client.verifyManagedEvent({
+        bookingId,
+        calendarId: event.calendarId,
+        eventId: event.eventId,
+        venue: event.targetVenue,
+      });
+      return {
+        ...event,
+        htmlLink: verified.htmlLink ?? event.htmlLink,
+      };
+    }),
+  );
+}
+
 async function runCalendarApprovalAfterBegin(
   ctx: ActionCtx,
   args: {
@@ -434,12 +460,17 @@ async function runCalendarApprovalAfterBegin(
     endAt: plans[index].occurrence.endAt,
   }));
   try {
+    const verifiedEvents = await verifyManagedEvents(
+      runtime,
+      String(booking._id),
+      completedEvents,
+    );
     await ctx.runMutation(internal.bookings.completeCalendarApproval, {
       bookingId: booking._id,
       actorId: args.actorId,
       syncToken: args.syncToken,
       note: args.note,
-      events: completedEvents,
+      events: verifiedEvents,
       emailDecisionClaim: args.emailDecisionClaim,
     });
   } catch (error) {
@@ -1159,7 +1190,12 @@ export const reconcileApprovedBooking = internalAction({
           endAt: plan.occurrence.endAt,
         });
       }
-      const reconciledEvents = [...keep, ...createdEvents];
+      const verifiedCreatedEvents = await verifyManagedEvents(
+        runtime,
+        String(booking._id),
+        createdEvents,
+      );
+      const reconciledEvents = [...keep, ...verifiedCreatedEvents];
       await ctx.runMutation(
         internal.bookings.recordCalendarReconcileResult,
         {

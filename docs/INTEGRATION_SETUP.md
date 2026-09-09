@@ -434,8 +434,10 @@ operations; use `/bookings` for those actions.
 
 If an approved-booking reconciliation fails, `/bookings` shows
 **Calendar action needs attention**. Head Administrator and Booking
-Manager may select the circular-arrow **Retry Google Calendar
-synchronization** action. Data Editor can make an authorized table edit,
+Manager may select the circular-arrow **Retry/verify Google Calendar
+synchronization** action. The same action is available for an approved
+booking marked `synced` so RoomOps can verify or repair an event that was
+deleted or changed outside RoomOps. Data Editor can make an authorized table edit,
 but does not have the canonical `bookings.edit` capability required to
 retry a failed approved-booking synchronization.
 

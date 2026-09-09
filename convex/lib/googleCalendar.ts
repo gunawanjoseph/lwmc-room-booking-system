@@ -1283,6 +1283,77 @@ export class GoogleCalendarClient {
   }
 
   /**
+   * Reads an event back from Google and verifies that it is still owned by
+   * the expected RoomOps booking. A successful insert/PATCH response is not
+   * enough for reconciliation: an event can subsequently be deleted, or the
+   * configured calendar can be different from the calendar an administrator
+   * is looking at.
+   */
+  async verifyManagedEvent(input: {
+    bookingId: string;
+    calendarId: string;
+    eventId: string;
+    venue: GoogleCalendarVenue;
+  }): Promise<GoogleCalendarEventRef> {
+    const response = await this.request(
+      `/calendars/${encodeURIComponent(
+        input.calendarId,
+      )}/events/${encodeURIComponent(input.eventId)}`,
+      { method: "GET" },
+    );
+    if (response.status === 404 || response.status === 410) {
+      throw new Error(
+        `GOOGLE_CALENDAR_EVENT_MISSING:Google could not find event "${input.eventId}" in calendar "${input.calendarId}".`,
+      );
+    }
+    if (!response.ok) {
+      throw new Error(
+        `GOOGLE_CALENDAR_EVENT_VERIFY_FAILED:${await responseMessage(
+          response,
+        )}`,
+      );
+    }
+    const event = (await response.json()) as {
+      id?: unknown;
+      htmlLink?: unknown;
+      status?: unknown;
+      extendedProperties?: {
+        private?: Record<string, unknown>;
+      };
+    };
+    const properties = event.extendedProperties?.private;
+    if (
+      properties?.roomopsManaged !== "true" ||
+      properties?.roomopsBookingId !== input.bookingId ||
+      properties?.roomopsTargetVenue !== input.venue
+    ) {
+      throw new Error(
+        "GOOGLE_CALENDAR_EVENT_OWNERSHIP_INVALID:The Calendar event does not belong to this RoomOps booking.",
+      );
+    }
+    if (event.status === "cancelled") {
+      throw new Error(
+        `GOOGLE_CALENDAR_EVENT_CANCELLED:The managed event "${input.eventId}" is cancelled in Google Calendar.`,
+      );
+    }
+    if (event.id !== input.eventId) {
+      throw new Error(
+        "GOOGLE_CALENDAR_EVENT_VERIFY_FAILED:Google returned a different event ID.",
+      );
+    }
+    return {
+      calendarId: input.calendarId,
+      eventId: input.eventId,
+      htmlLink:
+        typeof event.htmlLink === "string"
+          ? event.htmlLink
+          : undefined,
+      status:
+        typeof event.status === "string" ? event.status : undefined,
+    };
+  }
+
+  /**
    * Returns false when the event was already absent, making cleanup safe to
    * retry after partial failures.
    */

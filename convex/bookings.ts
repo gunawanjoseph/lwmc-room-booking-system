@@ -3112,10 +3112,11 @@ export const completeCalendarApproval = internalMutation({
       actorId: args.actorId,
       entityType: "booking",
       entityId: String(booking._id),
-      message: `${args.events.length} Google Calendar event${args.events.length === 1 ? " was" : "s were"} created for the approved booking.`,
+      message: `${args.events.length} Google Calendar event${args.events.length === 1 ? " was" : "s were"} created and verified for the approved booking.`,
       detailsJson: JSON.stringify({
         targetVenues: args.events.map((event) => event.targetVenue),
         occurrenceCount: booking.occurrences?.length ?? 1,
+        events: args.events,
       }),
       createdAt: now,
     });
@@ -3520,11 +3521,20 @@ export const recordCalendarReconcileResult = internalMutation({
       entityType: "booking",
       entityId: String(booking._id),
       message: success
-        ? "Approved booking changes were synchronized to Google Calendar."
+        ? "Approved booking changes were synchronized to and verified in Google Calendar."
         : "Approved booking changes could not be synchronized to Google Calendar.",
-      detailsJson: success
-        ? undefined
-        : JSON.stringify({ error: errorMessage }),
+      detailsJson: JSON.stringify(
+        success
+          ? {
+              expectedRevision: args.expectedRevision,
+              eventCount: args.events?.length ?? 0,
+              events: args.events ?? [],
+            }
+          : {
+              expectedRevision: args.expectedRevision,
+              error: errorMessage,
+            },
+      ),
       createdAt: now,
     });
     if (calendarConflict) {
@@ -3572,7 +3582,8 @@ export const retryCalendarSync = mutation({
     }
     if (
       booking.calendarSyncStatus !== "failed" &&
-      booking.calendarSyncStatus !== "creating"
+      booking.calendarSyncStatus !== "creating" &&
+      booking.calendarSyncStatus !== "synced"
     ) {
       bookingError(
         "CALENDAR_RETRY_NOT_NEEDED",
@@ -4063,6 +4074,10 @@ export const edit = mutation({
         reservationChanged: proposal.changesReservation,
         previousRevision,
         newRevision,
+        previousRecurrenceFrequency:
+          booking.recurrenceFrequency ?? "none",
+        previousOccurrenceCount:
+          booking.occurrences?.length ?? booking.recurrenceCount ?? 1,
         recurrenceFrequency: proposal.recurrenceFrequency,
         occurrenceCount: proposal.occurrences.length,
         pendingConflictIds: pendingConflictIds.map(String),

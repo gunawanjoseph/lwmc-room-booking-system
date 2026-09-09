@@ -554,17 +554,20 @@ Also confirm the two booking-side safeguards:
    confirm the booking shows **Calendar action needs attention**.
 5. Restore **Make changes to events** permission.
 6. As Head Administrator or Booking Manager, select the circular-arrow
-   **Retry Google Calendar synchronization** action on `/bookings`.
+   **Retry/verify Google Calendar synchronization** action on `/bookings`.
+   This action is also available when RoomOps says `synced`, so an event
+   deleted externally can be detected and repaired.
 7. Confirm the status returns to `synced` without creating a duplicate
    event.
 8. Delete a managed event from a development calendar, trigger or retry
    synchronization, and confirm RoomOps recreates it and saves the new
    managed event reference.
 
-The retry control is deliberately limited to approved bookings that
-already have managed Calendar events and whose synchronization failed.
-If initial approval fails while the booking is still pending, fix the
-cause and select **Approve** again instead.
+The retry/verify control is deliberately limited to approved bookings that
+already have managed Calendar events. It can repair both failed
+synchronizations and bookings whose stored `synced` state no longer matches
+Google Calendar. If initial approval fails while the booking is still
+pending, fix the cause and select **Approve** again instead.
 
 Finally run:
 
@@ -704,14 +707,14 @@ Scheduler delivery can make the visible transition occur slightly after
 
 For a pending request, fix the cause and select **Approve** again. For an
 approved booking with existing managed events, a Head Administrator or
-Booking Manager can use **Retry Google Calendar synchronization** on
+Booking Manager can use **Retry/verify Google Calendar synchronization** on
 `/bookings`. Do not create a replacement Google event manually.
 
 ### An approved Calendar retry button is not visible
 
-The circular-arrow retry action appears only when the booking is
-approved, already has managed Google Calendar event references, its sync
-status is `failed`, and the signed-in role has `bookings.edit`. Use Head
+The circular-arrow retry/verify action appears when the booking is approved,
+already has managed Google Calendar event references, its sync status is
+`failed` or `synced`, and the signed-in role has `bookings.edit`. Use Head
 Administrator or Booking Manager. Booking Approver can retry a failed
 pending approval by selecting **Approve** again, but cannot reconcile an
 approved booking.

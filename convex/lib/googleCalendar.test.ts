@@ -823,4 +823,42 @@ describe("Google Calendar network behavior", () => {
       }),
     ).rejects.toThrow("GOOGLE_CALENDAR_EVENT_ID_COLLISION");
   });
+
+  it("verifies that a managed event still exists before reporting sync success", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        extendedProperties: {
+          private: {
+            roomopsBookingId: "booking_123",
+            roomopsManaged: "true",
+            roomopsTargetVenue: "Shema Space",
+          },
+        },
+        htmlLink: "https://calendar.google.test/event",
+        id: "roomops-event",
+        status: "confirmed",
+      }),
+    );
+    const client = authenticatedClient(fetchMock);
+
+    await expect(
+      client.verifyManagedEvent({
+        bookingId: "booking_123",
+        calendarId: "shema@example.test",
+        eventId: "roomops-event",
+        venue: "Shema Space",
+      }),
+    ).resolves.toEqual({
+      calendarId: "shema@example.test",
+      eventId: "roomops-event",
+      htmlLink: "https://calendar.google.test/event",
+      status: "confirmed",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "/calendars/shema%40example.test/events/roomops-event",
+      ),
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
 });

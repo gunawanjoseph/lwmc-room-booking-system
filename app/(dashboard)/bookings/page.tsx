@@ -1223,11 +1223,16 @@ export default function BookingsPage() {
                         )}
                         {canEdit &&
                           booking.status === "approved" &&
-                          booking.calendarSyncStatus === "failed" && (
+                          (booking.calendarSyncStatus === "failed" ||
+                            booking.calendarSyncStatus === "synced") && (
                             <button
                               className="icon-button"
-                              aria-label={`Retry Google Calendar synchronization for ${booking.room}`}
-                              title="Retry Google Calendar synchronization"
+                              aria-label={`${booking.calendarSyncStatus === "synced" ? "Verify or repair" : "Retry"} Google Calendar synchronization for ${booking.room}`}
+                              title={
+                                booking.calendarSyncStatus === "synced"
+                                  ? "Verify or repair Google Calendar synchronization"
+                                  : "Retry Google Calendar synchronization"
+                              }
                               disabled={
                                 retryingBookingId === booking._id ||
                                 isBookingCalendarProcessing(booking) ||
