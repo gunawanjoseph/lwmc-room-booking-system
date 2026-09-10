@@ -476,6 +476,10 @@ type EmailTemplateInput = {
 
 const LWMC_LOGO_URL =
   "https://www.jotform.com/uploads/lwmcsg/form_files/2023%20LWMC%20large%20transparent%20back%20%281%29.68e7eaaf2f2660.53410791.png";
+const APPROVED_BOOKING_ACCESS_NOTICE =
+  "The door unlocks 15 minutes before your booking begins.";
+const APPROVED_BOOKING_SHUTDOWN_NOTICE =
+  "The door will lock again, and the lights and air-conditioning will be switched off 10 minutes after your booking ends.";
 
 function responseLabel(value: string): string {
   return cleanSingleLine(value, "", 200).toLowerCase();
@@ -636,6 +640,13 @@ function renderActionButton(label: string, href: string): string {
   )}" style="display:inline-block;background:#2f6fdd;color:#fff;text-decoration:none;font-family:Arial,sans-serif;font-size:14px;font-weight:700;padding:12px 18px;border-radius:8px">${escapeHtml(
     label,
   )}</a></td></tr></table>`;
+}
+
+function renderApprovedBookingAccessNotice(): string {
+  return `<div style="margin:20px 0 0 0;padding:16px;background:#fff7f6;border-left:4px solid #d92d20;border-radius:6px;font-family:Arial,sans-serif;font-size:14px;line-height:1.7">
+    <p style="margin:0 0 8px 0;color:#333">${escapeHtml(APPROVED_BOOKING_ACCESS_NOTICE)}</p>
+    <p style="margin:0;color:#b42318;font-weight:700">${escapeHtml(APPROVED_BOOKING_SHUTDOWN_NOTICE)}</p>
+  </div>`;
 }
 
 function renderEmailTemplate(input: EmailTemplateInput): string {
@@ -1624,12 +1635,16 @@ function composeDelivery(context: DeliveryContext): {
     case "requester_approved": {
       const text = `Your room booking request was approved.${noteText}
 
+${APPROVED_BOOKING_ACCESS_NOTICE}
+IMPORTANT: ${APPROVED_BOOKING_SHUTDOWN_NOTICE}
+
 ${details}`;
       return {
         subject: `Room booking approved: ${booking.room}`,
         text,
         html: renderEmailTemplate({
           detailRows,
+          extraHtml: renderApprovedBookingAccessNotice(),
           introLines: [
             `Hi, ${booking.requesterName}`,
             "Your booking request has been approved.",
