@@ -7,6 +7,7 @@ export const roleValidator = v.union(
   v.literal("booking_approver"),
   v.literal("sheet_editor"),
   v.literal("booking_manager"),
+  v.literal("tech_support"),
 );
 
 export const nonHeadRoleValidator = v.union(
@@ -14,6 +15,7 @@ export const nonHeadRoleValidator = v.union(
   v.literal("booking_approver"),
   v.literal("sheet_editor"),
   v.literal("booking_manager"),
+  v.literal("tech_support"),
 );
 
 export const userStatusValidator = v.union(
@@ -103,6 +105,32 @@ export const jotformResponseValidator = v.object({
 });
 
 export default defineSchema({
+  supportThreads: defineTable({
+    kind: v.union(v.literal("report"), v.literal("announcement")),
+    title: v.string(), severity: v.union(v.literal("low"), v.literal("medium"), v.literal("high"), v.literal("critical")),
+    status: v.union(v.literal("open"), v.literal("solved")),
+    announcementType: v.optional(v.union(v.literal("feature"), v.literal("change"), v.literal("bug_known"), v.literal("bug_fixed"))),
+    createdBy: v.string(), authorName: v.string(), createdAt: v.number(), updatedAt: v.number(), revision: v.number(),
+  }).index("by_kind_updated", ["kind", "updatedAt"]),
+  supportMessages: defineTable({
+    threadId: v.id("supportThreads"), authorId: v.string(), authorName: v.string(),
+    authorKind: v.union(v.literal("admin"), v.literal("developer")),
+    body: v.string(), attachmentIds: v.array(v.id("supportAttachments")),
+    requestId: v.string(), system: v.boolean(), createdAt: v.number(),
+  }).index("by_thread_created", ["threadId", "createdAt"]).index("by_author_request", ["authorId", "requestId"]),
+  supportParticipants: defineTable({threadId: v.id("supportThreads"), userSubject: v.string()})
+    .index("by_thread", ["threadId"]).index("by_thread_user", ["threadId", "userSubject"]),
+  supportAttachments: defineTable({
+    storageId: v.id("_storage"), owner: v.string(), name: v.string(), contentType: v.string(), size: v.number(),
+    messageId: v.optional(v.id("supportMessages")), createdAt: v.number(), expiresAt: v.number(),
+  }).index("by_owner_message", ["owner", "messageId", "expiresAt"]),
+  supportDeliveries: defineTable({
+    messageId: v.id("supportMessages"), email: v.string(), recipientKind: v.union(v.literal("technical"), v.literal("admin")),
+    recipientSubject: v.optional(v.string()),
+    status: v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed"), v.literal("cancelled")),
+    attempts: v.number(), token: v.optional(v.string()), leaseExpiresAt: v.optional(v.number()),
+    error: v.optional(v.string()), createdAt: v.number(), updatedAt: v.number(),
+  }).index("by_message", ["messageId"]).index("by_created", ["createdAt"]),
   techSupportEmails: defineTable({
     email: v.string(), active: v.boolean(), updatedAt: v.number(), updatedBy: v.string(),
   }).index("by_email", ["email"]).index("by_active", ["active"]),

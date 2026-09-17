@@ -22,6 +22,7 @@ const requestableRoles = [
   "booking_approver",
   "sheet_editor",
   "booking_manager",
+  "tech_support",
 ] as const;
 
 export default function RegistrationPage() {

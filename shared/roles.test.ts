@@ -20,10 +20,24 @@ describe("role capability matrix", () => {
     expect(roleHasCapability("booking_manager", "bookings.edit")).toBe(true);
   });
 
-  it("lets every active administrator view and export the table", () => {
+  it("lets booking administrators, but not support-only developers, view and export the table", () => {
     for (const role of ROLES) {
-      expect(roleHasCapability(role, "table.view")).toBe(true);
-      expect(roleHasCapability(role, "bookings.export")).toBe(true);
+      expect(roleHasCapability(role, "table.view")).toBe(role !== "tech_support");
+      expect(roleHasCapability(role, "bookings.export")).toBe(role !== "tech_support");
+    }
+  });
+
+  it("keeps developer permissions separate from booking operations", () => {
+    for (const capability of CAPABILITIES) {
+      expect(roleHasCapability("tech_support", capability)).toBe(
+        capability === "support.view" || capability === "support.develop",
+      );
+    }
+    for (const role of ROLES) {
+      expect(roleHasCapability(role, "support.view")).toBe(true);
+      expect(roleHasCapability(role, "support.develop")).toBe(
+        role === "head_admin" || role === "tech_support",
+      );
     }
   });
 

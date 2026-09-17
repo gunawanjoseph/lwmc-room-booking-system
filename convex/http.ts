@@ -1,3 +1,5 @@
+import type { Id } from "./_generated/dataModel";
+import { MAX_SUPPORT_IMAGE_BYTES, imageContentType } from "./lib/supportRules";
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -188,5 +190,52 @@ http.route({
     }
   }),
 });
+
+// Screenshots never expose a public storage URL. Every byte request requires
+// a valid Clerk/Convex bearer token and the support.view capability.
+function supportCors(request: Request): Headers | null {
+  const origin=request.headers.get("origin");
+  let allowedOrigin: string;
+  try { allowedOrigin=new URL(process.env.APP_BASE_URL ?? "").origin; }
+  catch { return null; }
+  if(origin && origin!==allowedOrigin)return null;
+  const headers=new Headers({"cache-control":"no-store","vary":"Origin","x-content-type-options":"nosniff"});
+  if(origin)headers.set("access-control-allow-origin",origin);
+  headers.set("access-control-allow-methods","GET, POST, OPTIONS");
+  headers.set("access-control-allow-headers","Authorization, Content-Type, X-File-Name");
+  return headers;
+}
+http.route({path:"/support/image",method:"OPTIONS",handler:httpAction(async(_ctx,request)=>{
+  const headers=supportCors(request);return new Response(null,{status:headers?204:403,headers:headers??{}});
+})});
+http.route({path:"/support/image",method:"POST",handler:httpAction(async(ctx,request)=>{
+  const headers=supportCors(request);if(!headers)return new Response("Origin not allowed",{status:403});
+  try {await ctx.runQuery(internal.support.uploadViewer,{});}
+  catch{return new Response("Support access required",{status:403,headers});}
+  try {
+    if(Number(request.headers.get("content-length")??0)>MAX_SUPPORT_IMAGE_BYTES)throw new PayloadTooLargeError();
+    const bytes=await readBoundedBody(request,MAX_SUPPORT_IMAGE_BYTES);
+    const contentType=imageContentType(bytes);
+    if(!contentType || request.headers.get("content-type")?.split(";")[0]!==contentType)return new Response("Choose a PNG, JPEG, WebP or GIF picture.",{status:415,headers});
+    const storageId=await ctx.storage.store(new Blob([bytes.buffer as ArrayBuffer],{type:contentType}));
+    try {
+      const attachmentId=await ctx.runMutation(internal.support.registerAttachment,{
+        storageId,name:decodeURIComponent(request.headers.get("x-file-name")??"screenshot"),contentType,size:bytes.length,
+      });
+      headers.set("content-type","application/json");return new Response(JSON.stringify({attachmentId}),{status:201,headers});
+    }catch(error){await ctx.storage.delete(storageId);throw error;}
+  }catch(error){return new Response(error instanceof PayloadTooLargeError?"Each picture must be at most 5 MB.":"Picture upload failed. Remove unused drafts or try again.",{status:error instanceof PayloadTooLargeError?413:400,headers});}
+})});
+http.route({path:"/support/image",method:"GET",handler:httpAction(async(ctx,request)=>{
+  const headers=supportCors(request);if(!headers)return new Response("Origin not allowed",{status:403});
+  try {
+    const attachmentId=new URL(request.url).searchParams.get("id") as Id<"supportAttachments">;
+    const file=await ctx.runQuery(internal.support.attachmentStorage,{attachmentId});
+    const blob=await ctx.storage.get(file.storageId);
+    if(!blob)return new Response("Picture not found",{status:404,headers});
+    headers.set("content-type",file.contentType);headers.set("content-disposition","inline");
+    return new Response(blob,{headers});
+  }catch{return new Response("Picture unavailable or access denied",{status:403,headers});}
+})});
 
 export default http;

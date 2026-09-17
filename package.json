@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit && tsc -p convex/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:regression": "node --test tests/*.regression.mjs",
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy"
   },

@@ -354,3 +354,117 @@ edit and a partial sync failure/retry, then assign a test support recipient and
 produce a warning/error log. Confirm that only the Head Administrator can
 manage recipients, and test disable and failed-delivery retry. Verify the drawer
 on mobile and with keyboard navigation. No deployment was performed here.
+
+## Support conversations and developer updates
+
+Apply `lwmc-support-conversations.patch` **after**
+`lwmc-recurring-controls-support-alerts.patch` (and its Calendar-safety prerequisite):
+
+```bash
+git apply --check "$HOME/Downloads/lwmc-support-conversations.patch"
+git apply "$HOME/Downloads/lwmc-support-conversations.patch"
+```
+
+The new **Support** tab provides:
+
+- Bug reports with a title, message, low/medium/high/critical severity, and up to
+  five PNG, JPEG, WebP or GIF pictures per message (5 MB each).
+- Live conversation threads, follow-up replies, open/solved filtering, and
+  pagination for reports and messages. Replying to a solved conversation reopens
+  it. The reporter, Technical Support, or Head Administrator can change severity
+  and status; changes appear in the conversation. Revision checks prevent stale
+  status updates from overwriting another person's changes.
+- Developer announcements for new features, changes, known bugs and fixed bugs,
+  with replies in the same interface.
+- Per-message email-delivery counts and developer retry controls for failures.
+  Message request IDs suppress duplicate submissions when a response is retried.
+
+### Developer access and email routing
+
+The Head Administrator approves or assigns the new **Technical Support** role in
+**Users**. Developers can also request this role during registration, but cannot
+activate themselves. The role grants only Support access and announcement/triage
+permissions; it does not grant booking edits, Calendar changes, user management,
+logs, or integration access. Developers arriving at `/home` are redirected to
+`/support`. The Head Administrator can also publish announcements.
+
+Support conversations and attached pictures are shared with **all active RoomOps
+administrators and Technical Support users**, rather than being private tickets.
+Former head administrators and inactive accounts retain no support access.
+
+Every message from an administrator, including the Head Administrator, queues
+email to the enabled addresses under **Integrations → Technical Support**. This
+reuses the existing `techSupportEmails` configuration and Gmail OAuth sender.
+Developer replies email the active administrators who have participated in that
+conversation. Publishing an announcement emails all active booking administrators
+except the author. Status/severity changes also create notification messages.
+Role assignment and the recipient email list are separate: assign developers an
+active account for replies, and enable their email addresses to receive reports.
+When no technical recipients are configured, reports still save and a visible
+banner explains why notification emails will not be sent.
+
+Emails include the message and an authenticated conversation link. **Replies are
+made inside the Support tab; replies sent directly to the Gmail notification
+address are not imported.** Pictures are viewed in the application, not attached
+to email. Existing automatic audit-log alerts continue unchanged.
+
+Message creation and its email outbox are saved in one Convex mutation. Sending
+is scheduled immediately, with five attempts, exponential retry delays, worker
+leases and abandoned-worker recovery. Recipients are rechecked before sending;
+in-flight email cannot be recalled. Delivery is at least once: a timeout after
+Gmail accepts a message can cause a duplicate. Failed emails remain visible in
+the conversation and do not recursively create alert emails.
+
+### Attachments and deployment
+
+Pictures use authenticated `/support/image` HTTP upload/download handlers;
+public storage URLs are never returned. The handlers enforce the configured
+application origin, support permissions, body-size limits and supported image
+signatures. Draft pictures are owner-bound, and sent pictures cannot be removed
+through the draft-deletion endpoint. Unsent drafts expire after 24 hours and are
+cleaned up automatically. Sent pictures remain as conversation history. Do not
+include passwords or credentials in reports: text is included in notification
+emails to configured recipients.
+
+Deploy the Convex schema/functions and Next.js frontend together and regenerate
+Convex bindings. The schema adds `supportThreads`, `supportMessages`,
+`supportParticipants`, `supportAttachments` and `supportDeliveries`; existing
+bookings require no migration. Keep the existing Gmail and Clerk/Convex JWT
+settings. Set Convex `APP_BASE_URL` to the frontend URL with its exact origin.
+For standard deployments, the frontend derives the HTTP endpoint by changing
+`NEXT_PUBLIC_CONVEX_URL` from `*.convex.cloud` to `*.convex.site`. For a custom or
+local endpoint, set `NEXT_PUBLIC_CONVEX_SITE_URL` explicitly to its HTTP actions
+origin. Cross-origin previews must use a matching test backend/app-origin setting.
+
+### Regression verification
+
+```bash
+# Dependency-free handler and HTTP tests; Node 22.18+ / Node 24 required:
+npm run test:regression
+
+# Complete release checks when dependencies are available:
+npm ci
+npm test
+npm run typecheck
+npm run lint
+npm run build
+```
+
+The regression command passes **79 tests**: all previous 40 Calendar, recurring
+booking and audit-alert checks, plus 39 support checks. New coverage includes
+report/reply routing, announcements, duplicate requests, optimistic concurrency,
+open/solved transitions, role isolation, real authorization guards, attachment
+ownership/quotas/expiry, authenticated HTTP routes, streamed upload limits, email
+composition, recipient revocation, lease recovery and retry exhaustion. The
+Vitest role matrix also covers the new role. Changed TypeScript/TSX files passed
+syntax parsing.
+
+These are handler tests with in-memory database/scheduler doubles and mocked
+network calls, not a proof of live Convex transaction behavior or browser
+rendering. `npm ci` was blocked by registry HTTP 403 in the preparation environment;
+the full Vitest suite, typecheck, lint, build and browser checks could not run.
+Before production release, run those commands and use a staging deployment to
+exercise report → developer email → developer reply → admin email → solve →
+reopen; publish each announcement category; upload/view/remove pictures; test
+mobile and keyboard interaction; and revoke a developer account to verify access
+is removed. No production deployment or real email delivery was performed here.

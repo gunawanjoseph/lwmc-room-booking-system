@@ -26,6 +26,7 @@ const assignableRoles = [
   "booking_approver",
   "sheet_editor",
   "booking_manager",
+  "tech_support",
 ] as const;
 type AssignableRole = (typeof assignableRoles)[number];
 

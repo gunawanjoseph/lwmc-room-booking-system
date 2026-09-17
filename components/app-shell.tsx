@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { useConvexAuth, useQuery } from "convex/react";
 import {
@@ -11,6 +11,7 @@ import {
   FileClock,
   Home,
   Menu,
+  MessagesSquare,
   Settings2,
   TableProperties,
   TriangleAlert,
@@ -44,7 +45,8 @@ const navigation: Array<{
   icon: typeof Home;
   capability?: Capability;
 }> = [
-  { href: "/home", label: "Overview", icon: Home },
+  { href: "/home", label: "Overview", icon: Home, capability: "bookings.view" },
+  { href: "/support", label: "Support", icon: MessagesSquare, capability: "support.view" },
   {
     href: "/bookings",
     label: "Bookings",
@@ -349,7 +351,7 @@ function FormerHeadAdministrator({ user }: { user: CurrentUser }) {
   );
 }
 
-function ForbiddenRoute() {
+function ForbiddenRoute({ home = "/home" }: { home?: string }) {
   return (
     <main className="state-page">
       <div className="state-card">
@@ -360,8 +362,8 @@ function ForbiddenRoute() {
           Your assigned role does not include the capability required by
           this route.
         </p>
-        <Link href="/home" className="button button-primary">
-          Return to overview <ChevronRight size={17} />
+        <Link href={home} className="button button-primary">
+          Return to workspace <ChevronRight size={17} />
         </Link>
       </div>
     </main>
@@ -370,6 +372,7 @@ function ForbiddenRoute() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const profile = useQuery(
     api.users.me,
@@ -379,6 +382,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     | null
     | undefined;
   const [mobileOpen, setMobileOpen] = useState(false);
+  useEffect(() => {
+    if (pathname === "/home" && profile?.status === "active" && profile.role === "tech_support") {
+      router.replace("/support");
+    }
+  }, [pathname, profile?.status, profile?.role, router]);
 
   if (authLoading || !isAuthenticated || profile === undefined) {
     return <LoadingShell />;
@@ -427,7 +435,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     routeCapability &&
     !profile.capabilities.includes(routeCapability)
   ) {
-    return <ForbiddenRoute />;
+    return <ForbiddenRoute home={profile.role === "tech_support" ? "/support" : "/home"} />;
   }
 
   return (

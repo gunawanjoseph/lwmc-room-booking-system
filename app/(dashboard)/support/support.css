@@ -1,0 +1,106 @@
+.support-workspace {
+  display:grid;
+  gap:1.25rem}
+.support-columns {
+  display:grid;
+  grid-template-columns:minmax(250px,320px) minmax(0,1fr);
+  gap:1.25rem;
+  align-items:start}
+.support-toolbar {
+  display:flex;
+  gap:.65rem;
+  align-items:center;
+  flex-wrap:wrap;
+  margin:1rem 0}
+.support-toolbar select {
+  margin-left:.5rem}
+.support-thread {
+  display:grid;
+  gap:.4rem;
+  text-align:left;
+  width:100%;
+  padding:1rem;
+  margin:.5rem 0;
+  border:1px solid var(--border,#d6dde4);
+  border-radius:12px;
+  background:transparent;
+  color:inherit;
+  cursor:pointer;
+  overflow-wrap:anywhere}
+.support-thread.selected,.support-toolbar [aria-pressed=true] {
+  border-color:#5476cf;
+  background:rgba(84,118,207,.12)}
+.support-thread span,.support-thread small {
+  opacity:.75}
+.support-composer fieldset {
+  border:0;
+  padding:0;
+  margin:0;
+  display:grid;
+  gap:1rem;
+  min-width:0}
+.support-composer textarea {
+  width:100%;
+  resize:vertical}
+.support-composer small {
+  display:block;
+  margin:.7rem 0;
+  opacity:.75}
+.support-file {
+  display:flex;
+  justify-content:space-between;
+  gap:1rem;
+  align-items:center;
+  overflow-wrap:anywhere}
+.support-messages {
+  display:grid;
+  gap:1rem;
+  margin:1.4rem 0}
+.support-message {
+  border:1px solid var(--border,#d6dde4);
+  border-radius:14px;
+  padding:1rem;
+  min-width:0}
+.support-message header {
+  display:flex;
+  gap:.65rem;
+  flex-wrap:wrap;
+  align-items:baseline}
+.support-message header span,.support-message small {
+  font-size:.8rem;
+  opacity:.75}
+.support-system {
+  background:rgba(100,116,139,.08)}
+.support-body {
+  white-space:pre-wrap;
+  overflow-wrap:anywhere}
+.support-images {
+  display:flex;
+  flex-wrap:wrap;
+  gap:.75rem;
+  margin:.75rem 0}
+.support-image {
+  display:block;
+  max-width:100%;
+  width:220px;
+  height:150px;
+  object-fit:contain;
+  border-radius:8px;
+  background:rgba(100,116,139,.1)}
+.support-tag {
+  padding:.25rem .6rem;
+  border-radius:99px;
+  background:rgba(100,116,139,.15);
+  font-size:.8rem;
+  text-transform:capitalize}
+.support-critical,.support-high {
+  background:#ffe2df;
+  color:#912619}
+.support-conversation {
+  min-width:0}
+.support-conversation h2 {
+  overflow-wrap:anywhere}
+@media(max-width:850px) {
+  .support-columns {
+  grid-template-columns:1fr}
+}

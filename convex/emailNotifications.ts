@@ -2198,3 +2198,29 @@ export const sendTechAlert = internalAction({
     await ctx.runMutation(internal.techSupport.finish, { ...args, token, error: errorMessage });
   },
 });
+
+export const sendSupportMessage = internalAction({
+  args: { deliveryId: v.id("supportDeliveries") },
+  handler: async (ctx, args): Promise<void> => {
+    const token=crypto.randomUUID();
+    const delivery=await ctx.runMutation(internal.support.claimDelivery,{...args,token});
+    if(!delivery)return;
+    let errorMessage:string|undefined;
+    try {
+      const {message,thread}=delivery;
+      const configuration=gmailConfiguration();
+      const link=`${configuration.appBaseUrl}/support?thread=${encodeURIComponent(String(thread._id))}`;
+      const text=[
+        `${thread.kind==="announcement"?"RoomOps update":"RoomOps bug report"}: ${thread.title}`,
+        `Severity: ${thread.severity} | Status: ${thread.status}`,
+        `From: ${message.authorName} (${message.authorKind})`,"",message.body,"",
+        message.attachmentIds.length?`${message.attachmentIds.length} picture(s) attached. Sign in to view them.`:"",
+        `View and reply: ${link}`,"",
+        "Reply in the Support tab. Replies to this notification email are not imported into RoomOps.",
+      ].filter(line=>line!==undefined).join("\n");
+      await sendGmail({to:delivery.email,subject:`[RoomOps ${thread.kind==="announcement"?"update":thread.severity}] ${thread.title}`,
+        text,html:htmlFromText(text),messageKey:`support-${args.deliveryId}`});
+    }catch(error){errorMessage=error instanceof Error?error.message:"Support email failed.";}
+    await ctx.runMutation(internal.support.finishDelivery,{...args,token,error:errorMessage});
+  },
+});

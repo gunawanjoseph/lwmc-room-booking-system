@@ -3,14 +3,24 @@
 import { registerHooks, stripTypeScriptTypes } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-const definitions = 'export const action=x=>x, internalAction=x=>x, mutation=x=>x, internalMutation=x=>x, query=x=>x, internalQuery=x=>x;';
+const definitions = 'export const action=x=>x, internalAction=x=>x, mutation=x=>x, internalMutation=x=>x, query=x=>x, internalQuery=x=>x, httpAction=x=>x;';
 const modules = {
-  'convex/values': 'export class ConvexError extends Error { constructor(data) { super(data.message); this.data=data; } } export const v = new Proxy({}, { get:()=>()=>({}) });',
-  'convex/server': 'export const paginationOptsValidator = {};',
+  'convex/values': 'export class ConvexError extends Error { constructor(data) { super(typeof data === "string" ? data : data.message); this.data=data; } } export const v = new Proxy({}, { get:()=>()=>({}) });',
+  'convex/server': 'export const paginationOptsValidator = {}; export const httpRouter=()=>({route:r=>(globalThis.__roomopsRoutes??=[]).push(r)});',
   'luxon': 'export const DateTime = new Proxy({}, {get:()=>()=>{throw new Error("Unexpected Luxon call in dependency-free test")}});',
   server: definitions,
   api: 'const group=new Proxy({}, {get:(_,key)=>String(key)}); export const internal=new Proxy({}, {get:()=>group});',
-  auth: 'export const requireCapability=async()=>({clerkUserId:"admin"}); export const requireHeadAdmin=requireCapability;',
+  auth: `import {capabilitiesForRole} from ${JSON.stringify(new URL('../shared/roles.ts',import.meta.url).href)};
+    export const normalizeUser=u=>({...u,clerkUserId:u.clerkUserId??u.identitySubject,displayName:u.displayName??u.name??u.email});
+    export const effectiveCapabilities=u=>u.status==='active'?capabilitiesForRole(u.role):[];
+    export const requireCapability=async(ctx,cap)=>{
+      if (!('__roomopsActor' in globalThis)) return {clerkUserId:'admin'};
+      const actor=globalThis.__roomopsActor;
+      if(!actor||!effectiveCapabilities(actor).includes(cap))throw new Error('Access denied');
+      return actor;
+    };
+    export const requireHeadAdmin=requireCapability;
+    export const userBySubject=async(ctx,subject)=>{const u=await ctx.db.query('users').withIndex('by_clerk_user_id',q=>q.eq('clerkUserId',subject)).unique();return u?normalizeUser(u):null;};`,
   actionAuth: 'export const requireActionCapability=async()=>({clerkUserId:"admin"}); export const requireActionHeadAdmin=requireActionCapability;',
   schema: 'export const calendarEventRefValidator={}, jotformResponseValidator={}, recurrenceFrequencyValidator={};',
 };
