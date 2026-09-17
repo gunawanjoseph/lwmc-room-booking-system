@@ -15,7 +15,8 @@ import { api } from "@/convex/_generated/api";
 import { formatDateTime } from "@/lib/ui";
 import { StatusBadge } from "@/components/status-badge";
 
-import { JOTFORM_FORM_ID, JOTFORM_FORM_URL } from "@/shared/jotformConstants";
+import { JOTFORM_FORM_URL } from "@/shared/jotformConstants";
+
 type Booking = {
   _id: string;
   room: string;
@@ -40,9 +41,11 @@ type OverviewCounts = {
 export default function HomePage() {
   const profile = useQuery(api.users.me);
   const bookings = (useQuery(api.bookings.list) ?? []) as Booking[];
+
   const overview = useQuery(
     api.bookings.overviewCounts,
   ) as OverviewCounts | undefined;
+
   const counts: OverviewCounts = overview ?? {
     pending: 0,
     availabilityChecking: 0,
@@ -53,29 +56,42 @@ export default function HomePage() {
     pendingConflictPairs: 0,
     unavailableConflictRequests: 0,
   };
+
   const displayCount = (value: number) =>
     overview === undefined ? "—" : value;
 
   return (
     <div className="page">
-      <Link href="/booking-calendar" className="button button-secondary">Booking calendar</Link>
       <header className="page-header overview-header">
         <div>
           <span className="eyebrow">OPERATIONS OVERVIEW</span>
+
           <h1>Good to see you, {profile?.displayName ?? "admin"}.</h1>
+
           <p>
             New Jotform requests appear here as soon as Convex processes
             them.
           </p>
         </div>
-        <a
-          className="button button-secondary"
-          href={JOTFORM_FORM_URL}
-          target="_blank"
-          rel="noreferrer"
-        >
-          Open Jotform <ExternalLink size={16} aria-hidden="true" />
-        </a>
+
+        <div className="page-header-actions">
+          <Link
+            href="/booking-calendar"
+            className="button button-secondary"
+          >
+            Booking calendar
+          </Link>
+
+          <a
+            className="button button-secondary"
+            href={JOTFORM_FORM_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open Jotform
+            <ExternalLink size={16} aria-hidden="true" />
+          </a>
+        </div>
       </header>
 
       <section
@@ -87,8 +103,10 @@ export default function HomePage() {
           <span className="metric-icon">
             <Clock3 size={20} aria-hidden="true" />
           </span>
+
           <div>
             <strong>{displayCount(counts.pending)}</strong>
+
             <span>
               Awaiting decision
               {overview !== undefined &&
@@ -101,37 +119,46 @@ export default function HomePage() {
             </span>
           </div>
         </article>
+
         <article className="metric-card metric-green">
           <span className="metric-icon">
             <CheckCircle2 size={20} aria-hidden="true" />
           </span>
+
           <div>
             <strong>{displayCount(counts.approved)}</strong>
             <span>Approved bookings</span>
           </div>
         </article>
+
         <article className="metric-card metric-rose">
           <span className="metric-icon">
             <CircleSlash2 size={20} aria-hidden="true" />
           </span>
+
           <div>
             <strong>{displayCount(counts.unavailable)}</strong>
             <span>Unavailable bookings</span>
           </div>
         </article>
+
         <article className="metric-card metric-conflict">
           <span className="metric-icon">
             <TriangleAlert size={20} aria-hidden="true" />
           </span>
+
           <div>
             <strong>
               {displayCount(counts.detectedConflictRequests)}
             </strong>
+
             <span>
               Detected conflict requests
               {overview !== undefined &&
                 ` · ${counts.pendingConflictRequests} pending, ${counts.unavailableConflictRequests} auto-unavailable · ${counts.pendingConflictPairs} overlap ${
-                  counts.pendingConflictPairs === 1 ? "pair" : "pairs"
+                  counts.pendingConflictPairs === 1
+                    ? "pair"
+                    : "pairs"
                 }`}
             </span>
           </div>
@@ -145,10 +172,13 @@ export default function HomePage() {
               <span className="panel-kicker">LIVE QUEUE</span>
               <h2>Recent requests</h2>
             </div>
+
             <Link href="/bookings" className="text-link">
-              View all <ArrowRight size={15} />
+              View all
+              <ArrowRight size={15} />
             </Link>
           </div>
+
           <div className="recent-list">
             {bookings.length === 0 ? (
               <div className="empty-state compact-empty">
@@ -161,8 +191,10 @@ export default function HomePage() {
                   <span className="room-avatar" aria-hidden="true">
                     {booking.room.slice(0, 1).toUpperCase()}
                   </span>
+
                   <div className="recent-main">
                     <strong>{booking.room}</strong>
+
                     <span>
                       {booking.requesterName} ·{" "}
                       {formatDateTime(
@@ -171,6 +203,7 @@ export default function HomePage() {
                       )}
                     </span>
                   </div>
+
                   <div className="recent-status">
                     {(booking.conflictWarningBookingIds?.length ?? 0) >
                       0 && (
@@ -186,6 +219,7 @@ export default function HomePage() {
                         />
                       </span>
                     )}
+
                     <StatusBadge status={booking.status} />
                   </div>
                 </div>
@@ -196,38 +230,53 @@ export default function HomePage() {
 
         <article className="panel workflow-panel">
           <span className="panel-kicker">AUTOMATION</span>
+
           <h2>Request flow</h2>
+
           <ol className="workflow-list">
             <li>
               <span>1</span>
+
               <div>
                 <strong>Jotform received</strong>
-                <p>The webhook queues only the submission ID.</p>
+
+                <p>
+                  The webhook queues only the submission ID.
+                </p>
               </div>
             </li>
+
             <li>
               <span>2</span>
+
               <div>
                 <strong>Conflict checked</strong>
+
                 <p>
                   Convex reservations and every physical Google Calendar
                   are checked for all occurrences.
                 </p>
               </div>
             </li>
+
             <li>
               <span>3</span>
+
               <div>
                 <strong>Review or unavailable</strong>
+
                 <p>
                   Available slots enter the approver queue automatically.
                 </p>
               </div>
             </li>
+
             <li>
               <span>4</span>
+
               <div>
                 <strong>Approved and scheduled</strong>
+
                 <p>
                   Approval checks availability again, creates the venue
                   calendar event, and records the result in Convex.
@@ -239,4 +288,23 @@ export default function HomePage() {
       </section>
     </div>
   );
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .page-header-actions {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-header-actions .button {
+    width: 100%;
+    justify-content: center;
+  }
 }
