@@ -113,3 +113,26 @@ test('missing developer configuration is visible and never falls back to legacy 
   const old=process.env.DEVELOPER_EMAIL;delete process.env.DEVELOPER_EMAIL;
   try{const ctx=fixture('admin');await ctx.db.insert('techSupportEmails',{email:'legacy@example.com',active:true});assert.equal((await support.configuration.handler(ctx,{})).hasRecipients,false);await support.create.handler(ctx,{kind:'report',title:'Report',severity:'low',body:'Saved without email',attachmentIds:[],requestId:'no-developer-request'});assert.equal(ctx.rows('supportDeliveries').length,0);}finally{process.env.DEVELOPER_EMAIL=old;}
 });
+
+test('all non-developer roles including the head cannot publish any update category',async()=>{
+  for(const role of ['head_admin','booking_viewer','booking_approver','sheet_editor','booking_manager','tech_support']) {
+    const ctx=fixture(role==='head_admin'?'head':'admin');
+    if(role!=='head_admin')await ctx.db.patch('admin',{role});
+    for(const announcementType of ['feature','change','bug_known','bug_fixed']) {
+      await assert.rejects(support.create.handler(ctx,{kind:'announcement',title:'Update',severity:'low',announcementType,body:'News',attachmentIds:[],requestId:`forbidden-${role}-${announcementType}`}));
+    }
+    assert.equal(ctx.rows('supportThreads').length,0);assert.equal(ctx.rows('supportMessages').length,0);assert.equal(ctx.rows('supportDeliveries').length,0);
+  }
+});
+test('configured developer can publish every update category; head can still report and triage',async()=>{
+  const ctx=fixture('dev');
+  for(const announcementType of ['feature','change','bug_known','bug_fixed']) {
+    const id=await support.create.handler(ctx,{kind:'announcement',title:'Developer update',severity:'low',announcementType,body:'News',attachmentIds:[],requestId:`developer-update-${announcementType}`});
+    assert.equal((await ctx.db.get(id)).announcementType,announcementType);
+  }
+  ctx.identity={subject:'head',email:'head@example.com',emailVerified:true};
+  assert.equal((await auth.requireCapability(ctx,'support.develop')).role,'head_admin');
+  const id=await support.create.handler(ctx,{kind:'report',title:'Head report',severity:'low',body:'A problem',attachmentIds:[],requestId:'head-report-publish-test'});
+  await support.update.handler(ctx,{threadId:id,expectedRevision:0,status:'solved',severity:'low',requestId:'head-triage-publish-test'});
+  assert.equal((await ctx.db.get(id)).status,'solved');
+});

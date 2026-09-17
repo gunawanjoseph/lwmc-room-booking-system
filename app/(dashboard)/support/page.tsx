@@ -47,9 +47,9 @@ function PrivateImage({ id, name }: { id: Id<"supportAttachments">; name: string
     <img src={url} alt={name} className="support-image" />
   </a> : <span role="status">Loading {name}…</span>;
 }
-function Composer({ onSend, label, children, draftKey = "", onBusy }: {
+function Composer({ onSend, label, children, draftKey = "", onBusy, compact = false }: {
   onSend: (body: string, files: Id<"supportAttachments">[], requestId: string) => Promise<void>;
-  label: string; children?: React.ReactNode; draftKey?: string; onBusy?: (busy: boolean) => void;
+  label: string; children?: React.ReactNode; draftKey?: string; onBusy?: (busy: boolean) => void; compact?: boolean;
 }) {
   const { getToken } = useAuth();
   const discard = useMutation(api.support.discardAttachment);
@@ -90,14 +90,14 @@ function Composer({ onSend, label, children, draftKey = "", onBusy }: {
     finally { lock.current = false; setBusy(false); }
   }}>
     <fieldset disabled={busy}>{children}
-      <label className="field"><span>Message</span><textarea rows={5} maxLength={8000} required={!files.length} value={body} onChange={event => { setBody(event.target.value); requestId.current = null; }} placeholder="Describe what happened, what you expected, and how to reproduce it." /></label>
-      <label className="field"><span>Pictures · up to 5, maximum 5 MB each</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={event => { const selected = Array.from(event.target.files ?? []); event.target.value = ""; requestId.current = null; void upload(selected); }} /></label>
+      <label className="field"><span>Message</span><textarea rows={compact ? 3 : 5} maxLength={8000} required={!files.length} value={body} onChange={event => { setBody(event.target.value); requestId.current = null; }} placeholder={compact ? "Write a reply…" : "What happened? What did you expect? How can we reproduce it?"} /></label>
+      <label className="field support-upload"><span>Attach pictures <small>Up to 5 · 5 MB each</small></span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={event => { const selected = Array.from(event.target.files ?? []); event.target.value = ""; requestId.current = null; void upload(selected); }} /></label>
       {files.map(file => <div key={file.id} className="support-file"><span>{file.name}</span><button type="button" className="button button-secondary button-small" onClick={async () => {
         if (lock.current) return; lock.current = true; setBusy(true); setError("");
         try { await discard({ attachmentId: file.id }); setFiles(current => current.filter(item => item.id !== file.id)); requestId.current = null; }
         catch (caught) { setError(messageFromError(caught)); } finally { lock.current = false; setBusy(false); }
       }}>Remove</button></div>)}
-      <button className="button button-primary" disabled={busy || (!body.trim() && !files.length)}>{busy ? "Please wait…" : label}</button>
+      <button className="button button-primary support-send" disabled={busy || (!body.trim() && !files.length)}>{busy ? "Please wait…" : label}</button>
     </fieldset>
     {error && <p className="form-error" role="alert">{error}</p>}
     <small>Replies happen here in Support. Email notifications link back to the conversation.</small>
@@ -119,11 +119,11 @@ function Conversation({ id, developer }: { id: Id<"supportThreads">; developer: 
     catch (caught) { setError(messageFromError(caught)); } finally { setBusy(false); }
   }
   return <section className="panel support-conversation">
-    <span className="panel-kicker">{thread.kind === "report" ? "BUG REPORT" : "DEVELOPER UPDATE"}</span>
-    <h2>{thread.title}</h2><p>{thread.authorName} · {new Date(thread.createdAt).toLocaleString()}</p>
+    <div className="support-conversation-heading"><span className="panel-kicker">{thread.kind === "report" ? "BUG REPORT" : "DEVELOPER UPDATE"}</span>
+    <h2>{thread.title}</h2><p className="support-meta">{thread.authorName} · {new Date(thread.createdAt).toLocaleString()}</p></div>
     <div className="support-toolbar"><span className={`support-tag support-${thread.severity}`}>{thread.severity}</span><span className="support-tag">{thread.status}</span>
       {thread.announcementType && <span className="support-tag">{thread.announcementType.replaceAll("_", " ")}</span>}
-      {thread.canManage && <><label>Severity <select aria-label="Conversation severity" disabled={busy} value={thread.severity} onChange={event => void change(thread.status, event.target.value as Severity)}>{["low", "medium", "high", "critical"].map(value => <option key={value}>{value}</option>)}</select></label><button className="button button-secondary" disabled={busy} onClick={() => void change(thread.status === "open" ? "solved" : "open", thread.severity)}>{thread.status === "open" ? "Mark solved" : "Reopen"}</button></>}
+      {thread.canManage && <><label className="support-severity-control">Severity <select aria-label="Conversation severity" disabled={busy} value={thread.severity} onChange={event => void change(thread.status, event.target.value as Severity)}>{["low", "medium", "high", "critical"].map(value => <option key={value}>{value}</option>)}</select></label><button className="button button-secondary" disabled={busy} onClick={() => void change(thread.status === "open" ? "solved" : "open", thread.severity)}>{thread.status === "open" ? "Mark solved" : "Reopen"}</button></>}
     </div>
     {error && <p className="form-error" role="alert">{error}</p>}
     {messages.status === "CanLoadMore" && <button className="button button-secondary" onClick={() => messages.loadMore(30)}>Load older messages</button>}
@@ -135,8 +135,8 @@ function Conversation({ id, developer }: { id: Id<"supportThreads">; developer: 
       <small>Email: {message.emailStatus.sent} sent · {message.emailStatus.pending} queued · {message.emailStatus.failed} failed{message.emailStatus.cancelled > 0 && ` · ${message.emailStatus.cancelled} cancelled`}</small>
       {developer && message.emailStatus.failed > 0 && <button className="button button-secondary button-small" disabled={busy} onClick={async () => { setBusy(true); setError(""); try { await retry({ messageId: message._id }); } catch (caught) { setError(messageFromError(caught)); } finally { setBusy(false); } }}>Retry email</button>}
     </article>)}</div>
-    <h3>Reply</h3>{thread.status === "solved" && <p>Sending a reply reopens this conversation.</p>}
-    <Composer label="Send reply" onSend={async (body, attachmentIds, requestId) => { await reply({ threadId: id, body, attachmentIds, requestId }); }} />
+    <div className="support-reply"><h3>Reply</h3>{thread.status === "solved" && <p>Sending a reply reopens this conversation.</p>}
+    <Composer compact label="Send reply" onSend={async (body, attachmentIds, requestId) => { await reply({ threadId: id, body, attachmentIds, requestId }); }} /></div>
   </section>;
 }
 function Workspace() {
@@ -155,24 +155,26 @@ function Workspace() {
   const [category, setCategory] = useState<Category>("change");
   const list = usePaginatedQuery(api.support.list, { kind, status: kind === "report" && filter !== "all" ? filter : undefined }, { initialNumItems: 25 });
   const developer = profile?.capabilities.includes("support.develop") ?? false;
+  const canPublish = profile?.role === "developer" && profile.capabilities.includes("support.publish");
+  const detailRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (selected || compose) detailRef.current?.focus({ preventScroll: true }); }, [selected, compose]);
   return <div className="support-workspace">
-    <header className="panel"><span className="panel-kicker">SUPPORT & UPDATES</span><h1>A shared place to resolve problems</h1><p>Report a bug, follow up with Developer, and see the latest changes. Conversations and pictures are visible to all active administrators and the developer.</p>
-      <div className="support-toolbar"><button className="button button-primary" disabled={composingBusy} onClick={() => { setCompose("report"); setTitle(""); }}>Report a bug</button>{developer && <button className="button button-secondary" disabled={composingBusy} onClick={() => { setCompose("announcement"); setTitle(""); }}>Publish an update</button>}</div>
+    <header className="support-page-header"><div><span className="panel-kicker">ROOMOPS</span><h1>Support & updates</h1><p>Report a problem, follow the conversation, and see what’s new.</p></div>
+      <div className="support-toolbar"><button className="button button-primary" disabled={composingBusy || !!compose} onClick={() => { setCompose("report"); setTitle(""); }}>Report a bug</button>{canPublish && <button className="button button-secondary" disabled={composingBusy || !!compose} onClick={() => { setCompose("announcement"); setTitle(""); }}>Publish an update</button>}</div>
+    </header><p className="support-privacy">Conversations and pictures are shared with active administrators and the developer.</p>
       {configuration && !configuration.hasRecipients && <p role="status" className="form-error">DEVELOPER_EMAIL is missing or invalid in Convex. Reports are saved here, but developer email notifications are disabled until deployment configuration is corrected.</p>}
-    </header>
-    {compose && <section className="panel"><h2>{compose === "report" ? "New bug report" : "New developer update"}</h2><Composer key={compose} draftKey={JSON.stringify([title, severity, category])} onBusy={setComposingBusy} label={compose === "report" ? "Submit report" : "Publish update"} onSend={async (body, attachmentIds, requestId) => {
+    <div className={`support-columns ${selected || compose ? "support-detail-open" : ""}`}><aside className="panel support-sidebar"><div className="support-tabs" aria-label="Conversation type"><button className="button button-secondary" aria-pressed={kind === "report"} disabled={!!compose} onClick={() => setKind("report")}>Bug reports</button><button className="button button-secondary" aria-pressed={kind === "announcement"} disabled={!!compose} onClick={() => setKind("announcement")}>Updates</button></div>
+      {kind === "report" && <label className="field"><span>Status</span><select value={filter} onChange={event => setFilter(event.target.value as typeof filter)}><option value="open">Open</option><option value="solved">Solved</option><option value="all">All</option></select></label>}
+      <div className="support-thread-list">{list.results.map(thread => <button className={`support-thread ${selected === thread._id ? "selected" : ""}`} key={thread._id} aria-current={selected === thread._id ? "true" : undefined} disabled={!!compose || composingBusy} onClick={() => router.push(`/support?thread=${thread._id}`)}><strong>{thread.title}</strong><span>{thread.kind === "report" ? `${thread.severity} · ${thread.status}` : thread.announcementType?.replaceAll("_", " ")}</span><small>{thread.authorName} · {new Date(thread.updatedAt).toLocaleDateString()}</small></button>)}</div>
+      {list.status === "LoadingFirstPage" ? <p role="status">Loading…</p> : !list.results.length && <p>No conversations in this view.</p>}
+      {list.status === "CanLoadMore" && <button className="button button-secondary" onClick={() => list.loadMore(25)}>Load more</button>}
+    </aside><div className="support-detail" ref={detailRef} tabIndex={-1}><button className="button button-secondary support-back" disabled={composingBusy} onClick={() => { setCompose(null); router.push("/support"); }}>← Back to conversations</button>{compose && (compose === "report" || canPublish) ? <section className="panel support-draft"><h2>{compose === "report" ? "New bug report" : "New developer update"}</h2><Composer key={compose} draftKey={JSON.stringify([title, severity, category])} onBusy={setComposingBusy} label={compose === "report" ? "Submit report" : "Publish update"} onSend={async (body, attachmentIds, requestId) => {
       const id = await create({ kind: compose, title, severity, announcementType: compose === "announcement" ? category : undefined, body, attachmentIds, requestId });
       setKind(compose); setCompose(null); setComposingBusy(false); router.push(`/support?thread=${id}`);
     }}>
       <label className="field"><span>Title</span><input required maxLength={160} value={title} onChange={event => setTitle(event.target.value)} /></label>
       {compose === "report" ? <label className="field"><span>Severity</span><select value={severity} onChange={event => setSeverity(event.target.value as Severity)}><option value="low">Low — minor inconvenience</option><option value="medium">Medium — function impaired</option><option value="high">High — work blocked</option><option value="critical">Critical — widespread outage</option></select></label> : <label className="field"><span>Category</span><select value={category} onChange={event => setCategory(event.target.value as Category)}><option value="feature">New feature</option><option value="change">Change</option><option value="bug_known">Known bug</option><option value="bug_fixed">Bug fixed</option></select></label>}
-    </Composer><button className="button button-secondary" disabled={composingBusy} onClick={() => setCompose(null)}>Close draft</button><small> Unsent pictures expire after 24 hours.</small></section>}
-    <div className="support-columns"><aside className="panel"><div className="support-toolbar" aria-label="Conversation type"><button className="button button-secondary" aria-pressed={kind === "report"} onClick={() => setKind("report")}>Bug reports</button><button className="button button-secondary" aria-pressed={kind === "announcement"} onClick={() => setKind("announcement")}>Updates</button></div>
-      {kind === "report" && <label className="field"><span>Status</span><select value={filter} onChange={event => setFilter(event.target.value as typeof filter)}><option value="open">Open</option><option value="solved">Solved</option><option value="all">All</option></select></label>}
-      {list.results.map(thread => <button className={`support-thread ${selected === thread._id ? "selected" : ""}`} key={thread._id} onClick={() => router.push(`/support?thread=${thread._id}`)}><strong>{thread.title}</strong><span>{thread.severity} · {thread.status}</span><small>{thread.authorName} · {new Date(thread.updatedAt).toLocaleDateString()}</small></button>)}
-      {list.status === "LoadingFirstPage" ? <p role="status">Loading…</p> : !list.results.length && <p>No conversations in this view.</p>}
-      {list.status === "CanLoadMore" && <button className="button button-secondary" onClick={() => list.loadMore(25)}>Load more</button>}
-    </aside>{selected && /^[a-z0-9]{20,64}$/.test(selected) ? <Conversation key={selected} id={selected as Id<"supportThreads">} developer={developer} /> : <section className="panel"><h2>Select a conversation</h2><p>Choose a report or update to read messages and reply.</p></section>}</div>
+    </Composer><div className="support-draft-footer"><button className="button button-secondary" disabled={composingBusy} onClick={() => setCompose(null)}>Close draft</button><small> Unsent pictures expire after 24 hours.</small></div></section> : selected && /^[a-z0-9]{20,64}$/.test(selected) ? <Conversation key={selected} id={selected as Id<"supportThreads">} developer={developer} /> : <section className="panel support-empty"><span className="panel-kicker">YOUR SUPPORT WORKSPACE</span><h2>Select a conversation</h2><p>Choose a report or update from the list, or report a new problem.</p></section>}</div></div>
   </div>;
 }
 export default function SupportPage() { return <Suspense fallback={<p>Loading Support…</p>}><Workspace /></Suspense>; }

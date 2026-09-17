@@ -22,6 +22,7 @@ export const CAPABILITIES = [
   "integrations.manage",
   "support.view",
   "support.develop",
+  "support.publish",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -52,7 +53,7 @@ export const ROLE_DESCRIPTIONS: Record<Role, string> = {
 };
 
 export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
-  head_admin: CAPABILITIES,
+  head_admin: CAPABILITIES.filter(capability => capability !== "support.publish"),
   developer: CAPABILITIES,
   tech_support: [],
   booking_viewer: [

@@ -83,7 +83,8 @@ export const messages = query({args:{threadId:v.id("supportThreads"),paginationO
   }))};
 }});
 export const create = mutation({args:{kind:v.union(v.literal("report"),v.literal("announcement")),title:v.string(),severity,announcementType:v.optional(announcementType),body:v.string(),attachmentIds:v.array(v.id("supportAttachments")),requestId:v.string()},handler:async(ctx,args)=>{
-  const actor=await requireCapability(ctx,args.kind==="announcement"?"support.develop":"support.view");
+  const actor=await requireCapability(ctx,args.kind==="announcement"?"support.publish":"support.view");
+  if (args.kind === "announcement" && actor.role !== "developer") throw new ConvexError("Only the configured Developer can publish updates.");
   const existing=await existingRequest(ctx,actor.clerkUserId,args.requestId);
   if(existing) {
     const thread=await ctx.db.get(existing.threadId);

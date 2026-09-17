@@ -36,7 +36,8 @@ function context(initial={}) {
   return {db,jobs,rows,storage:{delete:async id=>jobs.push(["delete",id])},scheduler:{runAfter:async(...args)=>jobs.push(args)}};
 }
 test('developer has full permissions; the legacy role grants none',()=>{
-  assert.deepEqual(capabilitiesForRole('developer'),capabilitiesForRole('head_admin'));
+  assert.deepEqual(capabilitiesForRole('developer').filter(c=>c!=='support.publish'),capabilitiesForRole('head_admin'));
+  assert.equal(capabilitiesForRole('head_admin').includes('support.publish'),false);
   assert.deepEqual(capabilitiesForRole('tech_support'),[]);
   for(const role of ROLES.filter(r=>r!=='tech_support'))assert.ok(capabilitiesForRole(role).includes('support.view'));
 });

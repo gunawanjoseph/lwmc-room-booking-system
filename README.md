@@ -469,8 +469,8 @@ npm run lint
 npm run build
 ```
 
-The regression command passes **99 tests**: 79 booking, Calendar, alert and
-support checks (updated for the intended developer-policy changes), plus 20
+The regression command passes **101 tests**: 79 booking, Calendar, alert and
+support checks (updated for the intended developer-policy changes), plus 22
 developer-identity and authorization checks. New coverage includes
 report/reply routing, announcements, duplicate requests, optimistic concurrency,
 open/solved transitions, role isolation, real authorization guards, attachment
@@ -520,3 +520,38 @@ head account, legacy-role denial, address revocation, protected-account mutation
 rejection, developer administrator-management access, impersonation rejection,
 read-only recipient configuration, and shared close/reopen controls. No live
 account, environment variable or production deployment was changed here.
+
+
+### Support layout and developer-only publishing
+
+Apply `lwmc-support-layout-publishing.patch` after `lwmc-developer-identity.patch`:
+
+```bash
+git apply --check "$HOME/Downloads/lwmc-support-layout-publishing.patch"
+git apply "$HOME/Downloads/lwmc-support-layout-publishing.patch"
+```
+
+The Support page now uses the app's normal page margins, padded panels, a compact
+conversation list and a wider reading/composer area. New reports and updates open
+in that detail area instead of pushing the conversation list down the page.
+Buttons size to their content; attachments and long text stay within their column.
+Below 900 px, selecting a conversation or opening a draft shows the detail view
+with a Back to conversations button. The list remains available without squeezing
+the conversation beside it. Existing drafts must be closed before opening another.
+
+Only the configured Developer can publish feature/change/bug announcements.
+The separate `support.publish` capability is excluded from Head Administrator and
+all other administrator roles, and the create mutation also verifies the actor's
+Developer role. Hiding the publish button is not the authorization boundary.
+Administrators can still read updates, reply, report bugs, close/reopen reports,
+and use their existing notification-retry permissions. Deploy backend and frontend
+together so this restriction applies to both new and already-open clients.
+
+All 101 handler regression tests pass, including publishing rejection for every
+non-developer role and all four announcement categories, successful Developer
+publishing, and preserved Head Administrator reporting/triage. TypeScript/TSX
+syntax parsing and patch application were checked. Full build/typecheck remain
+blocked by the previously documented npm registry 403. The local browser runtime
+was unavailable and its download also returned HTTP 403, so visual/browser
+verification still needs to run on a test deployment at mobile, tablet and desktop
+widths before release. No live deployment was changed.
