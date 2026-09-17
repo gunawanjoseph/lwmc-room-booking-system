@@ -30,14 +30,14 @@ function context(initial={}) {
   };
   return {db,jobs,rows,storage:{delete:async id=>jobs.push(["delete",id])},scheduler:{runAfter:async(...args)=>jobs.push(args)}};
 }
-test('outstanding starts at local midnight and includes the anniversary date',()=>{
-  assert.deepEqual(rules.bookingWindow(now),{today:'2026-09-18',until:'2027-09-18',timezone:'Asia/Singapore'});
+test('outstanding starts at local midnight without a future cutoff',()=>{
+  assert.deepEqual(rules.bookingWindow(now),{today:'2026-09-18',timezone:'Asia/Singapore'});
   const starts=['2026-09-17T15:59:59Z','2026-09-17T16:00:00Z','2027-09-18T15:59:59Z','2027-09-18T16:00:00Z'].map(Date.parse);
   const rows=starts.flatMap((startAt,i)=>rules.submitterMeetings(booking({_id:String(i),startAt,endAt:startAt+1000,occurrences:undefined})));
-  assert.deepEqual(rules.filterMeetings(rows,'outstanding',now,'Asia/Singapore').map(x=>x.key),['1:0','2:0']);
+  assert.deepEqual(rules.filterMeetings(rows,'outstanding',now,'Asia/Singapore').map(x=>x.key),['1:0','2:0','3:0']);
 });
-test('leap-day anniversary clamps to February 28',()=>{
-  assert.equal(rules.bookingWindow(Date.parse('2024-02-29T04:00:00Z')).until,'2025-02-28');
+test('leap day has no artificial upper boundary',()=>{
+  assert.deepEqual(rules.bookingWindow(Date.parse('2024-02-29T04:00:00Z')),{today:'2024-02-29',timezone:'Asia/Singapore'});
 });
 test('recurring rows respect per-meeting room/title overrides and retain earlier dates in past view',()=>{
   const b=booking();b.occurrences[0].startAt=now-86400000;b.occurrences[1].room='Board Room';b.occurrences[1].details={eventName:'Exception'};
@@ -128,9 +128,101 @@ for(const kind of ['requester_submission_received','requester_approved','request
   if(kind.startsWith('requester_')){assert.match(sent[0],/OUTSTANDING-ROW/);assert.match(sent[0],/\/my-bookings/);assert.match(sent[0],/Your outstanding bookings/);assert.equal(pages,2);}else{assert.doesNotMatch(sent[0],/OUTSTANDING-ROW|Your outstanding bookings|\/my-bookings/);assert.equal(pages,0);}
   assert.equal(mutations.at(-1).name,'completeDelivery');
 }));
-test('deletion notification sends snapshot and live remaining-bookings footer without needing the deleted row',async()=>gmail(async sent=>{
+test('deletion notification sends snapshot and saved remaining-bookings footer without needing the deleted row',async()=>gmail(async sent=>{
   const ctx=context();await queueBookingNotice(ctx,booking(),null,'deleted');const noticeId=ctx.rows('bookingNotices')[0]._id;let pages=0;
   ctx.runMutation=async(name,args)=>{if(name==='claim')return notices.claim.handler(ctx,args);if(name==='finish')return notices.finish.handler(ctx,args);throw Error(name);};
   ctx.runQuery=async name=>{assert.equal(name,'emailPage');pages++;return {page:[],isDone:true,continueCursor:'',timezone:'Asia/Singapore'};};
-  await emails.sendBookingNotice.handler(ctx,{noticeId});assert.equal(sent.length,1);assert.match(sent[0],/was deleted/);assert.match(sent[0],/Removed meetings/);assert.match(sent[0],/Your outstanding bookings/);assert.match(sent[0],/No bookings in this view/);assert.equal((await ctx.db.get(noticeId)).status,'sent');assert.equal(pages,1);
+  await emails.sendBookingNotice.handler(ctx,{noticeId});assert.equal(sent.length,1);assert.match(sent[0],/was deleted/);assert.match(sent[0],/Removed meetings/);assert.match(sent[0],/Your outstanding bookings/);assert.match(sent[0],/No bookings in this view/);assert.equal((await ctx.db.get(noticeId)).status,'sent');assert.equal(pages,0);
+}));
+
+test('repeated single and following edits keep the latest persisted occurrences in lookup and frozen emails',async()=>{
+  const base=Date.now()+10*86400000;
+  const b=booking({occurrences:[0,1,2,3,4].map(sequence=>({sequence,startAt:base+sequence*7*86400000,endAt:base+sequence*7*86400000+3600000})),recurrenceCount:5,startAt:base,endAt:base+3600000});
+  const ctx=context({bookings:[b]});
+  ctx.auth={getUserIdentity:async()=>({email:b.requesterEmail,emailVerified:true})};
+  async function edit(scope,sequence,title,hours){
+    const current=await ctx.db.get(b._id);const occurrence=current.occurrences.find(row=>row.sequence===sequence);
+    await bookings.edit.handler(ctx,{...current,bookingId:b._id,expectedRevision:current.revision,editScope:scope,occurrenceSequence:sequence,eventName:title,startAt:occurrence.startAt+hours*3600000,endAt:occurrence.endAt+hours*3600000,notifySubmitter:true});
+  }
+  await edit('occurrence',0,'First exception',1);
+  await edit('following',2,'Third and later',2);
+  const frozen=ctx.rows('bookingNotices')[1].outstandingJson;
+  await edit('occurrence',3,'Fourth exception',1);
+  await edit('following',2,'Latest tail',1);
+  const result=await own.list.handler(ctx,{email:b.requesterEmail,paginationOpts:{numItems:20,cursor:null}});
+  const meetings=result.page[0].meetings;
+  assert.deepEqual(meetings.map(row=>row.title),['First exception','Meeting','Latest tail','Latest tail','Latest tail']);
+  assert.equal(meetings[0].startAt,base+3600000);
+  assert.equal(meetings[1].startAt,base+7*86400000);
+  assert.equal(meetings[3].startAt,base+21*86400000+4*3600000);
+  assert.equal(ctx.rows('bookingNotices')[1].outstandingJson,frozen);
+  assert.deepEqual(JSON.parse(frozen).rows.map(row=>row.title),['First exception','Meeting','Third and later','Third and later','Third and later']);
+  const current=await ctx.db.get(b._id);
+  await bookings.removeOccurrences.handler(ctx,{bookingId:b._id,expectedRevision:current.revision,scope:'following',occurrenceSequence:2,notifySubmitter:true});
+  const remaining=await own.list.handler(ctx,{email:b.requesterEmail,paginationOpts:{numItems:20,cursor:null}});
+  assert.equal(remaining.page[0].meetings.length,2);
+  assert.equal(JSON.parse(ctx.rows('bookingNotices').at(-1).outstandingJson).rows.length,2);
+});
+test('bulk edits snapshot every changed booking after the whole batch, including dates beyond one year',async()=>{
+  const startAt=Date.now()+800*86400000;
+  const first=booking({_id:'one',occurrences:undefined,startAt,endAt:startAt+3600000});
+  const second=booking({_id:'two',occurrences:undefined,startAt:startAt+86400000,endAt:startAt+86400000+3600000});
+  const ctx=context({bookings:[first,second]});
+  await bookings.saveTableEdits.handler(ctx,{clientRequestId:'batch-snapshot',notifySubmitter:true,edits:[first,second].map(b=>({bookingId:b._id,expectedRevision:1,requesterName:b.requesterName,requesterEmail:b.requesterEmail,eventName:`Updated ${b._id}`,responseEdits:[]}))});
+  assert.equal(ctx.rows('bookingNotices').length,2);
+  for(const notice of ctx.rows('bookingNotices'))assert.deepEqual(JSON.parse(notice.outstandingJson).rows.map(row=>row.title),['Updated one','Updated two']);
+});
+test('successful full deletion snapshot excludes deleted series and preserves other bookings',async()=>{
+  const startAt=Date.now()+3*86400000;
+  const ctx=context({bookings:[booking({deletionToken:'lease',deletionLeaseExpiresAt:Date.now()+60000}),booking({_id:'survivor',eventName:'Retained',startAt,endAt:startAt+3600000,occurrences:undefined})]});
+  await bookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'lease',notifySubmitter:true});
+  assert.deepEqual(JSON.parse(ctx.rows('bookingNotices')[0].outstandingJson).rows.map(row=>row.title),['Retained']);
+});
+test('delayed and retried notices send the saved table without querying changed live bookings',async()=>gmail(async sent=>{
+  const startAt=Date.now()+800*86400000;
+  const before=booking({occurrences:undefined,startAt,endAt:startAt+3600000});
+  const after={...before,eventName:'SAVED-STATE'};const ctx=context({bookings:[after]});
+  await queueBookingNotice(ctx,before,after,'edited');const noticeId=ctx.rows('bookingNotices')[0]._id;
+  await ctx.db.patch('booking',{eventName:'LATER-STATE'});
+  ctx.runQuery=async()=>{throw Error('Must not read live state');};
+  ctx.runMutation=async(name,args)=>name==='claim'?notices.claim.handler(ctx,args):notices.finish.handler(ctx,args);
+  // Simulate a failed previous send before retrying the durable notice.
+  await notices.claim.handler(ctx,{noticeId,token:'failed'});
+  await notices.finish.handler(ctx,{noticeId,token:'failed',error:'Temporary Gmail failure'});
+  await emails.sendBookingNotice.handler(ctx,{noticeId});
+  assert.equal(sent.length,1);assert.match(sent[0],/Snapshot when your change was saved/);assert.doesNotMatch(sent[0],/LATER-STATE/);
+  assert.ok(sent[0].split('SAVED-STATE').length>=3);assert.equal((await ctx.db.get(noticeId)).status,'sent');
+}));
+const calendar=await import('../convex/lib/bookingCalendar.ts');
+test('calendar grid and month navigation handle leap years and year boundaries',()=>{
+  assert.equal(calendar.shiftMonth('2026-12',1),'2027-01');assert.equal(calendar.shiftMonth('2026-01',-1),'2025-12');
+  const days=calendar.monthDays('2024-02');assert.equal(days.length,42);assert.equal(new Date(days[0]).getUTCDay(),0);assert.ok(days.includes('2024-02-29'));assert.equal(new Set(days).size,42);
+});
+test('calendar day membership includes multi-day meetings, excludes exclusive midnight end, and respects venue timezone',()=>{
+  const rows=rules.submitterMeetings(booking({occurrences:undefined,startAt:Date.parse('2026-09-17T15:00:00Z'),endAt:Date.parse('2026-09-18T16:00:00Z')}));
+  assert.equal(calendar.meetingsOnDay(rows,'2026-09-17','Asia/Singapore').length,1);
+  assert.equal(calendar.meetingsOnDay(rows,'2026-09-18','Asia/Singapore').length,1);
+  assert.equal(calendar.meetingsOnDay(rows,'2026-09-19','Asia/Singapore').length,0);
+});
+
+test('whole-series edit replaces earlier title exceptions and a later single cancellation disappears from both views',async()=>{
+  const base=Date.now()+20*86400000;
+  const b=booking({startAt:base,endAt:base+3600000,occurrences:[0,1,2].map(sequence=>({sequence,startAt:base+sequence*7*86400000,endAt:base+sequence*7*86400000+3600000,details:{eventName:'Old exception'}}))});
+  const ctx=context({bookings:[b]});
+  await bookings.edit.handler(ctx,{...b,bookingId:b._id,expectedRevision:1,editScope:'series',eventName:'New entire series',notifySubmitter:true});
+  let current=await ctx.db.get(b._id);
+  assert.ok(rules.submitterMeetings(current).every(row=>row.title==='New entire series'));
+  const removedDay=rules.dateKey(current.occurrences[1].startAt,'Asia/Singapore');
+  await bookings.removeOccurrences.handler(ctx,{bookingId:b._id,expectedRevision:current.revision,scope:'occurrence',occurrenceSequence:current.occurrences[1].sequence,notifySubmitter:true});
+  current=await ctx.db.get(b._id);
+  const rows=rules.submitterMeetings(current);
+  assert.equal(rows.length,2);assert.equal(calendar.meetingsOnDay(rows,removedDay,'Asia/Singapore').length,0);
+  assert.equal(JSON.parse(ctx.rows('bookingNotices').at(-1).outstandingJson).rows.length,2);
+});
+test('legacy queued notices without a snapshot still deliver using a clearly labelled send-time table',async()=>gmail(async sent=>{
+  const ctx=context();await queueBookingNotice(ctx,booking(),null,'deleted');const noticeId=ctx.rows('bookingNotices')[0]._id;
+  await ctx.db.patch(noticeId,{outstandingJson:undefined});
+  ctx.runMutation=async(name,args)=>name==='claim'?notices.claim.handler(ctx,args):notices.finish.handler(ctx,args);
+  ctx.runQuery=async()=>({page:[],isDone:true,continueCursor:'',timezone:'Asia/Singapore'});
+  await emails.sendBookingNotice.handler(ctx,{noticeId});assert.equal(sent.length,1);assert.match(sent[0],/Snapshot at email sending time/);
 }));

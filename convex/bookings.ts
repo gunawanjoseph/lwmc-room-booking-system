@@ -1799,6 +1799,7 @@ export const saveTableEdits = mutation({
     }
 
     const now = Date.now();
+    const noticeBookings: Doc<"bookings">[] = [];
     for (const change of planned) {
       const beforeNotice = args.notifySubmitter ? await ctx.db.get(change.bookingId) : null;
       const newRevision = change.previousRevision + 1;
@@ -1839,7 +1840,7 @@ export const saveTableEdits = mutation({
         sheetSyncLeaseToken: undefined,
         sheetSyncLeaseExpiresAt: undefined,
       });
-      if (beforeNotice) await queueBookingNotice(ctx,beforeNotice,(await ctx.db.get(change.bookingId))!,"edited");
+      if (beforeNotice) noticeBookings.push(beforeNotice);
       await writeAuditLog(ctx, {
         level: "info",
         category: "booking",
@@ -1878,6 +1879,9 @@ export const saveTableEdits = mutation({
       }
     }
 
+    for (const before of noticeBookings) {
+      await queueBookingNotice(ctx,before,(await ctx.db.get(before._id))!,"edited");
+    }
     return { updated: planned.length };
   },
 });

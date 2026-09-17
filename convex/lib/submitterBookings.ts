@@ -16,10 +16,7 @@ export function dateKey(timestamp: number, timezone: string): string {
 }
 export function bookingWindow(now: number, timezone = "Asia/Singapore") {
   const today = dateKey(now,timezone);
-  const [year,month,day] = today.split("-").map(Number);
-  const lastDay = new Date(Date.UTC(year+1,month,0)).getUTCDate();
-  const until = `${year+1}-${String(month).padStart(2,"0")}-${String(Math.min(day,lastDay)).padStart(2,"0")}`;
-  return {today,until,timezone};
+  return {today,timezone};
 }
 export function submitterMeetings(booking: SubmitterBooking): SubmitterMeeting[] {
   const occurrences: NonNullable<SubmitterBooking["occurrences"]> = booking.occurrences ?? [{sequence:0,startAt:booking.startAt,endAt:booking.endAt}];
@@ -31,13 +28,13 @@ export function submitterMeetings(booking: SubmitterBooking): SubmitterMeeting[]
   }));
 }
 export function filterMeetings(rows: SubmitterMeeting[], filter: BookingFilter, now: number, timezone: string): SubmitterMeeting[] {
-  const {today,until}=bookingWindow(now,timezone);
+  const {today}=bookingWindow(now,timezone);
   return rows.filter(row=>{
     if(filter==="all")return true;
     if(filter==="pending")return row.status==="pending";
     const day=dateKey(row.startAt,timezone);
     if(filter==="past")return day<today;
-    return (row.status==="pending"||row.status==="approved")&&day>=today&&day<=until;
+    return (row.status==="pending"||row.status==="approved")&&day>=today;
   });
 }
 export function sortMeetings(rows: SubmitterMeeting[], sort: "booking"|"submitted", direction: "asc"|"desc") {

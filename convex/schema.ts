@@ -107,6 +107,7 @@ export const jotformResponseValidator = v.object({
 export default defineSchema({
   bookingNotices: defineTable({
     bookingReference:v.string(),recipientEmail:v.string(),kind:v.union(v.literal("edited"),v.literal("deleted")),
+    outstandingJson:v.optional(v.string()),
     scope:v.string(),detailChanges:v.string(),beforeJson:v.string(),afterJson:v.string(),calendarPending:v.boolean(),
     status:v.union(v.literal("pending"),v.literal("sending"),v.literal("sent"),v.literal("failed")),
     attempts:v.number(),token:v.optional(v.string()),leaseExpiresAt:v.optional(v.number()),error:v.optional(v.string()),createdAt:v.number(),updatedAt:v.number(),

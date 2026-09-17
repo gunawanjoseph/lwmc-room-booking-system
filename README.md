@@ -603,9 +603,8 @@ Public users do not gain any administrator permissions.
 
 Views and ordering:
 
-- **Outstanding:** pending or approved meetings starting from today through the
-  same calendar date next year, inclusive, using `BOOKING_TIME_ZONE` (default
-  Asia/Singapore). February 29 anniversaries clamp to February 28. Rejected and
+- **Outstanding:** pending or approved meetings starting from today with no future cutoff,
+  using `BOOKING_TIME_ZONE` (default Asia/Singapore). Rejected and
   unavailable requests are excluded.
 - **Pending:** all pending requests, including older requests still awaiting a
   decision. **All bookings:** every retained booking, regardless of status/date.
@@ -636,8 +635,12 @@ edit/deletion notification ends with a table of that recipient's outstanding
 meetings and a `/my-bookings` link. Both HTML and plain-text versions include the
 schedule. Email workers read all indexed pages for that recipient and apply the
 same outstanding-date/status rules as the lookup. Empty schedules show an explicit
-no-bookings message. The table is a snapshot at sending time; the link shows current
-data. Administrator approval/conflict emails, Developer alerts, and Support
+no-bookings message. Receipts and decision emails capture the table at sending
+time. New edit/deletion notices save the outstanding table transactionally when
+the change succeeds, including all changes in a bulk table edit. Retries use the
+same saved snapshot even if another edit or deletion occurs before delivery.
+Previously queued notices without snapshots retain their labelled send-time
+behavior. The link always shows current data. Administrator approval/conflict emails, Developer alerts, and Support
 conversation notifications do not receive this footer.
 
 ### Deploy and validate
@@ -649,9 +652,9 @@ normalized. No destructive migration or historical timestamp backfill is needed.
 Use the existing Clerk/Gmail configuration and application origin. No production
 configuration, deployment, or real email was changed during preparation.
 
-`npm run test:regression` passes **124 tests** (the previous 101 plus 23 submitter
+`npm run test:regression` passes **132 tests** (including repeated-edit, snapshot, and calendar
 checks). New coverage includes verified-email privacy, per-occurrence filtering,
-local midnight/year/leap boundaries, status filtering, both sorts, optional edit
+local midnight and unlimited future dates, status filtering, both sorts, optional edit
 and table-edit notices, deletion commit/lease safety, surviving deletion snapshots,
 recipient corrections, retries/recovery, HTML escaping, paginated email footers,
 and their exclusion from administrator mail. Changed TypeScript/TSX files passed
@@ -665,3 +668,44 @@ On staging, sign up as a non-admin submitter, verify a different email cannot be
 queried, exercise each filter/sort, and confirm opt-in/off emails for whole-series
 and scoped edits/removals. Confirm real Gmail messages contain the final schedule
 and that failed Calendar deletion sends no deletion-success email.
+
+
+### My bookings calendar and saved notification state
+
+Apply `lwmc-bookings-calendar-snapshots.patch` after
+`lwmc-submitter-bookings-notifications.patch`:
+
+```sh
+git apply --check lwmc-bookings-calendar-snapshots.patch
+git apply lwmc-bookings-calendar-snapshots.patch
+```
+
+Choose **Table view** or **Calendar view** in My bookings. The calendar provides
+month navigation, Today, a month picker, and a selected-day agenda with expandable
+booking details. Crowded days show three previews and a count; selecting the day
+shows every matching meeting. Multi-day events appear on each occupied date;
+midnight end times are exclusive. Times use the configured booking timezone,
+not the browser timezone. On small screens the month grid scrolls horizontally.
+Status filters apply to both views; sorting controls apply to the table.
+
+Both views subscribe to the same current database records. Repeated edits to one
+occurrence or a selected occurrence and following meetings use the latest saved
+occurrence times, rooms, and titles. Successful cancellations disappear; historical
+notification snapshots never replace the live booking view. No one-year limit
+remains in either view or submitter email footers. Only occurrences actually saved
+in RoomOps are shown; this does not generate additional recurring meetings.
+
+Deploy the optional `bookingNotices.outstandingJson` field with the functions.
+No new environment variables or dependencies are required. Snapshots include only
+the recipient's booking projection, and capture full deletion after verified
+Calendar cleanup (excluding the deleted booking). Scoped edits/cancellations can
+still await Calendar synchronization; existing pending-sync email wording remains.
+Normal Convex transaction/document limits and email-provider size limits still
+apply; removing the date cutoff does not remove those platform limits.
+
+Regression checks cover successive single/tail/whole-series edits, single/tail/full
+cancellation, complete bulk-edit snapshots, future dates beyond one year, immutable
+delayed/retried emails, legacy notice compatibility, leap-month navigation, and
+multi-day calendar membership. Browser layout and real Clerk/Gmail/Google Calendar
+integration must still be checked in staging before release; passing automated
+checks is not a guarantee of a defect-free deployment.

@@ -1,7 +1,7 @@
 import type { MutationCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
-import { submitterMeetings } from "./submitterBookings";
+import { filterMeetings, sortMeetings, submitterMeetings } from "./submitterBookings";
 import { scopedSequences } from "./recurrenceScope";
 export async function queueBookingNotice(ctx: MutationCtx, before: Doc<"bookings">, after: Doc<"bookings"> | null, kind: "edited"|"deleted", scope: "series"|"occurrence"|"following" = "series", sequence?:number) {
   const selected=scopedSequences(before.occurrences??[{sequence:0,startAt:before.startAt,endAt:before.endAt}],scope,sequence);
@@ -27,9 +27,18 @@ export async function queueBookingNotice(ctx: MutationCtx, before: Doc<"bookings
       if(oldValue!==response.value)changes.push(`${response.label}: ${oldValue??"(empty)"} → ${response.value}`);
     }
   }
+  // Read and persist the entire recipient view in the same transaction as the change.
+  // Explicit replacement also handles full deletion, whose database delete follows this call.
+  const capturedAt=Date.now();
+  const timezone=process.env.BOOKING_TIME_ZONE||"Asia/Singapore";
+  const recipientEmail=(after?.requesterEmail??before.requesterEmail).trim().toLowerCase();
+  const owned=await ctx.db.query("bookings").withIndex("by_requester_email",q=>q.eq("requesterEmail",recipientEmail)).collect();
+  const current=owned.filter(row=>row._id!==before._id);
+  if(after)current.push(after);
+  const outstandingJson=JSON.stringify({capturedAt,timezone,rows:sortMeetings(filterMeetings(current.flatMap(submitterMeetings),"outstanding",capturedAt,timezone),"booking","asc")});
   const noticeId=await ctx.db.insert("bookingNotices",{
     bookingReference:before.jotformSubmissionId,recipientEmail:(after?.requesterEmail??before.requesterEmail).trim().toLowerCase(),
-    kind,scope,detailChanges:changes.join("\n"),beforeJson:JSON.stringify(beforeRows),afterJson:JSON.stringify(afterRows),
+    kind,scope,outstandingJson,detailChanges:changes.join("\n"),beforeJson:JSON.stringify(beforeRows),afterJson:JSON.stringify(afterRows),
     calendarPending:!!after && (after.calendarSyncStatus==="creating"||after.calendarSyncStatus==="failed"),
     status:"pending",attempts:0,createdAt:Date.now(),updatedAt:Date.now(),
   });
