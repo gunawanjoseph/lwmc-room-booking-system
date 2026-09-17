@@ -29,10 +29,10 @@ export function PublicBookings() {
   const ready=approved.status==="Exhausted"&&settings;
   function reset(){setMinistries([]);setRooms([]);setVisible(50);}
   return <main className="page my-bookings-page"><header className="my-bookings-header"><Link href="/"><Brand/></Link><Link className="button button-secondary" href="/sign-in">Administrator sign in</Link></header>
-    <h1>Booking calendar</h1><p>See everyone's approved room bookings. No account or sign-in needed.</p>
+    <h1>Booking calendar</h1>
     <section className="panel my-bookings-panel">
       <div className="my-bookings-controls" aria-label="Display format">{(["calendar","table"] as const).map(value=><button className="button button-secondary" key={value} aria-pressed={view===value} onClick={()=>setView(value)}>{value==="calendar"?"Calendar view":"Table view"}</button>)}<button className="button button-secondary" onClick={reset}>Show all / reset filters</button></div>
-      <p>{!ministries.length&&!rooms.length?"All bookings (god mode) — approved across every ministry and room.":"Filtered bookings"}</p>
+      <p>{!ministries.length&&!rooms.length?"All Bookings":"Filtered Bookings"}</p>
       <div className="public-booking-filters"><FilterGroup label="Ministry" options={ministryOptions} selected={ministries} onChange={values=>{setMinistries(values);setVisible(50);}}/><FilterGroup label="Room" options={roomOptions} selected={rooms} onChange={values=>{setRooms(values);setVisible(50);}}/></div>
       <p className="public-filter-hint">Combine any filters. No ministry or room selected means all.</p>
       {!ready?<p role="status">Loading booking calendar…</p>:<><p role="status">{rows.length} matching meetings</p>{view==="calendar"?<BookingCalendar rows={rows} timezone={timezone} now={now}/>:<><div className="my-bookings-table"><table><thead><tr><th>Event</th><th>Ministry</th><th>Room</th><th>Meeting time</th><th>Status</th></tr></thead><tbody>{rows.slice(0,visible).map(row=><tr key={row.key}><td>{row.title}</td><td>{row.ministry||"Unspecified"}</td><td>{row.room}</td><td>{formatDateTime(row.startAt,timezone)}<br/>Ends {formatDateTime(row.endAt,timezone)}</td><td>{row.status}</td></tr>)}</tbody></table></div>{!rows.length&&<p>No bookings match these filters.</p>}{rows.length>visible&&<button className="button button-secondary" onClick={()=>setVisible(value=>value+50)}>Show more meetings</button>}</>}</>}
