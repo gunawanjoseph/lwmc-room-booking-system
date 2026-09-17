@@ -779,7 +779,8 @@ describe("Google Calendar network behavior", () => {
           },
         }),
       )
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 410 }));
     const ownedClient = authenticatedClient(ownedFetch);
 
     await expect(

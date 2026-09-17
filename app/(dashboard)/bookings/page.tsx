@@ -935,7 +935,7 @@ export default function BookingsPage() {
     }
     if (
       !window.confirm(
-        `Permanently delete booking ${booking.jotformSubmissionId}? RoomOps will first remove every managed Google Calendar event, then delete the Convex record. This cannot be undone.`,
+        `Permanently delete booking ${booking.jotformSubmissionId} and its ENTIRE series (including past and future meetings)? RoomOps will discover and verify removal of its managed Google Calendar events before removing the booking. This cannot be undone.`,
       )
     ) {
       return;
@@ -950,7 +950,7 @@ export default function BookingsPage() {
       });
       setPageNotice(
         result.deleted
-          ? `Booking ${booking.jotformSubmissionId} and its managed Calendar events were deleted.`
+          ? `Booking ${booking.jotformSubmissionId} and its managed Calendar events were deleted. Check room controls if the meeting was due to start or already running.`
           : "That booking was already gone.",
       );
     } catch (caught) {

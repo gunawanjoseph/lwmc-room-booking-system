@@ -22,6 +22,7 @@ import {
 } from "./lib/googleCalendar";
 import {
   managedCalendarEventsExcluding,
+  mergeManagedCalendarEvents,
   type ManagedCalendarEventReference,
 } from "./lib/bookingDeletion";
 import { partitionManagedEventsForFutureReplacement } from "./lib/bookingEdit";
@@ -673,12 +674,32 @@ export const deleteBooking = action({
       if (!deletion) return { deleted: false };
       started = true;
 
-      if (deletion.events.length > 0) {
-        await cleanupManagedEvents(
-          requiredRuntime(),
-          String(deletion.booking._id),
-          deletion.events,
-        );
+      const runtime = googleCalendarRuntimeFromEnv(process.env);
+      if (!runtime && (deletion.events.length > 0 || deletion.booking.status === "approved")) {
+        requiredRuntime();
+      }
+      if (runtime) {
+        // Search all configured calendars, plus historical calendars retained in
+        // references. Never infer ownership from a title such as "BSCF".
+        const calendarIds = [...new Set([
+          ...Object.values(runtime.venueMap).flat(),
+          ...deletion.events.map((event) => event.calendarId),
+        ])];
+        const discovered: ManagedCalendarEventReference[] = [];
+        for (const calendarId of calendarIds) {
+          discovered.push(...await runtime.client.listManagedEvents(String(args.bookingId), calendarId));
+        }
+        const events = mergeManagedCalendarEvents(discovered, deletion.events);
+        // Preserve discovered references before any irreversible external call.
+        await ctx.runMutation(internal.bookings.recordBookingDeletionTargets, {
+          bookingId: args.bookingId, deletionToken, events,
+        });
+        await cleanupManagedEvents(runtime, String(args.bookingId), events);
+        for (const calendarId of calendarIds) {
+          if ((await runtime.client.listManagedEvents(String(args.bookingId), calendarId)).length > 0) {
+            throw new Error("GOOGLE_CALENDAR_DELETE_UNVERIFIED:Managed Calendar events remain. Retry deletion.");
+          }
+        }
       }
       return (await ctx.runMutation(
         internal.bookings.completeBookingDeletion,
@@ -1095,16 +1116,20 @@ export const reconcileApprovedBooking = internalAction({
     try {
       const runtime = requiredRuntime();
       const occurrences = occurrencesForBooking(booking);
-      if (!booking.calendarEvents?.length) {
-        throw new Error(
-          "GOOGLE_CALENDAR_EVENT_REFERENCE_MISSING:This approved booking has no managed Google Calendar event.",
-        );
+      const discovered: ManagedCalendarEventReference[] = [];
+      const calendarIds = [...new Set([
+        ...Object.values(runtime.venueMap).flat(),
+        ...(booking.calendarEvents ?? []).map((event) => event.calendarId),
+        ...(booking.calendarAttemptedEvents ?? []).map((event) => event.calendarId),
+      ])];
+      for (const calendarId of calendarIds) {
+        discovered.push(...await runtime.client.listManagedEvents(String(booking._id), calendarId));
       }
       const managedEvents: Array<
         NonNullable<Booking["calendarEvents"]>[number] & {
           targetVenue: GoogleCalendarVenue;
         }
-      > = booking.calendarEvents.map((event) => {
+      > = mergeManagedCalendarEvents(discovered, booking.calendarEvents).map((event) => {
         if (!isGoogleCalendarVenue(event.targetVenue)) {
           throw new Error(
             "GOOGLE_CALENDAR_VENUE_UNKNOWN:Stored event venue is invalid.",
@@ -1117,21 +1142,8 @@ export const reconcileApprovedBooking = internalAction({
       });
       const now = Date.now();
       const futureOccurrences = occurrences.filter(
-        (occurrence) => occurrence.startAt >= now,
+        (occurrence) => occurrence.endAt > now,
       );
-      if (futureOccurrences.length === 0) {
-        await ctx.runMutation(
-          internal.bookings.recordCalendarReconcileResult,
-          {
-            bookingId: booking._id,
-            expectedRevision: args.expectedRevision,
-            syncToken: args.syncToken,
-            success: true,
-            events: managedEvents,
-          },
-        );
-        return;
-      }
       const plans = calendarEventPlans(
         booking,
         runtime,
@@ -1163,7 +1175,7 @@ export const reconcileApprovedBooking = internalAction({
           bookingId: booking._id,
           expectedRevision: args.expectedRevision,
           syncToken: args.syncToken,
-          events: replacementCandidates,
+          events: mergeManagedCalendarEvents(managedEvents, replacementCandidates),
         },
       )) as ManagedCalendarEventReference[];
       const { keep, replace } =
@@ -1176,16 +1188,14 @@ export const reconcileApprovedBooking = internalAction({
         String(booking._id),
         managedCalendarEventsExcluding(
           [...replace, ...reconciliationCandidates],
-          replacementCandidates,
+          [...keep, ...replacementCandidates],
         ),
       );
 
-      const checked = await checkBookingAvailability(
-        booking,
-        runtime,
-        futureOccurrences,
-      );
-      if (!checked.availability.available) {
+      const checked = futureOccurrences.length > 0
+        ? await checkBookingAvailability(booking, runtime, futureOccurrences)
+        : null;
+      if (checked && !checked.availability.available) {
         throw new Error(
           `GOOGLE_CALENDAR_CONFLICT_AFTER_EDIT:${conflictSummary(
             checked.targets,

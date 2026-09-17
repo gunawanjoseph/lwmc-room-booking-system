@@ -69,8 +69,9 @@ Home Assistant automation remains a later phase.
   name, purpose, and ministry edits reconcile the title and description.
   Requester email remains private to RoomOps and its notification flow.
   Room, time, recurrence, status, and approval changes stay on
-  `/bookings`, where their dedicated rules are enforced. Only pending
-  bookings may change their reservation or recurrence schedule.
+  `/bookings`, where their dedicated rules are enforced. Pending and approved
+  bookings may change their reservation or recurrence schedule; completed
+  approved occurrences are protected from reservation changes.
 - Google Calendar owns external venue-busy events. RoomOps checks those
   calendars but stores the accepted request and concrete recurrence
   occurrences in Convex.

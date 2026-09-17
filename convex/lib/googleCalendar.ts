@@ -1353,6 +1353,74 @@ export class GoogleCalendarClient {
     };
   }
 
+  /** Discover all owned events, including recurring parents and lost references. */
+  async listManagedEvents(bookingId: string, calendarId: string): Promise<Array<{
+    calendarId: string;
+    eventId: string;
+    targetVenue: GoogleCalendarVenue;
+  }>> {
+    const events: Array<{ calendarId: string; eventId: string; targetVenue: GoogleCalendarVenue }> = [];
+    const seenPages = new Set<string>();
+    let pageToken: string | undefined;
+    do {
+      const query = new URLSearchParams({
+        privateExtendedProperty: `roomopsBookingId=${bookingId}`,
+        singleEvents: "false",
+        showDeleted: "false",
+        maxResults: "2500",
+      });
+      if (pageToken) query.set("pageToken", pageToken);
+      const response = await this.request(
+        `/calendars/${encodeURIComponent(calendarId)}/events?${query}`,
+        { method: "GET" },
+      );
+      if (!response.ok) {
+        throw new Error(`GOOGLE_CALENDAR_DISCOVERY_FAILED:${await responseMessage(response)}`);
+      }
+      const payload = await response.json() as {
+        accessRole?: string;
+        nextPageToken?: string;
+        items?: Array<{
+          id?: string;
+          status?: string;
+          extendedProperties?: { private?: Record<string, string> };
+        }>;
+      };
+      // A missing event must not be confused with lost Calendar permissions.
+      if (payload.accessRole !== "writer" && payload.accessRole !== "owner") {
+        throw new Error("GOOGLE_CALENDAR_DISCOVERY_FAILED:Full write access is required to verify booking deletion.");
+      }
+      for (const event of payload.items ?? []) {
+        if (event.status === "cancelled") continue;
+        const properties = event.extendedProperties?.private;
+        if (properties?.roomopsManaged !== "true" || properties.roomopsBookingId !== bookingId ||
+            !event.id || !(GOOGLE_CALENDAR_VENUES as readonly string[]).includes(properties.roomopsTargetVenue)) {
+          throw new Error("GOOGLE_CALENDAR_DISCOVERY_FAILED:An event has incomplete or unexpected ownership metadata.");
+        }
+        events.push({ calendarId, eventId: event.id, targetVenue: properties.roomopsTargetVenue as GoogleCalendarVenue });
+      }
+      pageToken = payload.nextPageToken;
+      if (pageToken && seenPages.has(pageToken)) {
+        throw new Error("GOOGLE_CALENDAR_DISCOVERY_FAILED:Google repeated a pagination token.");
+      }
+      if (pageToken) seenPages.add(pageToken);
+    } while (pageToken);
+    return events;
+  }
+
+  private async verifyEventAbsent(calendarId: string, eventId: string): Promise<void> {
+    const response = await this.request(
+      `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+      { method: "GET" },
+    );
+    if (response.status === 404 || response.status === 410) return;
+    if (response.ok) {
+      const event = await response.json() as { id?: string; status?: string };
+      if (event.id === eventId && event.status === "cancelled") return;
+    }
+    throw new Error("GOOGLE_CALENDAR_DELETE_UNVERIFIED:The event could not be confirmed absent after deletion. Retry deletion.");
+  }
+
   /**
    * Returns false when the event was already absent, making cleanup safe to
    * retry after partial failures.
@@ -1414,11 +1482,16 @@ export class GoogleCalendarClient {
       );
     }
     const event = (await response.json()) as {
+      id?: unknown;
+      status?: unknown;
       etag?: unknown;
       extendedProperties?: {
         private?: Record<string, unknown>;
       };
     };
+    // Deleted resources may contain only id/status, without ownership or ETag.
+    // No destructive request is made for a tombstone.
+    if (event.id === input.eventId && event.status === "cancelled") return false;
     const properties = event.extendedProperties?.private;
     if (
       properties?.roomopsManaged !== "true" ||
@@ -1434,11 +1507,13 @@ export class GoogleCalendarClient {
         "GOOGLE_CALENDAR_EVENT_LOOKUP_FAILED:Google did not return an event ETag for safe cleanup.",
       );
     }
-    return await this.deleteEvent(
+    const deleted = await this.deleteEvent(
       input.calendarId,
       input.eventId,
       event.etag,
     );
+    await this.verifyEventAbsent(input.calendarId, input.eventId);
+    return deleted;
   }
 }
 

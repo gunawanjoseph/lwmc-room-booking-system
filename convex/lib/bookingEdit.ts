@@ -11,6 +11,7 @@ export type ManagedEventForEdit = {
   eventId: string;
   targetVenue: string;
   startAt?: number;
+  endAt?: number;
 };
 
 /**
@@ -89,11 +90,29 @@ export function partitionManagedEventsForFutureReplacement<
   const keep: Event[] = [];
   const replace: Event[] = [];
   for (const event of events) {
-    if (event.startAt !== undefined && event.startAt < now) {
+    if ((event.endAt !== undefined && event.endAt <= now) ||
+        (event.endAt === undefined && event.startAt !== undefined && event.startAt < now)) {
       keep.push(event);
     } else {
       replace.push(event);
     }
   }
   return { keep, replace };
+}
+
+/** Calendar reconciliation preserves history; do not silently rewrite it in DB. */
+export function completedOccurrencesUnchanged(
+  before: readonly EditableOccurrence[],
+  after: readonly EditableOccurrence[],
+  previousRoom: string,
+  nextRoom: string,
+  now: number,
+): boolean {
+  const keys = (items: readonly EditableOccurrence[], room: string) =>
+    items.filter((item) => item.endAt <= now).map((item) => JSON.stringify([
+      item.startAt, item.endAt, item.room ?? room,
+    ])).sort();
+  const previous = keys(before, previousRoom);
+  const next = keys(after, nextRoom);
+  return previous.length === next.length && previous.every((key, i) => key === next[i]);
 }

@@ -31,6 +31,7 @@ import {
 import {
   BOOKABLE_GOOGLE_CALENDAR_VENUES,
   parseGoogleCalendarVenueMap,
+  googleCalendarEnabled,
   resolveBookableVenueSelection,
   resolveVenueSelection,
 } from "./lib/googleCalendar";
@@ -53,6 +54,7 @@ import {
 import { calculateConflictOverview } from "./lib/bookingOverview";
 import {
   applyOccurrenceEdit,
+  completedOccurrencesUnchanged,
   conflictIdsAcknowledged,
   type EditableOccurrence,
 } from "./lib/bookingEdit";
@@ -1783,7 +1785,7 @@ export const saveTableEdits = mutation({
         calendarSyncAttempts: booking.calendarSyncAttempts ?? 0,
         shouldReconcileCalendar:
           booking.status === "approved" &&
-          (booking.calendarEvents?.length ?? 0) > 0 &&
+          ((booking.calendarEvents?.length ?? 0) > 0 || googleCalendarEnabled(process.env.GOOGLE_CALENDAR_ENABLED)) &&
           (requesterName !== booking.requesterName ||
             eventName !== booking.eventName ||
             purpose !== booking.purpose ||
@@ -1958,6 +1960,13 @@ async function deleteBookingRecord(
         booking.calendarEvents,
         booking.calendarAttemptedEvents,
       ).length,
+      calendarEvents: managedCalendarEventsForDeletion(
+        booking.calendarEvents, booking.calendarAttemptedEvents,
+      ),
+      room: booking.room,
+      eventName: booking.eventName,
+      startAt: booking.startAt,
+      endAt: booking.endAt,
       invalidatedEmailDecisionTokenCount: decisionTokens.length,
       cancelledEmailDeliveryCount: cancelledDeliveryCount,
       clearedBlockingConflictReferenceCount,
@@ -2066,6 +2075,26 @@ export const beginBookingDeletion = internalMutation({
         booking.calendarAttemptedEvents,
       ),
     };
+  },
+});
+
+export const recordBookingDeletionTargets = internalMutation({
+  args: {
+    bookingId: v.id("bookings"),
+    deletionToken: v.string(),
+    events: v.array(calendarEventRefValidator),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking || booking.deletionToken !== args.deletionToken ||
+        !bookingDeletionInProgress(booking, Date.now())) {
+      bookingError("BOOKING_DELETE_LEASE_LOST", "The deletion worker no longer owns this booking.");
+    }
+    await ctx.db.patch(booking._id, {
+      calendarAttemptedEvents: mergeManagedCalendarEvents(
+        booking.calendarAttemptedEvents, args.events,
+      ),
+    });
   },
 });
 
@@ -2187,49 +2216,14 @@ export const recoverBookingDeletionLease = internalMutation({
   },
 });
 
-// Compatibility for an older browser. Rows with any managed or attempted
-// Calendar reference must use googleCalendar.deleteBooking, which verifies
-// event ownership and ETags before deleting the Convex record.
+// Old clients must also use discovery and verification, even if references
+// are empty: an empty array is not proof that Google has no booking events.
 export const deleteTableRow = mutation({
-  args: {
-    bookingId: v.id("bookings"),
-    expectedRevision: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const user = await requireCapability(ctx, "table.edit");
-    const booking = await ctx.db.get(args.bookingId);
-    if (!booking) {
-      return { deleted: false };
-    }
-    requireAvailabilityCheckComplete(booking);
-    requireBookingDeletionIdle(booking);
-    if (booking.calendarSyncToken) {
-      bookingError(
-        "CALENDAR_SYNC_IN_PROGRESS",
-        "Wait for the current Google Calendar operation to finish before deleting this row.",
-      );
-    }
-    if (
-      managedCalendarEventsForDeletion(
-        booking.calendarEvents,
-        booking.calendarAttemptedEvents,
-      ).length > 0
-    ) {
-      bookingError(
-        "BOOKING_DELETE_ACTION_REQUIRED",
-        "Refresh RoomOps and delete this booking again so every managed Google Calendar event is removed safely.",
-      );
-    }
-    const previousRevision = booking.revision ?? 0;
-    if (previousRevision !== args.expectedRevision) {
-      bookingError(
-        "TABLE_DELETE_CONFLICT",
-        "This booking changed after the table loaded. Reload the table before deleting it.",
-      );
-    }
-
-    await deleteBookingRecord(ctx, booking, user.clerkUserId);
-    return { deleted: true };
+  args: { bookingId: v.id("bookings"), expectedRevision: v.number() },
+  handler: async (ctx) => {
+    await requireCapability(ctx, "table.edit");
+    bookingError("BOOKING_DELETE_ACTION_REQUIRED",
+      "Refresh RoomOps and delete this booking again so Google Calendar removal can be verified.");
   },
 });
 
@@ -3465,9 +3459,10 @@ export const recordCalendarReconcileResult = internalMutation({
     const success =
       args.success &&
       revisionMatches &&
-      (args.events?.length ?? 0) > 0;
+      args.events !== undefined &&
+      (args.events.length > 0 || !(booking.occurrences ?? [booking]).some((occurrence) => occurrence.endAt > Date.now()));
     const errorMessage = revisionMatches
-      ? args.success && (args.events?.length ?? 0) === 0
+      ? args.success && !success
         ? "Google Calendar reconciliation returned no managed event references."
         : args.errorMessage
       : "The booking revision changed during Calendar synchronization. Retry synchronization from the booking list.";
@@ -3563,11 +3558,11 @@ export const retryCalendarSync = mutation({
     requireBookingDeletionIdle(booking);
     if (
       booking.status !== "approved" ||
-      (booking.calendarEvents?.length ?? 0) === 0
+      !googleCalendarEnabled(process.env.GOOGLE_CALENDAR_ENABLED)
     ) {
       bookingError(
         "CALENDAR_RETRY_NOT_AVAILABLE",
-        "Only an approved booking with managed Google Calendar events can be resynchronized.",
+        "Only an approved booking with Google Calendar enabled can be resynchronized.",
       );
     }
     const now = Date.now();
@@ -3765,6 +3760,44 @@ function adminReservationProposal(
       "Choose the last date required for this recurring booking.",
     );
   }
+  const changesReservation =
+    normalizeRoomKey(args.room) !== booking.roomKey ||
+    args.startAt !== booking.startAt ||
+    args.endAt !== booking.endAt ||
+    changesRecurrenceDefinition;
+  if (!changesReservation && booking.occurrences?.length) {
+    return {
+      room: booking.room, roomKey: booking.roomKey,
+      startAt: booking.startAt, endAt: booking.endAt,
+      recurrenceFrequency: existingFrequency,
+      recurrenceHasEndDate: existingHasEndDate,
+      recurrenceUntilAt: booking.recurrenceUntilAt,
+      occurrences: booking.occurrences,
+      resolvedVenues: booking.resolvedVenues ?? [booking.room],
+      changesReservation: false,
+    };
+  }
+  // Shortening an existing series should remove later meetings, not regenerate
+  // the remaining dates and discard their individual time/venue exceptions.
+  if (booking.occurrences?.length && recurrenceHasEndDate &&
+      recurrenceUntilAt !== undefined && recurrenceUntilAt >= booking.startAt &&
+      recurrenceUntilAt <= Math.max(...booking.occurrences.map((item) => item.startAt)) &&
+      recurrenceFrequency === existingFrequency &&
+      normalizeRoomKey(args.room) === booking.roomKey &&
+      args.startAt === booking.startAt && args.endAt === booking.endAt) {
+    const occurrences = booking.occurrences.filter((item) => item.startAt <= recurrenceUntilAt);
+    if (occurrences.length === 0) {
+      bookingError("RECURRENCE_HAS_NO_OCCURRENCES", "Use Delete to remove the entire booking.");
+    }
+    return {
+      room: booking.room, roomKey: booking.roomKey,
+      startAt: booking.startAt, endAt: booking.endAt,
+      recurrenceFrequency, recurrenceHasEndDate, recurrenceUntilAt,
+      occurrences,
+      resolvedVenues: booking.resolvedVenues ?? [booking.room],
+      changesReservation,
+    };
+  }
   const normalized = validateBookingInput({
     ...args,
     timezone: booking.timezone,
@@ -3779,16 +3812,6 @@ function adminReservationProposal(
     }),
     recurrenceUntilAt,
   });
-  const changesReservation =
-    normalized.roomKey !== booking.roomKey ||
-    args.startAt !== booking.startAt ||
-    args.endAt !== booking.endAt ||
-    changesRecurrenceDefinition ||
-    (booking.occurrences ?? []).some(
-      (occurrence) =>
-        occurrence.room !== undefined ||
-        occurrence.resolvedVenues !== undefined,
-    );
   if (changesReservation) {
     requireBookableVenue(args.room);
   }
@@ -3844,6 +3867,14 @@ export const previewEdit = query({
       );
     }
     const proposal = adminReservationProposal(booking, args);
+    if (booking.status === "approved" && proposal.changesReservation &&
+        !completedOccurrencesUnchanged(
+          booking.occurrences ?? [{ sequence: 0, startAt: booking.startAt, endAt: booking.endAt }],
+          proposal.occurrences, booking.room, proposal.room, Date.now(),
+        )) {
+      bookingError("COMPLETED_OCCURRENCE_EDIT_DISABLED",
+        "Completed meetings are kept as history. Edit a remaining occurrence, or change the series end date without changing completed meetings.");
+    }
     if (!proposal.changesReservation) return { conflicts: [] };
     const conflicts = await findConflicts(ctx, {
       occurrences: proposal.occurrences,
@@ -3897,6 +3928,14 @@ export const edit = mutation({
     }
 
     const proposal = adminReservationProposal(booking, args);
+    if (booking.status === "approved" && proposal.changesReservation &&
+        !completedOccurrencesUnchanged(
+          booking.occurrences ?? [{ sequence: 0, startAt: booking.startAt, endAt: booking.endAt }],
+          proposal.occurrences, booking.room, proposal.room, Date.now(),
+        )) {
+      bookingError("COMPLETED_OCCURRENCE_EDIT_DISABLED",
+        "Completed meetings are kept as history. Edit a remaining occurrence, or change the series end date without changing completed meetings.");
+    }
     if (
       proposal.changesReservation &&
       booking.status !== "pending" &&
@@ -3972,7 +4011,7 @@ export const edit = mutation({
       ministry !== booking.ministry;
     const shouldReconcileCalendar =
       booking.status === "approved" &&
-      (booking.calendarEvents?.length ?? 0) > 0 &&
+      ((booking.calendarEvents?.length ?? 0) > 0 || googleCalendarEnabled(process.env.GOOGLE_CALENDAR_ENABLED)) &&
       (proposal.changesReservation || metadataChanged);
     const newRevision = previousRevision + 1;
     const nextCalendarAttempt =

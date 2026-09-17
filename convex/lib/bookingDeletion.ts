@@ -65,7 +65,8 @@ export function mergeManagedCalendarEvents(
 ): ManagedCalendarEventReference[] {
   const unique = new Map<string, ManagedCalendarEventReference>();
   for (const event of eventGroups.flatMap((events) => events ?? [])) {
-    unique.set(`${event.calendarId}\u0000${event.eventId}`, event);
+    const key = `${event.calendarId}\u0000${event.eventId}`;
+    unique.set(key, { ...unique.get(key), ...event });
   }
   return [...unique.values()];
 }
