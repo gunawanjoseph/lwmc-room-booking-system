@@ -13,9 +13,6 @@ export function validRequestId(value: string): string {
   if (!/^[a-zA-Z0-9_-]{16,100}$/.test(value)) throw new ConvexError("Invalid message request ID. Reload the composer.");
   return value;
 }
-export function canManageSupportThread(thread: {createdBy: string}, subject: string, developer: boolean): boolean {
-  return developer || thread.createdBy === subject;
-}
 export function imageContentType(bytes: Uint8Array): string | null {
   if (bytes.length >= 8 && [137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v)) return "image/png";
   if (bytes.length >= 3 && bytes[0]===255 && bytes[1]===216 && bytes[2]===255) return "image/jpeg";

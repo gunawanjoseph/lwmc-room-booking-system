@@ -5,8 +5,9 @@ const support=await import('../convex/support.ts');
 const rules=await import('../convex/lib/supportRules.ts');
 const {capabilitiesForRole,ROLES}=await import('../shared/roles.ts');
 const admin={clerkUserId:'admin',displayName:'Administrator',email:'admin@example.com',role:'booking_manager',status:'active'};
-const developer={clerkUserId:'dev',displayName:'Developer',email:'dev@example.com',role:'tech_support',status:'active'};
+const developer={clerkUserId:'dev',displayName:'Developer',email:'dev@example.com',role:'developer',status:'active'};
 const recipient={_id:'recipient',email:'dev@example.com',active:true};
+process.env.DEVELOPER_EMAIL='dev@example.com';
 let sequence=0;
 const requestId=()=>`request-${String(++sequence).padStart(16,'0')}`;
 function actor(user=admin){globalThis.__roomopsActor=user;}
@@ -34,9 +35,10 @@ function context(initial={}) {
   };
   return {db,jobs,rows,storage:{delete:async id=>jobs.push(["delete",id])},scheduler:{runAfter:async(...args)=>jobs.push(args)}};
 }
-test('technical support role has only support permissions; all active admin roles can view',()=>{
-  assert.deepEqual(capabilitiesForRole('tech_support'),['support.view','support.develop']);
-  for(const role of ROLES)assert.ok(capabilitiesForRole(role).includes('support.view'));
+test('developer has full permissions; the legacy role grants none',()=>{
+  assert.deepEqual(capabilitiesForRole('developer'),capabilitiesForRole('head_admin'));
+  assert.deepEqual(capabilitiesForRole('tech_support'),[]);
+  for(const role of ROLES.filter(r=>r!=='tech_support'))assert.ok(capabilitiesForRole(role).includes('support.view'));
 });
 test('report saves initial message and queues technical recipients immediately',async()=>{
   const ctx=fixture();const id=await report(ctx);
@@ -84,10 +86,12 @@ test('reporter can solve; reply reopens with a newer revision',async()=>{
   await support.reply.handler(ctx,{threadId:id,body:'Still broken',attachmentIds:[],requestId:requestId()});
   assert.equal((await ctx.db.get(id)).status,'open');assert.equal((await ctx.db.get(id)).revision,2);
 });
-test('another admin cannot change severity or resolve someone else’s report',async()=>{
+test('another active admin can resolve and reopen someone else’s report',async()=>{
   const ctx=fixture(),id=await report(ctx);actor({...admin,clerkUserId:'other'});
-  await assert.rejects(support.update.handler(ctx,{threadId:id,expectedRevision:0,status:'solved',severity:'low',requestId:requestId()}));
-  assert.equal((await ctx.db.get(id)).revision,0);
+  await support.update.handler(ctx,{threadId:id,expectedRevision:0,status:'solved',severity:'low',requestId:requestId()});
+  assert.equal((await ctx.db.get(id)).status,'solved');
+  await support.update.handler(ctx,{threadId:id,expectedRevision:1,status:'open',severity:'low',requestId:requestId()});
+  assert.equal((await ctx.db.get(id)).status,'open');
 });
 test('developer can triage; stale status edits fail without adding a message',async()=>{
   const ctx=fixture(),id=await report(ctx);actor(developer);
@@ -135,9 +139,9 @@ test('notification lease excludes concurrent workers and ignores stale completio
   await support.finishDelivery.handler(ctx,{deliveryId,token:'two'});assert.equal((await ctx.db.get(deliveryId)).status,'sending');
   await support.finishDelivery.handler(ctx,{deliveryId,token:'one'});assert.equal((await ctx.db.get(deliveryId)).status,'sent');
 });
-test('disabled technical recipients and revoked admins are cancelled before sending',async()=>{
-  const ctx=fixture(),id=await report(ctx);await ctx.db.patch('recipient',{active:false});
-  const first=ctx.rows('supportDeliveries')[0]._id;assert.equal(await support.claimDelivery.handler(ctx,{deliveryId:first,token:'a'}),null);assert.equal((await ctx.db.get(first)).status,'cancelled');
+test('changed developer address and revoked admins are cancelled before sending',async()=>{
+  const ctx=fixture(),id=await report(ctx);process.env.DEVELOPER_EMAIL='new@example.com';
+  const first=ctx.rows('supportDeliveries')[0]._id;assert.equal(await support.claimDelivery.handler(ctx,{deliveryId:first,token:'a'}),null);assert.equal((await ctx.db.get(first)).status,'cancelled');process.env.DEVELOPER_EMAIL='dev@example.com';
   actor(developer);await support.reply.handler(ctx,{threadId:id,body:'Fix',attachmentIds:[],requestId:requestId()});await ctx.db.patch('u-admin',{status:'removed'});
   const second=ctx.rows('supportDeliveries')[1]._id;assert.equal(await support.claimDelivery.handler(ctx,{deliveryId:second,token:'b'}),null);assert.equal((await ctx.db.get(second)).status,'cancelled');
 });
@@ -175,8 +179,8 @@ test('real authorization denies anonymous, removed, and unconfigured head accoun
   const before=process.env.HEAD_ADMIN_CLERK_USER_ID;process.env.HEAD_ADMIN_CLERK_USER_ID='different-head';
   try{await ctx.db.patch('u-admin',{status:'active',role:'head_admin'});await assert.rejects(realAuth.requireCapability(ctx,'support.view'));}finally{if(before===undefined)delete process.env.HEAD_ADMIN_CLERK_USER_ID;else process.env.HEAD_ADMIN_CLERK_USER_ID=before;}
 });
-test('real authorization permits developer support but rejects booking mutation permissions',async()=>{
-  const ctx=fixture();ctx.auth={getUserIdentity:async()=>({subject:'dev'})};assert.equal((await realAuth.requireCapability(ctx,'support.develop')).role,'tech_support');await assert.rejects(realAuth.requireCapability(ctx,'bookings.edit'));
+test('real authorization permits developer support and booking mutation permissions',async()=>{
+  const ctx=fixture();ctx.auth={getUserIdentity:async()=>({subject:'dev',email:'dev@example.com',emailVerified:true})};assert.equal((await realAuth.requireCapability(ctx,'support.develop')).role,'developer');assert.equal((await realAuth.requireCapability(ctx,'bookings.edit')).role,'developer');
 });
 await import('../convex/http.ts');
 function route(method){return globalThis.__roomopsRoutes.find(r=>r.path==='/support/image'&&r.method===method).handler;}

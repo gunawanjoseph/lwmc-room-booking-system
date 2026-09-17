@@ -2,12 +2,13 @@ import { ConvexError } from "convex/values";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
 import type { Capability } from "../../shared/roles";
+import { isDeveloperEmail, isDeveloperIdentity } from "./developerIdentity";
 import { capabilitiesForRole } from "../../shared/roles";
 
 type DatabaseCtx = QueryCtx | MutationCtx;
 type AuthorizationUser = Pick<
   Doc<"users">,
-  "clerkUserId" | "identitySubject" | "role" | "status"
+  "clerkUserId" | "identitySubject" | "role" | "status" | "email"
 >;
 
 export type NormalizedUser = Doc<"users"> & {
@@ -88,7 +89,7 @@ export function isConfiguredHeadAdmin(
 ): boolean {
   return (
     user.role === "head_admin" &&
-    normalizedSubject(user) === configuredHeadAdminId()
+    normalizedSubject(user) === process.env.HEAD_ADMIN_CLERK_USER_ID?.trim()
   );
 }
 
@@ -99,6 +100,8 @@ export function effectiveCapabilities(
   if (user.role === "head_admin" && !isConfiguredHeadAdmin(user)) {
     return [];
   }
+  if (user.role === "tech_support") return [];
+  if (user.role === "developer" && !isDeveloperEmail(user.email)) return [];
   return capabilitiesForRole(user.role);
 }
 
@@ -181,33 +184,31 @@ export async function userBySubject(
   return user ? normalizeUser(user) : null;
 }
 
-export async function requireActiveUser(
-  ctx: DatabaseCtx,
-): Promise<NormalizedUser> {
-  const { subject } = await requireIdentity(ctx);
+/** Developer elevation is based on the current verified JWT, never a stored email alone. */
+export async function sessionUser(ctx: DatabaseCtx): Promise<NormalizedUser | null> {
+  const { identity, subject } = await requireIdentity(ctx);
   const user = await userBySubject(ctx, subject);
-
-  if (!user) {
-    authError(
-      "REGISTRATION_REQUIRED",
-      "Complete the administrator registration form first.",
-    );
+  if (!user) return null;
+  if (isDeveloperIdentity(identity)) {
+    return { ...user, email: String(identity.email).trim().toLowerCase(), role: "developer", status: "active" };
   }
+  if (user.role === "developer" || user.role === "tech_support") {
+    return { ...user, status: "removed" };
+  }
+  return user;
+}
 
+export async function requireActiveUser(ctx: DatabaseCtx): Promise<NormalizedUser> {
+  const user = await sessionUser(ctx);
+  if (!user) authError("REGISTRATION_REQUIRED", "Complete your account registration first.");
   if (user.status !== "active") {
-    authError(
-      "ACCOUNT_NOT_ACTIVE",
-      "Your administrator account is not active.",
-    );
+    authError("ACCOUNT_NOT_ACTIVE", user.role === "developer" || user.role === "tech_support"
+      ? "Developer access requires the current verified DEVELOPER_EMAIL."
+      : "Your administrator account is not active.");
   }
-
   if (user.role === "head_admin" && !isConfiguredHeadAdmin(user)) {
-    authError(
-      "HEAD_ADMIN_ACCESS_REVOKED",
-      "The configured Head Administrator has changed. This former Head Administrator account no longer has access.",
-    );
+    authError("HEAD_ADMIN_ACCESS_REVOKED", "The configured Head Administrator has changed.");
   }
-
   return user;
 }
 
@@ -225,14 +226,15 @@ export async function requireCapability(
   return user;
 }
 
+/** Privileged administration gate; legacy name retained for existing callers. */
 export async function requireHeadAdmin(
   ctx: DatabaseCtx,
 ): Promise<NormalizedUser> {
   const user = await requireActiveUser(ctx);
-  if (!isConfiguredHeadAdmin(user)) {
+  if (user.role !== "developer" && !isConfiguredHeadAdmin(user)) {
     authError(
       "HEAD_ADMIN_REQUIRED",
-      "Only the configured Head Administrator can perform this action.",
+      "Only the configured Head Administrator or Developer can perform this action.",
     );
   }
   return user;

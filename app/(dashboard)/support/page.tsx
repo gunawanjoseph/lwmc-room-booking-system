@@ -129,7 +129,7 @@ function Conversation({ id, developer }: { id: Id<"supportThreads">; developer: 
     {messages.status === "CanLoadMore" && <button className="button button-secondary" onClick={() => messages.loadMore(30)}>Load older messages</button>}
     {messages.status === "LoadingFirstPage" && <p role="status">Loading messages…</p>}
     <div className="support-messages">{[...messages.results].reverse().map(message => <article className={`support-message ${message.system ? "support-system" : ""}`} key={message._id}>
-      <header><strong>{message.authorName}</strong><span>{message.authorKind === "developer" ? "Technical Support" : "Administrator"} · {new Date(message.createdAt).toLocaleString()}</span></header>
+      <header><strong>{message.authorName}</strong><span>{message.authorKind === "developer" ? "Developer" : "Administrator"} · {new Date(message.createdAt).toLocaleString()}</span></header>
       <p className="support-body">{message.body}</p>
       <div className="support-images">{message.attachments.map(file => file && <PrivateImage key={file._id} id={file._id} name={file.name} />)}</div>
       <small>Email: {message.emailStatus.sent} sent · {message.emailStatus.pending} queued · {message.emailStatus.failed} failed{message.emailStatus.cancelled > 0 && ` · ${message.emailStatus.cancelled} cancelled`}</small>
@@ -156,9 +156,9 @@ function Workspace() {
   const list = usePaginatedQuery(api.support.list, { kind, status: kind === "report" && filter !== "all" ? filter : undefined }, { initialNumItems: 25 });
   const developer = profile?.capabilities.includes("support.develop") ?? false;
   return <div className="support-workspace">
-    <header className="panel"><span className="panel-kicker">SUPPORT & UPDATES</span><h1>A shared place to resolve problems</h1><p>Report a bug, follow up with Technical Support, and see the latest changes. Conversations and pictures are visible to all active administrators and support developers.</p>
+    <header className="panel"><span className="panel-kicker">SUPPORT & UPDATES</span><h1>A shared place to resolve problems</h1><p>Report a bug, follow up with Developer, and see the latest changes. Conversations and pictures are visible to all active administrators and the developer.</p>
       <div className="support-toolbar"><button className="button button-primary" disabled={composingBusy} onClick={() => { setCompose("report"); setTitle(""); }}>Report a bug</button>{developer && <button className="button button-secondary" disabled={composingBusy} onClick={() => { setCompose("announcement"); setTitle(""); }}>Publish an update</button>}</div>
-      {configuration && !configuration.hasRecipients && <p role="status" className="form-error">No tech-support email recipients are enabled. Reports are saved here, but a Head Administrator must configure recipients in Integrations to enable email notifications.</p>}
+      {configuration && !configuration.hasRecipients && <p role="status" className="form-error">DEVELOPER_EMAIL is missing or invalid in Convex. Reports are saved here, but developer email notifications are disabled until deployment configuration is corrected.</p>}
     </header>
     {compose && <section className="panel"><h2>{compose === "report" ? "New bug report" : "New developer update"}</h2><Composer key={compose} draftKey={JSON.stringify([title, severity, category])} onBusy={setComposingBusy} label={compose === "report" ? "Submit report" : "Publish update"} onSend={async (body, attachmentIds, requestId) => {
       const id = await create({ kind: compose, title, severity, announcementType: compose === "announcement" ? category : undefined, body, attachmentIds, requestId });

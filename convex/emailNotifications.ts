@@ -2187,13 +2187,13 @@ export const sendTechAlert = internalAction({
       const log = delivery.log;
       const message = log.message.replace(/https?:\/\/\S+/gi, "[link omitted]")
         .replace(/(token|secret|password|authorization|api[_ -]?key)\s*[:=]\s*\S+/gi, "$1=[redacted]").slice(0, 1500);
-      const text = ["RoomOps technical support alert", `Severity: ${log.level}`,
+      const text = ["RoomOps developer alert", `Severity: ${log.level}`,
         `Category: ${log.category}`, `Action: ${log.action}`, `Time: ${new Date(log.createdAt).toISOString()}`,
         `Log ID: ${log._id}`, "", message, "", `Review: ${configuration.appBaseUrl}/logs`].join("\n");
       await sendGmail({ to: delivery.email, subject: `[RoomOps ${log.level.toUpperCase()}] ${log.action}`,
         text, html: htmlFromText(text), messageKey: `tech-alert-${args.deliveryId}` });
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : "Technical support email failed.";
+      errorMessage = error instanceof Error ? error.message : "Developer email failed.";
     }
     await ctx.runMutation(internal.techSupport.finish, { ...args, token, error: errorMessage });
   },

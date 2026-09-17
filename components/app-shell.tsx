@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { useConvexAuth, useQuery } from "convex/react";
 import {
@@ -296,7 +296,10 @@ function LoadingShell() {
 }
 
 function InactiveAccount({ user }: { user: CurrentUser }) {
-  const copy = {
+  const copy = user.role === "developer" || user.role === "tech_support" ? {
+    title: "Developer access is not active",
+    text: "Sign in using the verified email configured as DEVELOPER_EMAIL in Convex. This account cannot be activated by the Head Administrator.",
+  } : {
     pending: {
       title: "Your access request is being reviewed",
       text: "The Head Administrator needs to approve your account and assign a role before you can enter the workspace.",
@@ -372,7 +375,6 @@ function ForbiddenRoute({ home = "/home" }: { home?: string }) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const profile = useQuery(
     api.users.me,
@@ -382,11 +384,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     | null
     | undefined;
   const [mobileOpen, setMobileOpen] = useState(false);
-  useEffect(() => {
-    if (pathname === "/home" && profile?.status === "active" && profile.role === "tech_support") {
-      router.replace("/support");
-    }
-  }, [pathname, profile?.status, profile?.role, router]);
 
   if (authLoading || !isAuthenticated || profile === undefined) {
     return <LoadingShell />;
@@ -435,7 +432,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     routeCapability &&
     !profile.capabilities.includes(routeCapability)
   ) {
-    return <ForbiddenRoute home={profile.role === "tech_support" ? "/support" : "/home"} />;
+    return <ForbiddenRoute />;
   }
 
   return (

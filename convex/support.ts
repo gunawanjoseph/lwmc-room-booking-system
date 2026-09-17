@@ -3,20 +3,20 @@ import { ConvexError, v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query, type MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
+import { configuredDeveloperEmail, isDeveloperEmail } from "./lib/developerIdentity";
 import { effectiveCapabilities, normalizeUser, requireCapability, userBySubject } from "./lib/auth";
-import { canManageSupportThread, MAX_SUPPORT_ATTACHMENTS, MAX_SUPPORT_IMAGE_BYTES, SUPPORT_IMAGE_TYPES, supportAttachmentName, supportText, validRequestId } from "./lib/supportRules";
+import { MAX_SUPPORT_ATTACHMENTS, MAX_SUPPORT_IMAGE_BYTES, SUPPORT_IMAGE_TYPES, supportAttachmentName, supportText, validRequestId } from "./lib/supportRules";
 
 type Actor = Awaited<ReturnType<typeof requireCapability>>;
 const severity = v.union(v.literal("low"),v.literal("medium"),v.literal("high"),v.literal("critical"));
 const announcementType = v.union(v.literal("feature"),v.literal("change"),v.literal("bug_known"),v.literal("bug_fixed"));
-const isDeveloper = (actor: Actor) => effectiveCapabilities(actor).includes("support.develop");
 const now = () => Date.now();
 
 async function queueNotifications(ctx: MutationCtx, message: Doc<"supportMessages">, thread: Doc<"supportThreads">, developer: boolean, broadcast: boolean) {
   const targets = new Map<string, {email: string; recipientKind:"technical"|"admin"; recipientSubject?:string}>();
   if (!developer) {
-    const recipients = await ctx.db.query("techSupportEmails").withIndex("by_active",q=>q.eq("active",true)).take(20);
-    for (const recipient of recipients) targets.set(recipient.email,{email:recipient.email,recipientKind:"technical"});
+    const email = configuredDeveloperEmail();
+    if (email) targets.set(email, {email, recipientKind:"technical"});
   } else {
     // Announcements notify all active booking administrators. Replies notify
     // the administrators who have participated in this conversation.
@@ -24,7 +24,7 @@ async function queueNotifications(ctx: MutationCtx, message: Doc<"supportMessage
       ? (await ctx.db.query("users").withIndex("by_status",q=>q.eq("status","active")).collect()).map(normalizeUser)
       : (await Promise.all((await ctx.db.query("supportParticipants").withIndex("by_thread",q=>q.eq("threadId",thread._id)).collect()).map(p=>userBySubject(ctx,p.userSubject)))).filter((u): u is NonNullable<typeof u> => u !== null);
     for (const user of candidates) {
-      if (user.clerkUserId !== message.authorId && effectiveCapabilities(user).includes("support.view") && user.role !== "tech_support") {
+      if (user.clerkUserId !== message.authorId && effectiveCapabilities(user).includes("support.view") && user.role !== "developer" && !isDeveloperEmail(user.email)) {
         targets.set(user.email,{email:user.email,recipientKind:"admin",recipientSubject:user.clerkUserId});
       }
     }
@@ -35,7 +35,7 @@ async function queueNotifications(ctx: MutationCtx, message: Doc<"supportMessage
   }
 }
 async function saveMessage(ctx: MutationCtx, actor: Actor, thread: Doc<"supportThreads">, body: string, attachmentIds: Id<"supportAttachments">[], requestId: string, system = false, createdAt = now(), broadcast = false) {
-  const developer = actor.role === "tech_support" || broadcast;
+  const developer = actor.role === "developer" || broadcast;
   const unique = [...new Set(attachmentIds)];
   if (unique.length !== attachmentIds.length || unique.length > MAX_SUPPORT_ATTACHMENTS) throw new ConvexError("Attach up to five different pictures.");
   body = supportText(body,8000,unique.length===0);
@@ -62,10 +62,10 @@ export const list = query({args:{kind:v.union(v.literal("report"),v.literal("ann
   return cursor.paginate(args.paginationOpts);
 }});
 export const get = query({args:{threadId:v.id("supportThreads")},handler:async(ctx,args)=>{
-  const actor=await requireCapability(ctx,"support.view");
+  await requireCapability(ctx,"support.view");
   const thread=await ctx.db.get(args.threadId);
   if(!thread)return null;
-  return {...thread,canManage:canManageSupportThread(thread,actor.clerkUserId,isDeveloper(actor))};
+  return {...thread,canManage:true};
 }});
 export const messages = query({args:{threadId:v.id("supportThreads"),paginationOpts:paginationOptsValidator},handler:async(ctx,args)=>{
   await requireCapability(ctx,"support.view");
@@ -120,7 +120,7 @@ export const update = mutation({args:{threadId:v.id("supportThreads"),expectedRe
   const existing = await existingRequest(ctx,actor.clerkUserId,args.requestId);
   if(existing){if(existing.threadId!==args.threadId||!existing.system)throw new ConvexError("Request already used.");return;}
   const thread=await ctx.db.get(args.threadId);
-  if(!thread||!canManageSupportThread(thread,actor.clerkUserId,isDeveloper(actor)))throw new ConvexError("Only the reporter or a developer can change this conversation.");
+  if(!thread)throw new ConvexError("Conversation not found.");
   if(thread.revision!==args.expectedRevision)throw new ConvexError("This conversation changed. Review its latest status and try again.");
   if(thread.status===args.status&&thread.severity===args.severity)return;
   const body=`Status: ${thread.status} → ${args.status}. Severity: ${thread.severity} → ${args.severity}.`;
@@ -156,7 +156,7 @@ export const cleanAttachment = internalMutation({args:{attachmentId:v.id("suppor
 
 export const configuration = query({args:{},handler:async ctx=>{
   await requireCapability(ctx,"support.view");
-  return {hasRecipients:(await ctx.db.query("techSupportEmails").withIndex("by_active",q=>q.eq("active",true)).take(1)).length>0};
+  return {hasRecipients:configuredDeveloperEmail() !== null};
 }});
 
 const DELIVERY_LEASE_MS = 31 * 60_000;
@@ -170,10 +170,10 @@ export const claimDelivery = internalMutation({
     const thread=message?await ctx.db.get(message.threadId):null;
     let allowed=false;
     if(delivery.recipientKind==="technical"){
-      allowed=(await ctx.db.query("techSupportEmails").withIndex("by_email",q=>q.eq("email",delivery.email)).unique())?.active===true;
+      allowed=delivery.email === configuredDeveloperEmail();
     } else if(delivery.recipientSubject){
       const user=await userBySubject(ctx,delivery.recipientSubject);
-      allowed=Boolean(user&&user.email===delivery.email&&effectiveCapabilities(user).includes("support.view")&&user.role!=="tech_support");
+      allowed=Boolean(user&&user.email===delivery.email&&effectiveCapabilities(user).includes("support.view")&&user.role!=="developer" && !isDeveloperEmail(user.email));
     }
     if(!allowed||!message||!thread){await ctx.db.patch(delivery._id,{status:"cancelled",updatedAt:now()});return null;}
     if(delivery.attempts>=DELIVERY_ATTEMPTS){await ctx.db.patch(delivery._id,{status:"failed",updatedAt:now()});return null;}

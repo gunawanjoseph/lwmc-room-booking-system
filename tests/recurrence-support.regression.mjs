@@ -5,6 +5,7 @@ const {scopedSequences,editScopedOccurrences}=await import('../convex/lib/recurr
 const {writeAuditLog,needsSupportAlert}=await import('../convex/lib/auditLog.ts');
 const bookings=await import('../convex/bookings.ts');
 const support=await import('../convex/techSupport.ts');
+process.env.DEVELOPER_EMAIL='a@example.com';
 const now=Date.now();
 const occurrences=[0,1,2].map(sequence=>({sequence,startAt:now+86400000*(sequence+1),endAt:now+86400000*(sequence+1)+3600000}));
 function context(initial={}) {
@@ -90,22 +91,21 @@ test('support classification covers severities and suspicious/failure markers wi
   assert.equal(needsSupportAlert({level:'info',action:'booking_created',message:'Saved'}),false);
   assert.equal(needsSupportAlert({level:'error',action:'tech_alert_delivery_failed',message:'Failed'}),false);
 });
-test('an audit warning creates one durable immediate delivery per active recipient',async()=>{
+test('an audit warning creates one immediate developer delivery and ignores legacy recipients',async()=>{
   const ctx=context({techSupportEmails:[{_id:'r1',email:'a@example.com',active:true},{_id:'r2',email:'b@example.com',active:false},{_id:'r3',email:'c@example.com',active:true}]});
   await writeAuditLog(ctx,{level:'warning',category:'booking',action:'check_failed',actorType:'system',message:'Failed',createdAt:now});
-  assert.equal(ctx.rows('auditLogs').length,1);assert.equal(ctx.rows('techAlertDeliveries').length,2);assert.deepEqual(ctx.rows('techAlertDeliveries').map(row=>row.email),['a@example.com','c@example.com']);assert.ok(ctx.jobs.every(job=>job[0]===0&&job[1]==='sendTechAlert'));
+  assert.equal(ctx.rows('auditLogs').length,1);assert.equal(ctx.rows('techAlertDeliveries').length,1);assert.deepEqual(ctx.rows('techAlertDeliveries').map(row=>row.email),['a@example.com']);assert.ok(ctx.jobs.every(job=>job[0]===0&&job[1]==='sendTechAlert'));
 });
-test('support recipient emails are normalized and deduplicated',async()=>{
-  const ctx=context();await support.save.handler(ctx,{email:' Person@Example.COM ',active:true});await support.save.handler(ctx,{email:'person@example.com',active:true});assert.equal(ctx.rows('techSupportEmails').length,1);assert.equal(ctx.rows('techSupportEmails')[0].email,'person@example.com');
-  await assert.rejects(support.save.handler(ctx,{email:'a@example.com\nBcc: x@y.com',active:true}));
+test('app cannot change the environment-owned developer recipient',async()=>{
+  const ctx=context();await assert.rejects(support.save.handler(ctx,{email:'other@example.com',active:true}));assert.equal(ctx.rows('techSupportEmails').length,0);
 });
 function deliveryContext(extra={}) {return context({techSupportEmails:[{_id:'recipient',email:'a@example.com',active:true}],auditLogs:[{_id:'log',message:'Failed'}],techAlertDeliveries:[{_id:'delivery',logId:'log',recipientId:'recipient',email:'a@example.com',status:'pending',attempts:0,...extra}]});}
 test('delivery lease suppresses concurrent sends and success prevents replay',async()=>{
   const ctx=deliveryContext();assert.ok(await support.claim.handler(ctx,{deliveryId:'delivery',token:'a'}));assert.equal(await support.claim.handler(ctx,{deliveryId:'delivery',token:'b'}),null);
   await support.finish.handler(ctx,{deliveryId:'delivery',token:'a'});assert.equal((await ctx.db.get('delivery')).status,'sent');assert.equal(await support.claim.handler(ctx,{deliveryId:'delivery',token:'c'}),null);
 });
-test('deactivation cancels an unsent alert at worker start',async()=>{
-  const ctx=deliveryContext();await ctx.db.patch('recipient',{active:false});assert.equal(await support.claim.handler(ctx,{deliveryId:'delivery',token:'a'}),null);assert.equal((await ctx.db.get('delivery')).status,'cancelled');
+test('developer address rotation cancels an unsent alert at worker start',async()=>{
+  const ctx=deliveryContext();process.env.DEVELOPER_EMAIL='new@example.com';try{assert.equal(await support.claim.handler(ctx,{deliveryId:'delivery',token:'a'}),null);assert.equal((await ctx.db.get('delivery')).status,'cancelled');}finally{process.env.DEVELOPER_EMAIL='a@example.com';}
 });
 test('failed alert retries with backoff and exhausts without recursive emails',async()=>{
   const ctx=deliveryContext();await support.claim.handler(ctx,{deliveryId:'delivery',token:'a'});await support.finish.handler(ctx,{deliveryId:'delivery',token:'a',error:'Gmail down'});

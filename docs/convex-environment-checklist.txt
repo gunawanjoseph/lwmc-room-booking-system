@@ -12,6 +12,10 @@ CLERK_JWT_ISSUER_DOMAIN=
 # Exact matching Clerk user_... subject for the sole Head Administrator.
 HEAD_ADMIN_CLERK_USER_ID=
 
+# One verified Clerk email for full Developer access and developer notifications.
+# No administrator can assign or remove this identity through RoomOps.
+DEVELOPER_EMAIL=
+
 # Only accepted Jotform form.
 JOTFORM_FORM_ID=261740998492068
 

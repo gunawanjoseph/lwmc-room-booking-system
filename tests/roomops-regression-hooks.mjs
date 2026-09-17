@@ -10,19 +10,22 @@ const modules = {
   'luxon': 'export const DateTime = new Proxy({}, {get:()=>()=>{throw new Error("Unexpected Luxon call in dependency-free test")}});',
   server: definitions,
   api: 'const group=new Proxy({}, {get:(_,key)=>String(key)}); export const internal=new Proxy({}, {get:()=>group});',
-  auth: `import {capabilitiesForRole} from ${JSON.stringify(new URL('../shared/roles.ts',import.meta.url).href)};
+  auth: `import * as real from ${JSON.stringify(new URL('../convex/lib/auth.ts',import.meta.url).href)};
+    export const configuredHeadAdminId=real.configuredHeadAdminId, isConfiguredHeadAdmin=real.isConfiguredHeadAdmin, requireIdentity=real.requireIdentity, requireRegistrationIdentity=real.requireRegistrationIdentity, sessionUser=real.sessionUser, requireActiveUser=real.requireActiveUser;
+    import {capabilitiesForRole} from ${JSON.stringify(new URL('../shared/roles.ts',import.meta.url).href)};
     export const normalizeUser=u=>({...u,clerkUserId:u.clerkUserId??u.identitySubject,displayName:u.displayName??u.name??u.email});
     export const effectiveCapabilities=u=>u.status==='active'?capabilitiesForRole(u.role):[];
     export const requireCapability=async(ctx,cap)=>{
+      if (globalThis.__roomopsRealAuth) return real.requireCapability(ctx,cap);
       if (!('__roomopsActor' in globalThis)) return {clerkUserId:'admin'};
       const actor=globalThis.__roomopsActor;
       if(!actor||!effectiveCapabilities(actor).includes(cap))throw new Error('Access denied');
       return actor;
     };
-    export const requireHeadAdmin=requireCapability;
-    export const userBySubject=async(ctx,subject)=>{const u=await ctx.db.query('users').withIndex('by_clerk_user_id',q=>q.eq('clerkUserId',subject)).unique();return u?normalizeUser(u):null;};`,
+    export const requireHeadAdmin=async ctx=>globalThis.__roomopsRealAuth?real.requireHeadAdmin(ctx):requireCapability(ctx);
+    export const userBySubject=async(ctx,subject)=>{if(globalThis.__roomopsRealAuth)return real.userBySubject(ctx,subject);const u=await ctx.db.query('users').withIndex('by_clerk_user_id',q=>q.eq('clerkUserId',subject)).unique();return u?normalizeUser(u):null;};`,
   actionAuth: 'export const requireActionCapability=async()=>({clerkUserId:"admin"}); export const requireActionHeadAdmin=requireActionCapability;',
-  schema: 'export const calendarEventRefValidator={}, jotformResponseValidator={}, recurrenceFrequencyValidator={};',
+  schema: 'export const calendarEventRefValidator={}, jotformResponseValidator={}, recurrenceFrequencyValidator={}, nonHeadRoleValidator={};',
 };
 registerHooks({
   resolve(specifier, context, next) {

@@ -15,6 +15,7 @@ import {
   type Role,
 } from "@/shared/roles";
 import { messageFromError } from "@/lib/ui";
+import { DeveloperBootstrap } from "@/components/developer-bootstrap";
 import { Brand } from "@/components/brand";
 
 const requestableRoles = [
@@ -22,10 +23,9 @@ const requestableRoles = [
   "booking_approver",
   "sheet_editor",
   "booking_manager",
-  "tech_support",
 ] as const;
 
-export default function RegistrationPage() {
+function RegistrationForm() {
   const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const profile = useQuery(
     api.users.me,
@@ -158,4 +158,8 @@ export default function RegistrationPage() {
       </section>
     </main>
   );
+}
+
+export default function RegistrationPage() {
+  return <DeveloperBootstrap><RegistrationForm /></DeveloperBootstrap>;
 }

@@ -7,7 +7,8 @@ export const roleValidator = v.union(
   v.literal("booking_approver"),
   v.literal("sheet_editor"),
   v.literal("booking_manager"),
-  v.literal("tech_support"),
+  v.literal("tech_support"), // Retained only to read existing records.
+  v.literal("developer"),
 );
 
 export const nonHeadRoleValidator = v.union(
@@ -15,7 +16,6 @@ export const nonHeadRoleValidator = v.union(
   v.literal("booking_approver"),
   v.literal("sheet_editor"),
   v.literal("booking_manager"),
-  v.literal("tech_support"),
 );
 
 export const userStatusValidator = v.union(
@@ -135,7 +135,7 @@ export default defineSchema({
     email: v.string(), active: v.boolean(), updatedAt: v.number(), updatedBy: v.string(),
   }).index("by_email", ["email"]).index("by_active", ["active"]),
   techAlertDeliveries: defineTable({
-    logId: v.id("auditLogs"), recipientId: v.id("techSupportEmails"), email: v.string(),
+    logId: v.id("auditLogs"), recipientId: v.optional(v.id("techSupportEmails")), email: v.string(),
     status: v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed"), v.literal("cancelled")),
     attempts: v.number(), leaseToken: v.optional(v.string()), leaseExpiresAt: v.optional(v.number()),
     error: v.optional(v.string()), createdAt: v.number(), updatedAt: v.number(),
@@ -151,7 +151,7 @@ export default defineSchema({
     name: v.optional(v.string()),
     requestedAt: v.optional(v.number()),
     reason: v.optional(v.string()),
-    requestedRole: v.optional(nonHeadRoleValidator),
+    requestedRole: v.optional(v.union(nonHeadRoleValidator, v.literal("tech_support"))),
     role: roleValidator,
     status: userStatusValidator,
     createdAt: v.number(),

@@ -1,3 +1,4 @@
+import { configuredDeveloperEmail } from "./developerIdentity";
 import type { MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
@@ -15,10 +16,10 @@ export async function writeAuditLog(
 ): Promise<Id<"auditLogs">> {
   const logId = await ctx.db.insert("auditLogs", log);
   if (!needsSupportAlert(log)) return logId;
-  const recipients = await ctx.db.query("techSupportEmails").withIndex("by_active", q => q.eq("active", true)).take(20);
-  for (const recipient of recipients) {
+  const email = configuredDeveloperEmail();
+  if (email) {
     const deliveryId = await ctx.db.insert("techAlertDeliveries", {
-      logId, recipientId: recipient._id, email: recipient.email,
+      logId, email,
       status: "pending", attempts: 0, createdAt: Date.now(), updatedAt: Date.now(),
     });
     await ctx.scheduler.runAfter(0, internal.emailNotifications.sendTechAlert, { deliveryId });

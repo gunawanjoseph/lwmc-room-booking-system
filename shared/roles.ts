@@ -4,7 +4,8 @@ export const ROLES = [
   "booking_approver",
   "sheet_editor",
   "booking_manager",
-  "tech_support",
+  "developer",
+  "tech_support", // Legacy persisted role; grants no access.
 ] as const;
 
 export type Role = (typeof ROLES)[number];
@@ -27,7 +28,8 @@ export type Capability = (typeof CAPABILITIES)[number];
 
 export const ROLE_LABELS: Record<Role, string> = {
   head_admin: "Head Administrator",
-  tech_support: "Technical Support",
+  developer: "Developer",
+  tech_support: "Developer (legacy, inactive)",
   booking_viewer: "Booking Viewer",
   booking_approver: "Booking Approver",
   sheet_editor: "Data Editor",
@@ -35,7 +37,8 @@ export const ROLE_LABELS: Record<Role, string> = {
 };
 
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
-  tech_support: "Can respond to support conversations and publish updates, without access to bookings, user management or integrations.",
+  developer: "Full access to every feature. Identity is controlled only by DEVELOPER_EMAIL in Convex.",
+  tech_support: "Legacy developer role. Sign in using the verified DEVELOPER_EMAIL account.",
   head_admin:
     "Full control of users, integrations, bookings, the data table, exports, and logs.",
   booking_viewer:
@@ -50,7 +53,8 @@ export const ROLE_DESCRIPTIONS: Record<Role, string> = {
 
 export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
   head_admin: CAPABILITIES,
-  tech_support: ["support.view", "support.develop"],
+  developer: CAPABILITIES,
+  tech_support: [],
   booking_viewer: [
     "bookings.view",
     "table.view",

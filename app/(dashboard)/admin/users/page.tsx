@@ -26,7 +26,6 @@ const assignableRoles = [
   "booking_approver",
   "sheet_editor",
   "booking_manager",
-  "tech_support",
 ] as const;
 type AssignableRole = (typeof assignableRoles)[number];
 
@@ -35,11 +34,12 @@ type ManagedUser = {
   displayName: string;
   email: string;
   reason?: string;
-  requestedRole?: AssignableRole;
+  requestedRole?: AssignableRole | "tech_support";
   role: Role;
   roleLabel: string;
   status: "pending" | "active" | "rejected" | "removed";
   isConfiguredHeadAdmin: boolean;
+  isDeveloperProtected: boolean;
   createdAt: number;
 };
 
@@ -101,11 +101,8 @@ export default function UserManagementPage() {
   ).length;
 
   function selectedRole(user: ManagedUser): AssignableRole {
-    return (
-      roleSelections[user._id] ??
-      user.requestedRole ??
-      (user.role === "head_admin" ? "booking_viewer" : user.role)
-    );
+    const candidate = roleSelections[user._id] ?? user.requestedRole ?? user.role;
+    return assignableRoles.includes(candidate as AssignableRole) ? candidate as AssignableRole : "booking_viewer";
   }
 
   async function addApprover(event: React.FormEvent) {
@@ -224,9 +221,9 @@ export default function UserManagementPage() {
                       <StatusBadge status={user.status} />
                     </td>
                     <td>
-                      {user.isConfiguredHeadAdmin ? (
+                      {user.isConfiguredHeadAdmin || user.isDeveloperProtected ? (
                         <span className="locked-role">
-                          <Shield size={14} /> Head Administrator
+                          <Shield size={14} /> {user.isDeveloperProtected ? "Developer · environment managed" : "Head Administrator"}
                         </span>
                       ) : (
                         <select
@@ -263,7 +260,7 @@ export default function UserManagementPage() {
                     </td>
                     <td>
                       <div className="row-actions">
-                        {!user.isConfiguredHeadAdmin &&
+                        {!user.isConfiguredHeadAdmin && !user.isDeveloperProtected &&
                           (user.status === "pending" ||
                             user.status === "rejected") && (
                             <>
@@ -301,7 +298,7 @@ export default function UserManagementPage() {
                               )}
                             </>
                           )}
-                        {!user.isConfiguredHeadAdmin &&
+                        {!user.isConfiguredHeadAdmin && !user.isDeveloperProtected &&
                           user.status !== "removed" && (
                             <button
                               className="icon-button action-reject"
@@ -322,7 +319,7 @@ export default function UserManagementPage() {
                               <Trash2 size={16} />
                             </button>
                           )}
-                        {user.isConfiguredHeadAdmin && (
+                        {(user.isConfiguredHeadAdmin || user.isDeveloperProtected) && (
                           <span className="view-only-label">
                             <UserRoundCog size={14} /> Protected
                           </span>

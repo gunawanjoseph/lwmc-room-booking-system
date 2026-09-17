@@ -199,7 +199,7 @@ For the September Calendar safety fixes, incident recovery, test coverage and
 release checks, see [the review](docs/ROOMOPS_CALENDAR_FIX_REVIEW.md).
 
 
-## Recurring meeting controls and technical support alerts
+## Recurring meeting controls and developer alerts
 
 This feature patch builds on the previous Calendar safety patch. It updates
 this README only; the earlier review document describes the earlier release.
@@ -273,16 +273,16 @@ Calendar failures can temporarily leave a partially rebuilt schedule. Check
 room controls separately for meetings already running. Historical events are
 rebuilt without applying present-day free/busy checks to their past intervals.
 
-### Technical support emails
+### Developer emails
 
-The **Head Administrator** can open **Integrations → Technical support → Incident
-alert emails**, add up to 20 active recipient addresses, disable/re-enable them,
-and inspect the latest 30 deliveries. Addresses are normalized and deduplicated.
-Being an alert recipient does not grant application access.
+The single Developer email is configured by `DEVELOPER_EMAIL` in Convex.
+**Integrations → Developer notifications** shows the address and latest 30 alert
+deliveries. It is read-only: the Head Administrator cannot add recipients,
+disable the developer, or change this address through RoomOps.
 
 Every existing application audit-log insertion is routed through a shared
-transactional writer. A new persisted log queues an individual email to each
-active support recipient when:
+transactional writer. A new persisted log queues one email to the
+configured Developer when:
 
 - its level is `warning` or `error`; or
 - its action/message contains a failure, suspicious activity, unauthorized,
@@ -299,13 +299,13 @@ Alerts are queued with zero scheduler delay as part of the log transaction.
 They use the existing Gmail OAuth configuration and contain the severity,
 category, action, timestamp, log ID, a bounded summary and a link to `/logs`.
 Raw `detailsJson` is excluded; obvious secret assignments and URLs in the
-message are redacted. Recipients can receive operational information, so assign
-only appropriate support addresses. Full details require normal app access.
+message are redacted. Recipients can receive operational information, so configure
+only the intended developer address. Full details require normal app access.
 
 An outbox tracks pending/sending/sent/failed/cancelled delivery status. Workers
 claim a lease, retry failures up to five total attempts with exponential backoff,
-and recover abandoned workers. The Head Administrator can retry failed alerts.
-Disabled recipients are checked again before sending; an already in-flight
+and recover abandoned workers. The Head Administrator or Developer can retry failed alerts.
+The configured address is checked again before sending; an already in-flight
 email may still arrive. Exhausted alert failures stay visible locally and never
 queue more alert emails, preventing an email failure loop. A timeout after Gmail
 accepts a message can cause a duplicate on retry; the stable Message-ID does not
@@ -350,9 +350,9 @@ Vitest suite, typecheck, lint and Next.js build still need to run before release
 
 On a test deployment, exercise each scope from both deletion entry points,
 verify the actual Google calendars and remaining dates, test an overlapping
-edit and a partial sync failure/retry, then assign a test support recipient and
-produce a warning/error log. Confirm that only the Head Administrator can
-manage recipients, and test disable and failed-delivery retry. Verify the drawer
+edit and a partial sync failure/retry, then set a test DEVELOPER_EMAIL and
+produce a warning/error log. Confirm the recipient is read-only in the app,
+and test address rotation and failed-delivery retry. Verify the drawer
 on mobile and with keyboard navigation. No deployment was performed here.
 
 ## Support conversations and developer updates
@@ -371,8 +371,8 @@ The new **Support** tab provides:
   five PNG, JPEG, WebP or GIF pictures per message (5 MB each).
 - Live conversation threads, follow-up replies, open/solved filtering, and
   pagination for reports and messages. Replying to a solved conversation reopens
-  it. The reporter, Technical Support, or Head Administrator can change severity
-  and status; changes appear in the conversation. Revision checks prevent stale
+  it. Any active administrator or the Developer can change severity
+  and close/reopen a case; changes appear in the conversation. Revision checks prevent stale
   status updates from overwriting another person's changes.
 - Developer announcements for new features, changes, known bugs and fixed bugs,
   with replies in the same interface.
@@ -381,32 +381,51 @@ The new **Support** tab provides:
 
 ### Developer access and email routing
 
-The Head Administrator approves or assigns the new **Technical Support** role in
-**Users**. Developers can also request this role during registration, but cannot
-activate themselves. The role grants only Support access and announcement/triage
-permissions; it does not grant booking edits, Calendar changes, user management,
-logs, or integration access. Developers arriving at `/home` are redirected to
-`/support`. The Head Administrator can also publish announcements.
+**Developer** is the single term for the account previously called Technical
+Support. Set one address in the Convex environment variable `DEVELOPER_EMAIL`.
+Matching is case-insensitive and trimmed; missing, invalid, or multiple addresses
+fail closed. Do not add a `NEXT_PUBLIC_` prefix or store it in frontend settings.
 
-Support conversations and attached pictures are shared with **all active RoomOps
-administrators and Technical Support users**, rather than being private tickets.
-Former head administrators and inactive accounts retain no support access.
+After normal Clerk sign-up/sign-in, the app automatically provisions or upgrades
+the account when the **current verified Clerk email claim** matches
+`DEVELOPER_EMAIL`. No Head Administrator approval is required. Developer access
+includes every app capability: bookings, Calendar, data editing/export, logs,
+users, integrations, support conversations, triage and announcements. Developer
+and Head Administrator identities themselves remain environment-controlled and
+cannot be changed through the user-management API.
 
-Every message from an administrator, including the Head Administrator, queues
-email to the enabled addresses under **Integrations → Technical Support**. This
-reuses the existing `techSupportEmails` configuration and Gmail OAuth sender.
-Developer replies email the active administrators who have participated in that
-conversation. Publishing an announcement emails all active booking administrators
-except the author. Status/severity changes also create notification messages.
-Role assignment and the recipient email list are separate: assign developers an
-active account for replies, and enable their email addresses to receive reports.
-When no technical recipients are configured, reports still save and a visible
-banner explains why notification emails will not be sent.
+The Head Administrator cannot approve, reject, demote, remove or assign a
+Developer. The role is absent from registration and management dropdowns;
+protected accounts display an environment-managed badge. The old `tech_support`
+role remains schema-compatible but grants no permissions. Existing accounts using
+it are upgraded only when signed in with the configured verified email. Stored
+email/role values alone cannot establish developer access; queries, mutations,
+HTTP image requests and actions check the current authenticated identity.
+Changing/removing `DEVELOPER_EMAIL` revokes the old developer's elevated access
+on subsequent requests. A developer row belonging to the old address is inactive;
+a matching new account is activated on its next login. Ordinary administrator
+permissions and Head Administrator approval of ordinary users are preserved.
+
+Support conversations and pictures are shared with all active administrators and
+the Developer. **Any active administrator or the Developer can close and reopen
+any report**, including reports created by someone else. Status changes are
+recorded in the conversation; stale revisions are still rejected.
+
+Every administrator message, including the Head Administrator's, queues email to
+`DEVELOPER_EMAIL`. Automatic warning/error/suspicious-log alerts use that same
+address. Developer replies email the active administrator participants; new
+announcements notify active booking administrators except the author. Existing
+`techSupportEmails` rows are ignored, and the old recipient-edit endpoint rejects
+changes from stale clients. Missing/invalid configuration leaves reports saved,
+shows a warning, and sends no developer notification. Queued messages to a
+previous developer address are cancelled when their worker starts; already
+in-flight email cannot be recalled. Notifications are not retrospectively sent
+to a newly configured address.
 
 Emails include the message and an authenticated conversation link. **Replies are
 made inside the Support tab; replies sent directly to the Gmail notification
 address are not imported.** Pictures are viewed in the application, not attached
-to email. Existing automatic audit-log alerts continue unchanged.
+to email. Automatic audit-log alerts retain their existing retry and redaction behavior.
 
 Message creation and its email outbox are saved in one Convex mutation. Sending
 is scheduled immediately, with five attempts, exponential retry delays, worker
@@ -450,8 +469,9 @@ npm run lint
 npm run build
 ```
 
-The regression command passes **79 tests**: all previous 40 Calendar, recurring
-booking and audit-alert checks, plus 39 support checks. New coverage includes
+The regression command passes **99 tests**: 79 booking, Calendar, alert and
+support checks (updated for the intended developer-policy changes), plus 20
+developer-identity and authorization checks. New coverage includes
 report/reply routing, announcements, duplicate requests, optimistic concurrency,
 open/solved transitions, role isolation, real authorization guards, attachment
 ownership/quotas/expiry, authenticated HTTP routes, streamed upload limits, email
@@ -466,5 +486,37 @@ the full Vitest suite, typecheck, lint, build and browser checks could not run.
 Before production release, run those commands and use a staging deployment to
 exercise report → developer email → developer reply → admin email → solve →
 reopen; publish each announcement category; upload/view/remove pictures; test
-mobile and keyboard interaction; and revoke a developer account to verify access
-is removed. No production deployment or real email delivery was performed here.
+mobile and keyboard interaction; and change/remove DEVELOPER_EMAIL to verify
+old developer access is removed. No production deployment or real email delivery was performed here.
+
+
+### Apply the developer identity patch
+
+Apply `lwmc-developer-identity.patch` after `lwmc-support-conversations.patch`:
+
+```bash
+git apply --check "$HOME/Downloads/lwmc-developer-identity.patch"
+git apply "$HOME/Downloads/lwmc-developer-identity.patch"
+```
+
+Before deploying the updated schema/functions and frontend, set `DEVELOPER_EMAIL`
+in each intended Convex deployment using its Environment Variables settings.
+Use exactly one email, for example `developer@example.com`, then sign in through
+Clerk using that address and verify it. The existing JWT configuration must expose
+`email` and boolean `email_verified` claims. If account initialization fails, the
+login gate shows an error and Retry button. A normal administrator sign-in does
+not self-approve or gain developer permissions.
+
+No destructive data migration is required. Existing developer accounts and
+notification history remain readable; `tech_support`, `techSupport` API paths,
+`techSupportEmails`, `techAlertDeliveries` and the persisted `technical` delivery
+kind are retained only for compatibility with existing data/scheduled jobs.
+Their UI labels use Developer. Developer alert deliveries no longer require a
+legacy recipient row. Deploy backend and frontend together and refresh old tabs.
+
+New regression coverage includes automatic activation and idempotency, unverified
+identity rejection, all-capability/action access, operation without a configured
+head account, legacy-role denial, address revocation, protected-account mutation
+rejection, developer administrator-management access, impersonation rejection,
+read-only recipient configuration, and shared close/reopen controls. No live
+account, environment variable or production deployment was changed here.

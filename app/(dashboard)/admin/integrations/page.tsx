@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { TechSupportSettings } from "@/components/tech-support-settings";
+import { DeveloperSettings } from "@/components/developer-settings";
 import { useMemo, useState } from "react";
 import { useAction, useMutation } from "convex/react";
 import {
@@ -471,7 +471,7 @@ export default function IntegrationsPage() {
             </div>
             <div>
               <dt>Table editors</dt>
-              <dd>Head Administrator · Data Editor · Booking Manager</dd>
+              <dd>Developer · Head Administrator · Data Editor · Booking Manager</dd>
             </div>
           </dl>
           <Link
@@ -819,7 +819,7 @@ export default function IntegrationsPage() {
           </div>
         )}
       </section>
-      <TechSupportSettings />
+      <DeveloperSettings />
     </div>
   );
 }
