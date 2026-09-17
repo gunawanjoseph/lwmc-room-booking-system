@@ -70,8 +70,8 @@ Home Assistant automation remains a later phase.
   Requester email remains private to RoomOps and its notification flow.
   Room, time, recurrence, status, and approval changes stay on
   `/bookings`, where their dedicated rules are enforced. Pending and approved
-  bookings may change their reservation or recurrence schedule; completed
-  approved occurrences are protected from reservation changes.
+  bookings may change their reservation or recurrence schedule; recurring
+  bookings support this event, this and following events, and all events.
 - Google Calendar owns external venue-busy events. RoomOps checks those
   calendars but stores the accepted request and concrete recurrence
   occurrences in Convex.
@@ -194,3 +194,163 @@ Calendar configuration, synchronization recovery, and event rendering.
   handlers
 - `shared/roles.ts` — role labels and capability matrix
 - `docs/` — setup, migration, and deployment instructions
+
+For the September Calendar safety fixes, incident recovery, test coverage and
+release checks, see [the review](docs/ROOMOPS_CALENDAR_FIX_REVIEW.md).
+
+
+## Recurring meeting controls and technical support alerts
+
+This feature patch builds on the previous Calendar safety patch. It updates
+this README only; the earlier review document describes the earlier release.
+Where their behavior differs, this section is authoritative.
+
+### Remove meetings
+
+The Bookings and Booking data pages now open an in-app side panel instead of
+`window.confirm`. It includes a date picker, scope cards, the affected meeting
+count, a keep/remove choice, inline errors, keyboard focus containment, Escape
+handling and focus restoration.
+
+For a recurring booking, select the meeting and choose:
+
+- **This event:** remove only the selected meeting.
+- **This and following events:** remove the selected meeting and meetings whose
+  current start dates are later than or equal to its start date.
+- **All events:** remove the full booking, including past meetings.
+
+Partial removal updates the concrete occurrence list and reservation claims in
+one Convex mutation. It preserves the other meetings and queues approved
+Calendar reconciliation immediately. The UI explicitly reports synchronization
+as pending; it must reach `synced` before Calendar removal is treated as complete.
+If the operation fails, the row remains with `failed` Calendar status and a
+retry path. If the selected scope contains every remaining meeting, the panel
+uses the existing verified whole-booking deletion action instead.
+
+Deletion requires the existing `table.edit` capability. A stale booking revision
+or active Calendar/deletion lease prevents conflicting changes. A pending
+booking with leftover events from a failed approval must have that failed
+approval resolved before partial removal. Full deletion remains available.
+
+### Edit meetings
+
+The recurring-booking editor provides **This event**, **This and following
+events**, and **All events**, plus a selected-meeting dropdown for scoped edits.
+Room, start/end time, event name, purpose and ministry follow the selected
+scope. Requester contact details belong to the entire booking and are editable
+only under All events. Recurrence pattern/end-date controls also belong to
+All events.
+
+This and following shifts the selected and later meetings by the same amount
+as the selected start-time change, applies the selected duration and room, and
+keeps the existing date pattern. Earlier meetings keep their dates and details.
+Scoped titles/purpose/ministry are stored as occurrence overrides and used in
+Google event creation. All-events metadata edits apply the displayed metadata
+to every meeting, clearing those overrides; date/room exceptions survive a
+metadata-only save. A series time shift retains the concrete dates, so it does
+not recreate cancelled meetings. Explicitly changing the repeat definition can
+regenerate the occurrence list and should be reviewed before saving.
+
+Both preview and save run the existing overlap and booking-size checks.
+Occurrence sequence IDs remain stable during scoped changes, while the booking
+revision rejects stale editors. The earliest remaining date is reflected in the
+summary after partial deletion or editing.
+
+### Calendar reconciliation
+
+Reconciliation now rebuilds the complete retained concrete schedule, including
+past meetings, rather than retaining all historical Google references blindly.
+This is necessary when a user explicitly edits/deletes a past meeting or when
+replacing a legacy recurring Google parent. It also avoids leaving removed
+occurrences inside a parent recurrence rule. Unselected meetings retain their
+content, but their Google event IDs/links can change during rebuilding.
+
+RoomOps discovers owned events, persists cleanup/create candidates, removes
+obsolete events, checks active/future availability, creates the retained
+occurrences, then verifies the created events. Failures remain visible and
+retryable. This is not an atomic transaction across Google and Convex: partial
+Calendar failures can temporarily leave a partially rebuilt schedule. Check
+room controls separately for meetings already running. Historical events are
+rebuilt without applying present-day free/busy checks to their past intervals.
+
+### Technical support emails
+
+The **Head Administrator** can open **Integrations → Technical support → Incident
+alert emails**, add up to 20 active recipient addresses, disable/re-enable them,
+and inspect the latest 30 deliveries. Addresses are normalized and deduplicated.
+Being an alert recipient does not grant application access.
+
+Every existing application audit-log insertion is routed through a shared
+transactional writer. A new persisted log queues an individual email to each
+active support recipient when:
+
+- its level is `warning` or `error`; or
+- its action/message contains a failure, suspicious activity, unauthorized,
+  forbidden, denied, timeout, expired or collision marker.
+
+Normal informational logs are not emailed. This includes every warning, even
+an intentional administrative deletion; the rule is deliberately inclusive.
+It operates on saved application audit logs, not an external monitoring feed:
+old logs are not replayed and a runtime exception that never writes an audit
+record cannot be emailed by this mechanism. Mutations that roll back do not
+persist their logs or email jobs.
+
+Alerts are queued with zero scheduler delay as part of the log transaction.
+They use the existing Gmail OAuth configuration and contain the severity,
+category, action, timestamp, log ID, a bounded summary and a link to `/logs`.
+Raw `detailsJson` is excluded; obvious secret assignments and URLs in the
+message are redacted. Recipients can receive operational information, so assign
+only appropriate support addresses. Full details require normal app access.
+
+An outbox tracks pending/sending/sent/failed/cancelled delivery status. Workers
+claim a lease, retry failures up to five total attempts with exponential backoff,
+and recover abandoned workers. The Head Administrator can retry failed alerts.
+Disabled recipients are checked again before sending; an already in-flight
+email may still arrive. Exhausted alert failures stay visible locally and never
+queue more alert emails, preventing an email failure loop. A timeout after Gmail
+accepts a message can cause a duplicate on retry; the stable Message-ID does not
+provide an exactly-once guarantee. If Gmail itself is unavailable, alert email
+will also be delayed or fail. No live email was sent during patch preparation.
+
+### Deployment and verification
+
+Apply `lwmc-recurring-controls-support-alerts.patch` **after** the previous
+`lwmc-roomops-calendar-safety.patch`:
+
+```bash
+git apply --check "$HOME/Downloads/lwmc-recurring-controls-support-alerts.patch"
+git apply "$HOME/Downloads/lwmc-recurring-controls-support-alerts.patch"
+```
+
+The new schema adds `techSupportEmails`, `techAlertDeliveries` and optional
+per-occurrence details. Existing bookings need no data migration. Deploy the
+Convex schema/functions and the Next.js frontend together, regenerate Convex
+bindings through the normal deployment workflow, and refresh old browser tabs.
+Use the existing Gmail environment settings; no new secrets are required.
+
+Run on Node 22.18+ / Node 24:
+
+```bash
+node --test tests/calendar-safety.regression.mjs tests/recurrence-support.regression.mjs
+npm ci
+npm test
+npm run typecheck
+npm run lint
+npm run build
+```
+
+The dependency-free handler/API regression suites pass 40 tests. They cover
+scope selection, partial deletion/claims, stale revisions, scoped metadata,
+Calendar rebuilding and verification, support routing, email normalization,
+leases, retries, deactivation, Gmail message composition and redaction. Convex
+registration/authentication and network calls are mocked; they do not certify
+real database transactions, browser rendering or live delivery. npm installation
+was blocked by registry HTTP 403 in the preparation environment, so the full
+Vitest suite, typecheck, lint and Next.js build still need to run before release.
+
+On a test deployment, exercise each scope from both deletion entry points,
+verify the actual Google calendars and remaining dates, test an overlapping
+edit and a partial sync failure/retry, then assign a test support recipient and
+produce a warning/error log. Confirm that only the Head Administrator can
+manage recipients, and test disable and failed-delivery retry. Verify the drawer
+on mobile and with keyboard navigation. No deployment was performed here.

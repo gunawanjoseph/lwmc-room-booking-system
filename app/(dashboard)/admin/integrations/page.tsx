@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { TechSupportSettings } from "@/components/tech-support-settings";
 import { useMemo, useState } from "react";
 import { useAction, useMutation } from "convex/react";
 import {
@@ -818,6 +819,7 @@ export default function IntegrationsPage() {
           </div>
         )}
       </section>
+      <TechSupportSettings />
     </div>
   );
 }

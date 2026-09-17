@@ -1,3 +1,4 @@
+import { writeAuditLog } from "./lib/auditLog";
 import { ConvexError, v } from "convex/values";
 import {
   action,
@@ -151,7 +152,7 @@ async function cancelDeliveryRecord(
     nextAttemptAt: undefined,
     updatedAt: now,
   });
-  await ctx.db.insert("auditLogs", {
+  await writeAuditLog(ctx, {
     level: "warning",
     category: "system",
     action: `${delivery.kind}_cancelled`,
@@ -942,7 +943,7 @@ async function enqueueDelivery(
     updatedAt: now,
   });
   if (recipientError) {
-    await ctx.db.insert("auditLogs", {
+    await writeAuditLog(ctx, {
       level: "error",
       category: "system",
       action: `${input.kind}_failed`,
@@ -1032,7 +1033,7 @@ async function enqueueAvailabilityFollowups(
     .withIndex("by_active", (range) => range.eq("active", true))
     .collect();
   if (approvers.length === 0) {
-    await ctx.db.insert("auditLogs", {
+    await writeAuditLog(ctx, {
       level: "error",
       category: "system",
       action: "approver_recipients_missing",
@@ -1233,7 +1234,7 @@ export const prepareConflictAlert = internalMutation({
       .withIndex("by_active", (range) => range.eq("active", true))
       .collect();
     if (conflictAdmins.length === 0) {
-      await ctx.db.insert("auditLogs", {
+      await writeAuditLog(ctx, {
         level: "error",
         category: "system",
         action: "conflict_alert_recipients_missing",
@@ -1409,7 +1410,7 @@ export const dispatchDelivery = internalMutation({
             "EMAIL_DEPENDENCY_NOT_DELIVERED:The requester receipt must be delivered before this follow-up.",
           updatedAt: now,
         });
-        await ctx.db.insert("auditLogs", {
+        await writeAuditLog(ctx, {
           level: "error",
           category: "system",
           action: `${delivery.kind}_blocked`,
@@ -1885,7 +1886,7 @@ export const completeDelivery = internalMutation({
       lastError: undefined,
       updatedAt: now,
     });
-    await ctx.db.insert("auditLogs", {
+    await writeAuditLog(ctx, {
       level: "info",
       category: "system",
       action: delivery.kind,
@@ -1988,7 +1989,7 @@ export const recordDeliveryFailure = internalMutation({
       )}:${cleanSingleLine(args.errorMessage)}`.slice(0, 1_000),
       updatedAt: now,
     });
-    await ctx.db.insert("auditLogs", {
+    await writeAuditLog(ctx, {
       level: willRetry ? "warning" : "error",
       category: "system",
       action: willRetry
@@ -2052,7 +2053,7 @@ export const recoverDeliveryLease = internalMutation({
         { deliveryId: delivery._id },
       );
     } else {
-      await ctx.db.insert("auditLogs", {
+      await writeAuditLog(ctx, {
         level: "error",
         category: "system",
         action: `${delivery.kind}_failed`,
@@ -2169,5 +2170,31 @@ export const retryFailedDeliveries = action({
       internal.emailNotifications.retryFailedInternal,
       {},
     )) as { queued: number };
+  },
+});
+
+export const sendTechAlert = internalAction({
+  args: { deliveryId: v.id("techAlertDeliveries") },
+  handler: async (ctx, args): Promise<void> => {
+    const token = crypto.randomUUID();
+    const delivery = await ctx.runMutation(internal.techSupport.claim, { ...args, token });
+    if (!delivery) return;
+    let errorMessage: string | undefined;
+    try {
+      const configuration = gmailConfiguration();
+      // Raw detailsJson can contain tokens or personal form answers. Keep those
+      // behind authenticated logs; send a useful bounded summary and record ID.
+      const log = delivery.log;
+      const message = log.message.replace(/https?:\/\/\S+/gi, "[link omitted]")
+        .replace(/(token|secret|password|authorization|api[_ -]?key)\s*[:=]\s*\S+/gi, "$1=[redacted]").slice(0, 1500);
+      const text = ["RoomOps technical support alert", `Severity: ${log.level}`,
+        `Category: ${log.category}`, `Action: ${log.action}`, `Time: ${new Date(log.createdAt).toISOString()}`,
+        `Log ID: ${log._id}`, "", message, "", `Review: ${configuration.appBaseUrl}/logs`].join("\n");
+      await sendGmail({ to: delivery.email, subject: `[RoomOps ${log.level.toUpperCase()}] ${log.action}`,
+        text, html: htmlFromText(text), messageKey: `tech-alert-${args.deliveryId}` });
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : "Technical support email failed.";
+    }
+    await ctx.runMutation(internal.techSupport.finish, { ...args, token, error: errorMessage });
   },
 });

@@ -62,7 +62,7 @@ test('running meetings are reconciled, completed events retained',()=>{
 });
 function dbContext(booking) {
   const scheduled=[];const logs=[];
-  return {scheduled,logs, db:{get:async()=>booking,patch:async(_,patch)=>Object.assign(booking,patch),insert:async(_,row)=>logs.push(row)},scheduler:{runAfter:async(...args)=>scheduled.push(args)}};
+  return {scheduled,logs, db:{query:()=>({withIndex:()=>({take:async()=>[]})}),get:async()=>booking,patch:async(_,patch)=>Object.assign(booking,patch),insert:async(_,row)=>logs.push(row)},scheduler:{runAfter:async(...args)=>scheduled.push(args)}};
 }
 test('metadata-only series edit preserves all occurrence time/venue exceptions',async()=>{
   const savedEnv=process.env.GOOGLE_CALENDAR_ENABLED;
@@ -135,10 +135,10 @@ test('delete retains the DB row if final discovery still finds a managed event',
 });
 test('shortening a series to the past cleans obsolete future events before success',async()=>{
   const now=Date.now();const event={calendarId:'calendar-0',eventId:'obsolete',targetVenue:'Shema Space',startAt:now+60000,endAt:now+120000};
-  const b={_id:'booking',status:'approved',room:'Shema Space',occurrences:[{sequence:0,startAt:now-120000,endAt:now-60000}],calendarEvents:[event]};
+  const b={_id:'booking',status:'approved',room:'Shema Space',requesterName:'Person',timezone:'Asia/Singapore',occurrences:[{sequence:0,startAt:now-120000,endAt:now-60000}],calendarEvents:[event]};
   const calls=[];
-  await withCalendar({listManagedEvents:async()=>[],deleteManagedEvent:async()=>{calls.push('delete');return true;}},async()=>{
-    const ctx={runMutation:async(name,args)=>{if(name==='renewCalendarReconciliationLease')return b;if(name==='recordCalendarReconciliationTargets')return args.events;if(name==='recordCalendarReconcileResult'){assert.equal(args.success,true);assert.deepEqual(args.events,[]);calls.push('complete');}}};
+  await withCalendar({listManagedEvents:async()=>[],deleteManagedEvent:async()=>{calls.push('delete');return true;},createEvent:async(input)=>({calendarId:input.calendarId,eventId:'history'}),verifyManagedEvent:async(input)=>({calendarId:input.calendarId,eventId:input.eventId})},async()=>{
+    const ctx={runMutation:async(name,args)=>{if(name==='renewCalendarReconciliationLease')return b;if(name==='recordCalendarReconciliationTargets')return args.events;if(name==='recordCalendarReconcileResult'){assert.equal(args.success,true);assert.equal(args.events.length,1);assert.equal(args.events[0].eventId,'history');calls.push('complete');}}};
     await actions.reconcileApprovedBooking.handler(ctx,{bookingId:'booking',expectedRevision:1,syncToken:'t'});
     assert.deepEqual(calls,['delete','complete']);
   });
@@ -152,14 +152,6 @@ test('reconciliation repairs missing references and includes an ongoing meeting'
     assert.deepEqual(calls,['create','complete']);
   });
 });
-test('completed reservation history cannot silently diverge from Calendar',async()=>{
-  const {completedOccurrencesUnchanged}=await import('../convex/lib/bookingEdit.ts');
-  const past={sequence:0,startAt:10,endAt:20};const future={sequence:1,startAt:110,endAt:120};
-  assert.equal(completedOccurrencesUnchanged([past,future],[past],'Shema Space','Shema Space',100),true);
-  assert.equal(completedOccurrencesUnchanged([past],[{...past,startAt:11}],'Shema Space','Shema Space',100),false);
-  assert.equal(completedOccurrencesUnchanged([past],[past],'Shema Space','Board Room',100),false);
-  assert.equal(completedOccurrencesUnchanged([past],[future],'Shema Space','Shema Space',100),false);
-});
 test('series end-date preview preserves existing exceptions when shortening',async()=>{
   const now=Date.now();
   const b={_id:'booking',status:'approved',revision:1,room:'Shema Space',roomKey:'shema space',startAt:now-200000,endAt:now-190000,recurrenceFrequency:'weekly_same_day',recurrenceHasEndDate:false,occurrences:[{sequence:0,startAt:now-200000,endAt:now-190000,room:'Board Room'},{sequence:1,startAt:now+200000,endAt:now+210000}]};
@@ -167,4 +159,13 @@ test('series end-date preview preserves existing exceptions when shortening',asy
   const ctx={db:{get:async()=>b,query:()=>chain}};
   const result=await bookings.previewEdit.handler(ctx,{...b,bookingId:'booking',expectedRevision:1,editScope:'series',recurrenceHasEndDate:true,recurrenceUntilAt:now});
   assert.deepEqual(result,{conflicts:[]});
+});
+test('reconciliation rebuilds only retained meetings and uses their scoped titles',async()=>{
+  const now=Date.now();const b={_id:'booking',status:'approved',room:'Shema Space',eventName:'Base title',requesterName:'Person',timezone:'Asia/Singapore',occurrences:[{sequence:0,startAt:now-120000,endAt:now-60000},{sequence:2,startAt:now+60000,endAt:now+120000,room:'Board Room',details:{eventName:'Only later'}}],calendarEvents:[{calendarId:'calendar-0',eventId:'old-series',targetVenue:'Shema Space'}]};
+  const titles=[];let removed=false;
+  await withCalendar({listManagedEvents:async()=>[],deleteManagedEvent:async()=>{removed=true;return true;},checkAvailability:async()=>({available:true,conflicts:[]}),createEvent:async(input)=>{assert.ok(removed);titles.push(input.summary);return {calendarId:input.calendarId,eventId:`new-${titles.length}`};},verifyManagedEvent:async(input)=>({calendarId:input.calendarId,eventId:input.eventId})},async()=>{
+    const ctx={runMutation:async(name,args)=>{if(name==='renewCalendarReconciliationLease')return b;if(name==='recordCalendarReconciliationTargets')return args.events;if(name==='recordCalendarReconcileResult'){assert.equal(args.success,true);assert.equal(args.events.length,2);}}};
+    await actions.reconcileApprovedBooking.handler(ctx,{bookingId:'booking',expectedRevision:1,syncToken:'scope'});
+    assert.match(titles[0],/Base title/);assert.match(titles[1],/Only later/);assert.match(titles[1],/Board Room/);assert.equal(titles.length,2);
+  });
 });

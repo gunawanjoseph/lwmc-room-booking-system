@@ -1,3 +1,4 @@
+import { writeAuditLog } from "./lib/auditLog";
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { requireCapability } from "./lib/auth";
@@ -30,7 +31,7 @@ export const write = internalMutation({
     detailsJson: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert("auditLogs", {
+    return await writeAuditLog(ctx, {
       ...args,
       createdAt: Date.now(),
     });
@@ -60,7 +61,7 @@ export const recordClientError = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireCapability(ctx, "logs.view");
-    return await ctx.db.insert("auditLogs", {
+    return await writeAuditLog(ctx, {
       level: "warning",
       category: "system",
       action: args.action.slice(0, 120),

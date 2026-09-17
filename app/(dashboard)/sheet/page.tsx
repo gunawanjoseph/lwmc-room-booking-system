@@ -1,8 +1,8 @@
 "use client";
+import { BookingRemovalPanel } from "@/components/booking-removal-panel";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  useAction,
   useConvex,
   useMutation,
   usePaginatedQuery,
@@ -200,7 +200,6 @@ export default function BookingDataPage() {
     { initialNumItems: 50 },
   );
   const saveTableEdits = useMutation(api.bookings.saveTableEdits);
-  const deleteBooking = useAction(api.googleCalendar.deleteBooking);
   const recordXlsxExport = useMutation(api.bookings.recordXlsxExport);
 
   const rows = results as BookingRow[];
@@ -212,9 +211,7 @@ export default function BookingDataPage() {
     new Map<string, ReturnType<typeof setTimeout>>(),
   );
   const [saving, setSaving] = useState(false);
-  const [deletingRowId, setDeletingRowId] = useState<string | null>(
-    null,
-  );
+  const [removing, setRemoving] = useState<BookingRow | null>(null);
   const [exporting, setExporting] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [notice, setNotice] = useState("");
@@ -564,46 +561,13 @@ export default function BookingDataPage() {
     }
   }
 
-  async function deleteRow(booking: BookingRow) {
-    if (
-      !canEdit ||
-      editMode ||
-      deletingRowId ||
-      isBookingCalendarProcessing(booking)
-    ) {
-      return;
-    }
-    if (
-      !window.confirm(
-        `Permanently delete booking ${booking.jotformSubmissionId} and its ENTIRE series (including past and future meetings)? RoomOps will discover and verify removal of its managed Google Calendar events before removing the booking. This cannot be undone.`,
-      )
-    ) {
-      return;
-    }
-    setDeletingRowId(String(booking._id));
-    setNotice("");
-    setSaveError("");
-    try {
-      const result = await deleteBooking({
-        bookingId: booking._id,
-        expectedRevision: booking.revision,
-      });
-      setNotice(
-        result.deleted
-          ? `Booking ${booking.jotformSubmissionId} and its managed Calendar events were deleted. Check room controls if the meeting was due to start or already running.`
-          : "That booking row was already gone.",
-      );
-    } catch (caught) {
-      setSaveError(messageFromError(caught));
-    } finally {
-      setDeletingRowId(null);
-    }
-  }
+  function deleteRow(booking: BookingRow) { setRemoving(booking); }
 
   const columnCount = 11 + dynamicColumns.length + (canEdit ? 1 : 0);
 
   return (
     <div className="page sheet-page">
+      {removing && <BookingRemovalPanel booking={removing} close={(message) => { setRemoving(null); if (message) setNotice(message); }} />}
       <header className="page-header">
         <div>
           <span className="eyebrow">CONVEX BOOKING DATA</span>
@@ -1176,7 +1140,7 @@ export default function BookingDataPage() {
                               editMode ||
                               rowProcessing ||
                               booking.deletionInProgress === true ||
-                              deletingRowId === String(booking._id)
+                              removing?._id === booking._id
                             }
                             title={
                               editMode
@@ -1191,7 +1155,7 @@ export default function BookingDataPage() {
                             }
                           >
                             <Trash2 size={14} />
-                            {deletingRowId === String(booking._id)
+                            {removing?._id === booking._id
                               ? "Deleting"
                               : "Delete"}
                           </button>

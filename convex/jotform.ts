@@ -1,3 +1,4 @@
+import { writeAuditLog } from "./lib/auditLog";
 import { ConvexError, v } from "convex/values";
 import {
   JOTFORM_API_BASE_URLS,
@@ -264,7 +265,7 @@ export const markFailed = internalMutation({
       processingStartedAt: undefined,
       processingToken: undefined,
     });
-    await ctx.db.insert("auditLogs", {
+    await writeAuditLog(ctx, {
       level: "error",
       category: "jotform",
       action: "submission_processing_failed",
@@ -358,7 +359,7 @@ export const recoverProcessingLease = internalMutation({
       processingToken: undefined,
       lastError: "JOTFORM_PROCESSING_LEASE_EXPIRED",
     });
-    await ctx.db.insert("auditLogs", {
+    await writeAuditLog(ctx, {
       level: "error",
       category: "jotform",
       action: "submission_processing_lease_expired",

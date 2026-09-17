@@ -1,7 +1,7 @@
 // Dependency-free handler harness for Node >=22.18. External services are mocked;
 // these checks complement (not replace) the normal typecheck and Vitest suite.
-import { registerHooks } from 'node:module';
-import { existsSync } from 'node:fs';
+import { registerHooks, stripTypeScriptTypes } from 'node:module';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 const definitions = 'export const action=x=>x, internalAction=x=>x, mutation=x=>x, internalMutation=x=>x, query=x=>x, internalQuery=x=>x;';
 const modules = {
@@ -33,6 +33,9 @@ registerHooks({
   },
   load(url, context, next) {
     if (url.startsWith('roomops-test:')) return {format:'module', source:modules[url.slice(13)],shortCircuit:true};
+    if (url.startsWith('file:') && url.endsWith('.ts')) return {
+      format:'module', source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8'),{mode:'transform'}),shortCircuit:true,
+    };
     return next(url,context);
   },
 });

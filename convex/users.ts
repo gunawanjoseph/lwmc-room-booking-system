@@ -1,3 +1,4 @@
+import { writeAuditLog } from "./lib/auditLog";
 import { ConvexError, v } from "convex/values";
 import {
   internalMutation,
@@ -389,7 +390,7 @@ export const migrateLegacyUsers = internalMutation({
     }
 
     if (migrated > 0) {
-      await ctx.db.insert("auditLogs", {
+      await writeAuditLog(ctx, {
         level: "info",
         category: "system",
         action: "legacy_users_migrated",

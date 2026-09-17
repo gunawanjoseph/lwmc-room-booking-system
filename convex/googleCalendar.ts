@@ -25,11 +25,12 @@ import {
   mergeManagedCalendarEvents,
   type ManagedCalendarEventReference,
 } from "./lib/bookingDeletion";
-import { partitionManagedEventsForFutureReplacement } from "./lib/bookingEdit";
+import type { OccurrenceDetails } from "./lib/recurrenceScope";
 
 type Booking = Doc<"bookings">;
 type CalendarOccurrence = GoogleCalendarOccurrence & {
   room?: string;
+  details?: OccurrenceDetails;
 };
 type CalendarApprovalStart =
   | { started: true; booking: Booking }
@@ -94,18 +95,19 @@ function occurrencesForBooking(
     startAt: occurrence.startAt,
     endAt: occurrence.endAt,
     room: occurrence.room,
+    details: (occurrence as NonNullable<Booking["occurrences"]>[number]).details,
   }));
 }
 
 function eventInput(
   booking: Booking,
   target: VenueCalendarTarget,
-  occurrence: GoogleCalendarOccurrence,
+  occurrence: CalendarOccurrence,
 ): GoogleCalendarEventInput {
   const eventText = buildGoogleCalendarEventText({
-    eventName: booking.eventName,
-    ministry: booking.ministry,
-    purpose: booking.purpose,
+    eventName: occurrence.details?.eventName ?? booking.eventName,
+    ministry: occurrence.details?.ministry ?? booking.ministry,
+    purpose: occurrence.details?.purpose ?? booking.purpose,
     requesterName: booking.requesterName,
     venue: target.venue,
   });
@@ -113,7 +115,7 @@ function eventInput(
     bookingId: String(booking._id),
     calendarId: target.calendarId,
     venue: target.venue,
-    requestedVenue: booking.room,
+    requestedVenue: occurrence.room ?? booking.room,
     summary: eventText.summary,
     startAt: occurrence.startAt,
     endAt: occurrence.endAt,
@@ -1147,7 +1149,7 @@ export const reconcileApprovedBooking = internalAction({
       const plans = calendarEventPlans(
         booking,
         runtime,
-        futureOccurrences,
+        occurrences,
         args.syncToken,
       );
       const replacementCandidates = await Promise.all(
@@ -1178,17 +1180,16 @@ export const reconcileApprovedBooking = internalAction({
           events: mergeManagedCalendarEvents(managedEvents, replacementCandidates),
         },
       )) as ManagedCalendarEventReference[];
-      const { keep, replace } =
-        partitionManagedEventsForFutureReplacement(
-          managedEvents,
-          now,
-        );
+      // Rebuild the concrete retained schedule, including history: a scoped
+      // operation may explicitly edit or remove an earlier meeting, and legacy
+      // recurring parents cannot be retained with their old recurrence rule.
+      const replace = managedEvents;
       await cleanupManagedEvents(
         runtime,
         String(booking._id),
         managedCalendarEventsExcluding(
           [...replace, ...reconciliationCandidates],
-          [...keep, ...replacementCandidates],
+          replacementCandidates,
         ),
       );
 
@@ -1227,7 +1228,7 @@ export const reconcileApprovedBooking = internalAction({
         String(booking._id),
         createdEvents,
       );
-      const reconciledEvents = [...keep, ...verifiedCreatedEvents];
+      const reconciledEvents = verifiedCreatedEvents;
       await ctx.runMutation(
         internal.bookings.recordCalendarReconcileResult,
         {

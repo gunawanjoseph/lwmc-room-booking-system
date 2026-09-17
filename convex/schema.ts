@@ -39,7 +39,14 @@ export const recurrenceFrequencyValidator = v.union(
   v.literal("monthly_same_date"),
 );
 
+export const occurrenceDetailsValidator = v.object({
+  eventName: v.optional(v.string()),
+  purpose: v.optional(v.string()),
+  ministry: v.optional(v.string()),
+});
+
 export const bookingOccurrenceValidator = v.object({
+  details: v.optional(occurrenceDetailsValidator),
   sequence: v.number(),
   startAt: v.number(),
   endAt: v.number(),
@@ -96,6 +103,15 @@ export const jotformResponseValidator = v.object({
 });
 
 export default defineSchema({
+  techSupportEmails: defineTable({
+    email: v.string(), active: v.boolean(), updatedAt: v.number(), updatedBy: v.string(),
+  }).index("by_email", ["email"]).index("by_active", ["active"]),
+  techAlertDeliveries: defineTable({
+    logId: v.id("auditLogs"), recipientId: v.id("techSupportEmails"), email: v.string(),
+    status: v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed"), v.literal("cancelled")),
+    attempts: v.number(), leaseToken: v.optional(v.string()), leaseExpiresAt: v.optional(v.number()),
+    error: v.optional(v.string()), createdAt: v.number(), updatedAt: v.number(),
+  }).index("by_created_at", ["createdAt"]),
   users: defineTable({
     // Compatibility fields for the v1 -> v2 user migration. New writes use
     // clerkUserId/displayName only. After every deployment is migrated, make

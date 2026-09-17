@@ -33,6 +33,7 @@ import type * as lib_jotformMapping from "../lib/jotformMapping.js";
 import type * as lib_recurrence from "../lib/recurrence.js";
 import type * as lib_userMigration from "../lib/userMigration.js";
 import type * as logs from "../logs.js";
+import type * as techSupport from "../techSupport.js";
 import type * as users from "../users.js";
 
 import type {
@@ -68,6 +69,7 @@ const fullApi: ApiFromModules<{
   "lib/recurrence": typeof lib_recurrence;
   "lib/userMigration": typeof lib_userMigration;
   logs: typeof logs;
+  techSupport: typeof techSupport;
   users: typeof users;
 }> = anyApi as any;
 

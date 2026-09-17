@@ -2904,3 +2904,22 @@ textarea:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* In-app meeting removal drawer: mobile-friendly and keyboard accessible. */
+.drawer-backdrop { position: fixed; inset: 0; z-index: 100; background: #0e252a70; display: flex; justify-content: flex-end; backdrop-filter: blur(3px); }
+.booking-drawer { width: min(100%, 560px); height: 100dvh; overflow-y: auto; background: var(--surface, #fff); color: var(--text, #18332e); padding: clamp(20px, 4vw, 40px); box-shadow: -16px 0 60px #0002; display: flex; flex-direction: column; gap: 24px; }
+.booking-drawer h2 { margin: 0; font-size: 30px; }
+.removal-summary { display: flex; gap: 16px; padding: 20px; border-radius: 16px; background: #edf4f1; }
+.removal-summary p { margin: 6px 0; }
+.scope-options { border: 0; padding: 0; margin: 0; display: grid; gap: 12px; }
+.scope-options legend { font-weight: 650; margin-bottom: 12px; }
+.scope-option { display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px solid #dce4df; border-radius: 12px; cursor: pointer; }
+.scope-option.selected { background: #eef6f2; border-color: #32715d; box-shadow: 0 0 0 1px #32715d; }
+.scope-option span { display: grid; gap: 5px; }
+.scope-option small { color: #52645c; line-height: 1.4; }
+.scope-option input { accent-color: #255f53; }
+.removal-impact { border-radius: 12px; padding: 18px; background: #fff2e9; color: #713d25; }
+.removal-impact p { margin: 8px 0 0; line-height: 1.6; }
+.drawer-actions { margin-top: auto; display: flex; justify-content: flex-end; gap: 12px; padding-top: 12px; }
+.support-list { display: grid; gap: 12px; margin: 20px 0; }
+.support-recipient { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid #dce4df; overflow-wrap: anywhere; }

@@ -26,6 +26,7 @@ import {
   messageFromError,
 } from "@/lib/ui";
 import { isBookingCalendarProcessing } from "@/lib/booking-conflict-transition";
+import { BookingRemovalPanel } from "@/components/booking-removal-panel";
 import { StatusBadge } from "@/components/status-badge";
 
 type Booking = {
@@ -56,6 +57,7 @@ type Booking = {
     endAt: number;
     room?: string;
     resolvedVenues?: string[];
+    details?: { eventName?: string; purpose?: string; ministry?: string };
   }>;
   availabilityCheckPending: boolean;
   calendarAvailabilityStatus:
@@ -330,7 +332,7 @@ function EditDialog({
       booking.recurrenceUntilAt,
       booking.timezone,
     ),
-    editScope: "series" as "series" | "occurrence",
+    editScope: "series" as "series" | "occurrence" | "following",
     occurrenceSequence: booking.occurrences[0]?.sequence ?? 0,
   });
   const [error, setError] = useState("");
@@ -375,6 +377,9 @@ function EditDialog({
       ...current,
       occurrenceSequence: sequence,
       room: occurrence.room ?? booking.room,
+      eventName: occurrence.details?.eventName ?? booking.eventName ?? "",
+      purpose: occurrence.details?.purpose ?? booking.purpose ?? "",
+      ministry: occurrence.details?.ministry ?? booking.ministry ?? "",
       start: localInputValue(occurrence.startAt, booking.timezone),
       end: localInputValue(occurrence.endAt, booking.timezone),
     }));
@@ -431,7 +436,7 @@ function EditDialog({
         recurrenceUntilAt,
         editScope: form.editScope,
         occurrenceSequence:
-          form.editScope === "occurrence"
+          form.editScope !== "series"
             ? form.occurrenceSequence
             : undefined,
       } as const;
@@ -508,8 +513,8 @@ function EditDialog({
             <TriangleAlert size={17} aria-hidden="true" />
             <span>
               <strong>Irreversible Calendar replacement</strong>
-              Saving reservation changes removes the managed future
-              Google Calendar events and rebuilds them from Convex.
+              Saving changes replaces the managed
+              Google Calendar events from the remaining meeting schedule.
               RoomOps cannot automatically restore the prior schedule.
             </span>
           </div>
@@ -553,14 +558,18 @@ function EditDialog({
                   onChange={(event) => {
                     const scope = event.target.value as
                       | "series"
-                      | "occurrence";
+                      | "occurrence"
+                      | "following";
                     update("editScope", scope);
-                    if (scope === "occurrence") {
+                    if (scope !== "series") {
                       selectOccurrence(form.occurrenceSequence);
                     } else {
                       setForm((current) => ({
                         ...current,
                         room: booking.room,
+                        eventName: booking.eventName ?? "",
+                        purpose: booking.purpose ?? "",
+                        ministry: booking.ministry ?? "",
                         start: localInputValue(
                           booking.startAt,
                           booking.timezone,
@@ -574,14 +583,15 @@ function EditDialog({
                   }}
                 >
                   <option value="series">
-                    Entire booking and recurrence
+                    All events
                   </option>
                   <option value="occurrence">
-                    One occurrence only
+                    This event
                   </option>
+                  <option value="following">This and following events</option>
                 </select>
               </label>
-              {form.editScope === "occurrence" && (
+              {form.editScope !== "series" && (
                 <label className="field form-grid-full">
                   <span>Occurrence</span>
                   <select
@@ -612,7 +622,7 @@ function EditDialog({
             <span>Requester name</span>
             <input
               required
-              disabled={busy || processing}
+              disabled={busy || processing || form.editScope !== "series"}
               value={form.requesterName}
               onChange={(event) =>
                 update("requesterName", event.target.value)
@@ -623,7 +633,7 @@ function EditDialog({
             <span>Requester email</span>
             <input
               required
-              disabled={busy || processing}
+              disabled={busy || processing || form.editScope !== "series"}
               type="email"
               value={form.requesterEmail}
               onChange={(event) =>
@@ -689,6 +699,7 @@ function EditDialog({
               }
             />
           </label>
+          {form.editScope !== "series" && <p className="form-grid-full">Event name, purpose, ministry, room and timing apply only to the selected scope. Contact details belong to the whole booking. “This and following” shifts each later meeting by the same amount and applies the selected duration; its existing repeat pattern is kept.</p>}
           {form.editScope === "series" && (
             <>
               <label className="field form-grid-full">
@@ -817,7 +828,7 @@ function EditDialog({
           />
           <span>
             I understand this action cannot be automatically undone and
-            future Calendar events may be replaced.
+            Calendar events may be replaced, including past dates when selected.
           </span>
         </label>
         {error && <div className="form-error">{error}</div>}
@@ -846,7 +857,7 @@ function EditDialog({
 }
 
 export default function BookingsPage() {
-  const deleteBooking = useAction(api.googleCalendar.deleteBooking);
+
   const retryCalendarSync = useMutation(
     api.bookings.retryCalendarSync,
   );
@@ -865,8 +876,7 @@ export default function BookingsPage() {
   const [editing, setEditing] = useState<Booking | null>(null);
   const [retryingBookingId, setRetryingBookingId] =
     useState<Id<"bookings"> | null>(null);
-  const [deletingBookingId, setDeletingBookingId] =
-    useState<Id<"bookings"> | null>(null);
+  const [removing, setRemoving] = useState<Booking | null>(null);
   const [pageError, setPageError] = useState("");
   const [pageNotice, setPageNotice] = useState("");
 
@@ -926,39 +936,7 @@ export default function BookingsPage() {
     }
   }
 
-  async function removeBooking(booking: Booking) {
-    if (isBookingCalendarProcessing(booking)) {
-      setPageError(
-        "Wait for the background Calendar operation to finish before deleting this booking.",
-      );
-      return;
-    }
-    if (
-      !window.confirm(
-        `Permanently delete booking ${booking.jotformSubmissionId} and its ENTIRE series (including past and future meetings)? RoomOps will discover and verify removal of its managed Google Calendar events before removing the booking. This cannot be undone.`,
-      )
-    ) {
-      return;
-    }
-    setDeletingBookingId(booking._id);
-    setPageError("");
-    setPageNotice("");
-    try {
-      const result = await deleteBooking({
-        bookingId: booking._id,
-        expectedRevision: booking.revision,
-      });
-      setPageNotice(
-        result.deleted
-          ? `Booking ${booking.jotformSubmissionId} and its managed Calendar events were deleted. Check room controls if the meeting was due to start or already running.`
-          : "That booking was already gone.",
-      );
-    } catch (caught) {
-      setPageError(messageFromError(caught));
-    } finally {
-      setDeletingBookingId(null);
-    }
-  }
+  function removeBooking(booking: Booking) { setRemoving(booking); }
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("en");
@@ -1259,7 +1237,7 @@ export default function BookingsPage() {
                             disabled={
                               isBookingCalendarProcessing(booking) ||
                               booking.deletionInProgress ||
-                              deletingBookingId === booking._id
+                              removing?._id === booking._id
                             }
                             onClick={() => void removeBooking(booking)}
                           >
@@ -1345,6 +1323,7 @@ export default function BookingsPage() {
         </div>
       </section>
 
+      {removing && <BookingRemovalPanel booking={removing} close={(notice) => { setRemoving(null); if (notice) setPageNotice(notice); }} />}
       {decision && (
         <DecisionDialog
           booking={currentDecisionBooking ?? decision.booking}

@@ -1,3 +1,4 @@
+import { writeAuditLog } from "./lib/auditLog";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import {
@@ -36,7 +37,7 @@ async function disableLegacySync(
   });
 
   if (!alreadyRetired) {
-    await ctx.db.insert("auditLogs", {
+    await writeAuditLog(ctx, {
       level: "info",
       category: "google_sheets",
       action: "legacy_sheet_sync_retired",
@@ -71,7 +72,7 @@ async function failLegacyEdit(
     leaseExpiresAt: undefined,
     updatedAt: now,
   });
-  await ctx.db.insert("auditLogs", {
+  await writeAuditLog(ctx, {
     level: "warning",
     category: "google_sheets",
     action: "legacy_sheet_edit_retired",

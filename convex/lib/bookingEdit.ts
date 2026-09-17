@@ -99,20 +99,3 @@ export function partitionManagedEventsForFutureReplacement<
   }
   return { keep, replace };
 }
-
-/** Calendar reconciliation preserves history; do not silently rewrite it in DB. */
-export function completedOccurrencesUnchanged(
-  before: readonly EditableOccurrence[],
-  after: readonly EditableOccurrence[],
-  previousRoom: string,
-  nextRoom: string,
-  now: number,
-): boolean {
-  const keys = (items: readonly EditableOccurrence[], room: string) =>
-    items.filter((item) => item.endAt <= now).map((item) => JSON.stringify([
-      item.startAt, item.endAt, item.room ?? room,
-    ])).sort();
-  const previous = keys(before, previousRoom);
-  const next = keys(after, nextRoom);
-  return previous.length === next.length && previous.every((key, i) => key === next[i]);
-}
