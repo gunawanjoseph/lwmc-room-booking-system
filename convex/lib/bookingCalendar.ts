@@ -26,3 +26,35 @@ export function calendarTimeRange(meeting:Pick<SubmitterMeeting,"startAt"|"endAt
   });
   return `${format.format(meeting.startAt)} – ${format.format(meeting.endAt)}`;
 }
+
+export function shiftDay(day:string,offset:number):string {
+  const date=new Date(`${day}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate()+offset);
+  return date.toISOString().slice(0,10);
+}
+export function weekDays(day:string):string[] {
+  const weekday=new Date(`${day}T12:00:00Z`).getUTCDay();
+  return Array.from({length:7},(_,i)=>shiftDay(day,i-weekday));
+}
+/** Position local-time blocks and give overlapping meetings separate columns. */
+export function timelineMeetings<T extends Pick<SubmitterMeeting,"key"|"startAt"|"endAt">>(rows:T[],day:string,timezone:string) {
+  function minute(timestamp:number) {
+    const parts=new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:timezone}).formatToParts(timestamp);
+    return Number(parts.find(p=>p.type==='hour')!.value)*60+Number(parts.find(p=>p.type==='minute')!.value);
+  }
+  const blocks=meetingsOnDay(rows,day,timezone).map(meeting=>{
+    const start=dateKey(meeting.startAt,timezone)<day?0:minute(meeting.startAt);
+    const end=dateKey(meeting.endAt,timezone)>day?1440:minute(meeting.endAt);
+    return {meeting,start,end:Math.min(1440,Math.max(start+30,end)),lane:0,lanes:1};
+  }).sort((a,b)=>a.start-b.start||b.end-a.end||a.meeting.key.localeCompare(b.meeting.key));
+  let group:typeof blocks=[];
+  let ends:number[]=[];
+  function finish(){for(const item of group)item.lanes=ends.length;group=[];ends=[];}
+  for(const block of blocks){
+    if(group.length&&block.start>=Math.max(...ends))finish();
+    let lane=ends.findIndex(end=>end<=block.start);
+    if(lane<0)lane=ends.length;
+    ends[lane]=block.end;block.lane=lane;group.push(block);
+  }
+  finish();return blocks;
+}

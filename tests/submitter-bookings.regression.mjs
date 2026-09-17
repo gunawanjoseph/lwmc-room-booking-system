@@ -299,3 +299,27 @@ test('overnight and midnight-ending calendar previews identify both endpoint dat
     assert.equal(calendar.calendarTimeRange({startAt,endAt},'Asia/Singapore'),`${format.format(startAt)} – ${format.format(endAt)}`);
   }
 });
+
+test('calendar day and week navigation crosses month/year/leap boundaries',()=>{
+  assert.equal(calendar.shiftDay('2026-12-31',1),'2027-01-01');
+  assert.equal(calendar.shiftDay('2024-03-01',-1),'2024-02-29');
+  assert.deepEqual(calendar.weekDays('2026-09-17'),['2026-09-13','2026-09-14','2026-09-15','2026-09-16','2026-09-17','2026-09-18','2026-09-19']);
+  assert.equal(calendar.weekDays('2027-01-01')[0],'2026-12-27');
+});
+test('hourly layout separates overlap groups and reuses lanes for adjacent events',()=>{
+  const row=(key,start,end)=>({key,startAt:Date.parse(`2026-09-17T${start}:00+08:00`),endAt:Date.parse(`2026-09-17T${end}:00+08:00`)});
+  const blocks=calendar.timelineMeetings([row('a','09:00','11:00'),row('b','10:00','12:00'),row('c','11:00','12:00'),row('d','12:00','13:00')],'2026-09-17','Asia/Singapore');
+  assert.deepEqual(blocks.map(b=>[b.start,b.end,b.lane,b.lanes]),[[540,660,0,2],[600,720,1,2],[660,720,0,2],[720,780,0,1]]);
+});
+test('timeline clips overnight meetings and keeps midnight end exclusive',()=>{
+  const row={key:'overnight',startAt:Date.parse('2026-09-17T23:00:00+08:00'),endAt:Date.parse('2026-09-19T00:00:00+08:00')};
+  const first=calendar.timelineMeetings([row],'2026-09-17','Asia/Singapore')[0];
+  const next=calendar.timelineMeetings([row],'2026-09-18','Asia/Singapore')[0];
+  assert.deepEqual([first.start,first.end,next.start,next.end],[1380,1440,0,1440]);
+  assert.deepEqual(calendar.timelineMeetings([row],'2026-09-19','Asia/Singapore'),[]);
+});
+test('short events reserve visible space without overlapping the next visual lane',()=>{
+  const start=Date.parse('2026-09-17T09:00:00+08:00');
+  const blocks=calendar.timelineMeetings([{key:'a',startAt:start,endAt:start+60000},{key:'b',startAt:start+120000,endAt:start+180000}],'2026-09-17','Asia/Singapore');
+  assert.equal(blocks[0].end-blocks[0].start,30);assert.equal(blocks[0].lanes,2);assert.notEqual(blocks[0].lane,blocks[1].lane);
+});

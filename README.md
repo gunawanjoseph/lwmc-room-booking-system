@@ -110,7 +110,8 @@ must all match: for example, Youth + Shema Space shows approved Youth
 meetings in Shema Space. **Show all / reset filters** restores the default selection.
 There is no status filter; only approved bookings are public.
 
-The month calendar provides previous/next navigation, Today, a month picker, and
+The calendar provides Day, Week, and Month views, previous/next navigation for
+the selected period, Today, a date picker, and
 a daily agenda. Selecting an event in the grid or agenda opens an in-app
 details window with its full title, start/end dates and times, timezone, room,
 ministry, and status. Close it with the Close button or Escape; keyboard focus
@@ -119,7 +120,15 @@ Calendar entries show both start and end times, including dates for overnight
 meetings. Crowded days show a count and the agenda lists every
 matching meeting. Multi-day events appear on each occupied date; midnight end
 times are exclusive. Times use `BOOKING_TIME_ZONE`, not the browser timezone.
-On narrow screens the month grid scrolls horizontally. Table view lists meetings
+The whole month day box is selectable, including its empty space. Event buttons
+open details independently. On phones the month grid fits the screen, showing
+booking counts with a full selected-day agenda below. Week view uses a seven-day
+selector and the selected day's hourly timeline on phones; wider screens show
+seven timelines side by side. Day view shows a single hourly timeline. Overlapping
+meetings use separate columns. Short meetings have a minimum visible height;
+their exact start/end times remain in event details. Timelines initially scroll
+to 07:00 and can be scrolled to all 24 hours. Switching views preserves the
+selected date. Filters apply to all three views. Table view lists meetings
 in booking-date order and progressively reveals additional rows.
 
 The public API exposes event title, ministry, room, status, and meeting times,

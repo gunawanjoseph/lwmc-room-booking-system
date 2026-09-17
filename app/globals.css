@@ -2988,3 +2988,54 @@ textarea:focus-visible {
 .booking-event-facts dt { color:var(--muted); }
 .booking-event-facts dd { margin:0; overflow-wrap:anywhere; }
 @media(max-width:480px) { .booking-event-dialog { padding:18px; } .booking-event-facts { grid-template-columns:1fr; gap:4px; } .booking-event-facts dd { margin-bottom:12px; } }
+
+.booking-view-switch { display:flex; gap:4px; padding:4px; background:#edf1ee; border-radius:12px; width:fit-content; margin-bottom:16px; }
+.booking-view-switch button { min-height:44px; padding:8px 22px; border:0; border-radius:9px; background:transparent; color:var(--forest); font:inherit; cursor:pointer; }
+.booking-view-switch [aria-pressed=true] { background:white; box-shadow:0 1px 5px #163b2520; font-weight:600; }
+.booking-calendar-toolbar { margin-bottom:12px; }
+.booking-calendar-toolbar h2 { text-align:left; flex:1; }
+.booking-calendar-navigation { display:flex; gap:8px; }
+.booking-calendar-navigation button { min-height:44px; min-width:44px; }
+.booking-calendar-day { position:relative; }
+.booking-day-target { position:absolute; inset:0; width:100%; height:100%; border:0; background:transparent; cursor:pointer; border-radius:0; }
+.booking-calendar-day .booking-calendar-number { pointer-events:none; position:relative; }
+.booking-calendar-day .booking-calendar-event,.booking-calendar-day .booking-calendar-more { position:relative; z-index:1; }
+.booking-mobile-count,.booking-mobile-week-hint { display:none; }
+.booking-time-view { border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+.booking-time-dates { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); padding-left:44px; border-bottom:1px solid var(--line); }
+.is-day .booking-time-dates { grid-template-columns:1fr; }
+.booking-time-dates button { min-height:58px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; border:0; background:white; color:var(--forest); cursor:pointer; font:inherit; }
+.booking-time-dates button span { font-size:.75rem; }
+.booking-time-dates button[aria-pressed=true] { background:var(--mint); box-shadow:inset 0 -3px #255f53; }
+.booking-time-scroll { height:min(65dvh,640px); overflow-y:auto; overscroll-behavior:contain; }
+.booking-time-grid { display:grid; position:relative; min-height:1440px; }
+.booking-time-hours { position:relative; height:1440px; background:#f8faf9; }
+.booking-time-hours span { position:absolute; left:3px; font-size:.65rem; color:var(--muted); }
+.booking-time-column { height:1440px; position:relative; border-left:1px solid var(--line); background:repeating-linear-gradient(to bottom, var(--line) 0px,var(--line) 1px,transparent 1px,transparent 60px); }
+.booking-time-event { position:absolute; display:flex; flex-direction:column; align-items:flex-start; gap:3px; border:1px solid white; border-left:3px solid #357660; border-radius:5px; padding:4px; background:#e4efe9; color:#214a3d; overflow:hidden; box-sizing:border-box; cursor:pointer; text-align:left; font:inherit; font-size:.72rem; }
+.booking-time-event strong,.booking-time-event span { width:100%; overflow-wrap:anywhere; flex-shrink:0; }
+.booking-time-event:hover { background:#cfe4d8; }
+.booking-time-event:focus-visible { z-index:2; }
+@media(max-width:700px) {
+  .booking-calendar { min-width:0; }
+  .booking-view-switch { width:100%; box-sizing:border-box; }
+  .booking-view-switch button { flex:1; padding:8px; }
+  .booking-calendar-toolbar h2 { width:100%; flex-basis:100%; font-size:1.15rem; }
+  .booking-calendar-toolbar .field { width:auto; flex:1; min-width:130px; margin:0; }
+  .booking-calendar-toolbar input { min-width:0; width:100%; box-sizing:border-box; min-height:44px; }
+  .booking-calendar-scroll { overflow:visible; }
+  .booking-calendar-grid { min-width:0; }
+  .booking-calendar-weekday { font-size:.7rem; padding:8px 0; }
+  .booking-calendar-day { min-height:64px; padding:4px 1px; align-items:center; gap:2px; }
+  .booking-calendar-day .booking-calendar-number { align-self:center; font-size:.8rem; padding:3px 6px; }
+  .booking-calendar-day .booking-calendar-event,.booking-calendar-day .booking-calendar-more { display:none; }
+  .booking-mobile-count { display:block; font-size:.65rem; color:#357660; pointer-events:none; position:relative; }
+  .booking-mobile-week-hint { display:block; font-size:.8rem; color:var(--muted); }
+  .booking-time-view.is-week .booking-time-dates { padding-left:0; }
+  .booking-time-grid { grid-template-columns:44px minmax(0,1fr) !important; }
+  .booking-time-column[data-selected=false] { display:none; }
+  .booking-time-event { font-size:.85rem; }
+  .booking-calendar-detail-toggle { min-height:44px; }
+  .booking-event-dialog { width:calc(100vw - 20px); max-height:calc(100dvh - 24px); }
+  .my-bookings-panel { padding:12px; }
+}

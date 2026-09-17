@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useId, useRef, useState } from "react";
 import { dateKey, type SubmitterMeeting } from "@/convex/lib/submitterBookings";
-import { calendarTimeRange, meetingsOnDay, monthDays, shiftMonth } from "@/convex/lib/bookingCalendar";
+import { calendarTimeRange, meetingsOnDay, monthDays, shiftMonth, shiftDay, weekDays, timelineMeetings } from "@/convex/lib/bookingCalendar";
 import type { PublicMeeting } from "@/convex/lib/publicBookings";
 import { formatDateTime } from "@/lib/ui";
 
@@ -34,35 +34,56 @@ function EventDetails({meeting,timezone,onClose}:{meeting:CalendarMeeting|undefi
   </dialog>;
 }
 
-export function BookingCalendar({rows,timezone,now}:{rows:(SubmitterMeeting|PublicMeeting)[];timezone:string;now:number}) {
+function TimeGrid({rows,days,selected,timezone,onSelect,onOpen}:{rows:CalendarMeeting[];days:string[];selected:string;timezone:string;onSelect:(day:string)=>void;onOpen:(key:string)=>void}) {
+  const viewport=useRef<HTMLDivElement>(null);
+  const blocks=days.map(day=>({day,blocks:timelineMeetings(rows,day,timezone)}));
+  useEffect(()=>{if(viewport.current)viewport.current.scrollTop=7*60;},[selected,days.length]);
+  return <div className={`booking-time-view ${days.length===7?'is-week':'is-day'}`}>
+    <div className="booking-time-dates">{days.map(day=><button type="button" key={day} aria-pressed={day===selected} onClick={()=>onSelect(day)}><span>{new Intl.DateTimeFormat('en-SG',{weekday:'short',timeZone:'UTC'}).format(new Date(`${day}T12:00:00Z`))}</span><strong>{Number(day.slice(-2))}</strong></button>)}</div>
+    <div className="booking-time-scroll" ref={viewport} tabIndex={0} aria-label="Hourly schedule; scroll to see all hours">
+      <div className="booking-time-grid" style={{gridTemplateColumns:`44px repeat(${days.length}, minmax(0,1fr))`}}>
+        <div className="booking-time-hours">{Array.from({length:24},(_,hour)=><span key={hour} style={{top:hour*60}}>{String(hour).padStart(2,'0')}:00</span>)}</div>
+        {blocks.map(({day,blocks})=><div key={day} className="booking-time-column" data-selected={day===selected} aria-label={day}>
+          {blocks.map(({meeting,start,end,lane,lanes})=><button type="button" key={meeting.key} className="booking-time-event" aria-haspopup="dialog" aria-label={`${meeting.title}. ${formatDateTime(meeting.startAt,timezone)} to ${formatDateTime(meeting.endAt,timezone)}. View event details.`} style={{top:start,height:end-start,left:`${lane/lanes*100}%`,width:`${100/lanes}%`}} onClick={()=>{onSelect(day);onOpen(meeting.key);}}><strong>{meeting.title}</strong><span>{calendarTimeRange(meeting,timezone)}</span><span>{meeting.room}</span></button>)}
+        </div>)}
+      </div>
+    </div>
+  </div>;
+}
+
+export function BookingCalendar({rows,timezone,now}:{rows:CalendarMeeting[];timezone:string;now:number}) {
   const today=dateKey(now,timezone);
-  const [month,setMonth]=useState(()=>today.slice(0,7));
+  const [mode,setMode]=useState<"day"|"week"|"month">("month");
   const [selected,setSelected]=useState(today);
   const [eventKey,setEventKey]=useState<string|null>(null);
+  const month=selected.slice(0,7);
   const days=monthDays(month);
-  const title=new Intl.DateTimeFormat("en-SG",{month:"long",year:"numeric",timeZone:"UTC"}).format(new Date(`${month}-01T12:00:00Z`));
+  const week=weekDays(selected);
+  const label=(day:string,options:Intl.DateTimeFormatOptions)=>new Intl.DateTimeFormat("en-SG",{...options,timeZone:"UTC"}).format(new Date(`${day}T12:00:00Z`));
+  const title=mode==="month"?label(selected,{month:"long",year:"numeric"}):mode==="day"?label(selected,{day:"numeric",month:"long",year:"numeric"}):`${label(week[0],{day:"numeric",month:"short",year:"numeric"})} – ${label(week[6],{day:"numeric",month:"short",year:"numeric"})}`;
   const selectedRows=meetingsOnDay(rows,selected,timezone);
-  function navigate(offset:number){const next=shiftMonth(month,offset);setMonth(next);setSelected(`${next}-01`);setEventKey(null);}
   function choose(day:string){setSelected(day);setEventKey(null);}
+  function navigate(offset:number){choose(mode==="month"?`${shiftMonth(month,offset)}-01`:shiftDay(selected,offset*(mode==="week"?7:1)));}
   return <div className="booking-calendar">
+    <div className="booking-view-switch" aria-label="Calendar period">{(["day","week","month"] as const).map(value=><button type="button" key={value} aria-pressed={mode===value} onClick={()=>setMode(value)}>{value[0].toUpperCase()+value.slice(1)}</button>)}</div>
     <div className="booking-calendar-toolbar">
-      <button className="button button-secondary" onClick={()=>{setMonth(today.slice(0,7));choose(today);}}>Today</button>
-      <button className="button button-secondary" aria-label="Previous month" onClick={()=>navigate(-1)}>‹</button>
       <h2 aria-live="polite">{title}</h2>
-      <button className="button button-secondary" aria-label="Next month" onClick={()=>navigate(1)}>›</button>
-      <label className="field"><span>Jump to month</span><input type="month" value={month} onChange={event=>{if(/^\d{4}-\d{2}$/.test(event.target.value)){setMonth(event.target.value);choose(`${event.target.value}-01`);}}}/></label>
+      <div className="booking-calendar-navigation"><button className="button button-secondary" aria-label={`Previous ${mode}`} onClick={()=>navigate(-1)}>‹</button><button className="button button-secondary" onClick={()=>choose(today)}>Today</button><button className="button button-secondary" aria-label={`Next ${mode}`} onClick={()=>navigate(1)}>›</button></div>
+      <label className="field"><span>Jump to date</span><input type="date" value={selected} onChange={event=>{if(/^\d{4}-\d{2}-\d{2}$/.test(event.target.value))choose(event.target.value);}}/></label>
     </div>
-    <p className="booking-calendar-zone">Times shown in {timezone}. Select a day to see its meetings. Filters above apply to both views.</p>
-    <div className="booking-calendar-scroll"><div className="booking-calendar-grid" aria-label={title}>
+    <p className="booking-calendar-zone">Times shown in {timezone}. Tap a day to select it or an event for full details.</p>
+    {mode==="month"?<div className="booking-calendar-scroll"><div className="booking-calendar-grid" aria-label={title}>
       {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(day=><div className="booking-calendar-weekday" key={day}>{day}</div>)}
       {days.map(day=>{const meetings=meetingsOnDay(rows,day,timezone);return <div key={day} className={`booking-calendar-day${day.slice(0,7)!==month?' outside':''}`} data-selected={selected===day} data-today={day===today}>
-        <button type="button" className="booking-calendar-number" aria-pressed={selected===day} aria-current={day===today?'date':undefined} aria-label={`${day}, ${meetings.length} meetings`} onClick={()=>choose(day)}>{Number(day.slice(-2))}</button>
+        <button type="button" className="booking-day-target" aria-pressed={selected===day} aria-current={day===today?'date':undefined} aria-label={`${day}, ${meetings.length} meetings. Select day.`} onClick={()=>choose(day)}/>
+        <span className="booking-calendar-number">{Number(day.slice(-2))}</span>
+        <span className="booking-mobile-count" aria-hidden="true">{meetings.length?`${meetings.length} ●`:''}</span>
         {meetings.slice(0,3).map(row=><button type="button" className={`booking-calendar-event status-${row.status}`} key={row.key} aria-haspopup="dialog" aria-label={`${row.title}. ${formatDateTime(row.startAt,timezone)} to ${formatDateTime(row.endAt,timezone)}. View event details.`} onClick={()=>{setSelected(day);setEventKey(row.key);}}><span className="booking-calendar-event-time">{calendarTimeRange(row,timezone)}</span><span className="booking-calendar-event-title">{row.title}</span></button>)}
         {meetings.length>3&&<button type="button" className="booking-calendar-more" aria-label={`Show all ${meetings.length} meetings on ${day}`} onClick={()=>choose(day)}>+{meetings.length-3} more</button>}
       </div>;})}
-    </div></div>
+    </div></div>:<><p className="booking-mobile-week-hint">{mode==="week"?'Select a day above the timeline to browse this week.':''}</p><TimeGrid rows={rows} days={mode==="week"?week:[selected]} selected={selected} timezone={timezone} onSelect={choose} onOpen={setEventKey}/></>}
     <section className="booking-calendar-agenda" aria-label="Selected day meetings">
-      <h3>{selected} · {selectedRows.length} meeting{selectedRows.length===1?'':'s'}</h3>
+      <h3>{label(selected,{weekday:"long",day:"numeric",month:"short"})} · {selectedRows.length} meeting{selectedRows.length===1?'':'s'}</h3>
       {!selectedRows.length&&<p>No bookings on this day in the selected filter.</p>}
       {selectedRows.map(row=><article className="booking-calendar-detail" key={row.key}>
         <button type="button" aria-haspopup="dialog" className="booking-calendar-detail-toggle" onClick={()=>setEventKey(row.key)}><strong>{row.title}</strong><span>{row.room} · {row.status}</span><span>{formatDateTime(row.startAt,timezone)} – {formatDateTime(row.endAt,timezone)}</span><span>View event details</span></button>
