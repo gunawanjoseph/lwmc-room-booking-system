@@ -7,7 +7,7 @@ import { formatDateTime } from "@/lib/ui";
 
 type CalendarMeeting = SubmitterMeeting | PublicMeeting;
 
-function EventDetails({meeting,timezone,onClose}:{meeting:CalendarMeeting|undefined;timezone:string;onClose:()=>void}) {
+export function EventDetails({meeting,timezone,onClose}:{meeting:CalendarMeeting|undefined;timezone:string;onClose:()=>void}) {
   const dialog=useRef<HTMLDialogElement>(null);
   const titleId=useId();
   useEffect(()=>{
@@ -63,6 +63,10 @@ export function BookingCalendar({rows,timezone,now}:{rows:CalendarMeeting[];time
   const title=mode==="month"?label(selected,{month:"long",year:"numeric"}):mode==="day"?label(selected,{day:"numeric",month:"long",year:"numeric"}):`${label(week[0],{day:"numeric",month:"short",year:"numeric"})} – ${label(week[6],{day:"numeric",month:"short",year:"numeric"})}`;
   const selectedRows=meetingsOnDay(rows,selected,timezone);
   function choose(day:string){setSelected(day);setEventKey(null);}
+  function chooseMonthDay(day:string){
+    choose(day);
+    if(window.matchMedia("(max-width: 700px)").matches)setMode("week");
+  }
   function navigate(offset:number){choose(mode==="month"?`${shiftMonth(month,offset)}-01`:shiftDay(selected,offset*(mode==="week"?7:1)));}
   return <div className="booking-calendar">
     <div className="booking-view-switch" aria-label="Calendar period">{(["day","week","month"] as const).map(value=><button type="button" key={value} aria-pressed={mode===value} onClick={()=>setMode(value)}>{value[0].toUpperCase()+value.slice(1)}</button>)}</div>
@@ -75,11 +79,11 @@ export function BookingCalendar({rows,timezone,now}:{rows:CalendarMeeting[];time
     {mode==="month"?<div className="booking-calendar-scroll"><div className="booking-calendar-grid" aria-label={title}>
       {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(day=><div className="booking-calendar-weekday" key={day}>{day}</div>)}
       {days.map(day=>{const meetings=meetingsOnDay(rows,day,timezone);return <div key={day} className={`booking-calendar-day${day.slice(0,7)!==month?' outside':''}`} data-selected={selected===day} data-today={day===today}>
-        <button type="button" className="booking-day-target" aria-pressed={selected===day} aria-current={day===today?'date':undefined} aria-label={`${day}, ${meetings.length} meetings. Select day.`} onClick={()=>choose(day)}/>
+        <button type="button" className="booking-day-target" aria-pressed={selected===day} aria-current={day===today?'date':undefined} aria-label={`${day}, ${meetings.length} meetings. Select day.`} onClick={()=>chooseMonthDay(day)}/>
         <span className="booking-calendar-number">{Number(day.slice(-2))}</span>
         <span className="booking-mobile-count" aria-hidden="true">{meetings.length?`${meetings.length} ●`:''}</span>
         {meetings.slice(0,3).map(row=><button type="button" className={`booking-calendar-event status-${row.status}`} key={row.key} aria-haspopup="dialog" aria-label={`${row.title}. ${formatDateTime(row.startAt,timezone)} to ${formatDateTime(row.endAt,timezone)}. View event details.`} onClick={()=>{setSelected(day);setEventKey(row.key);}}><span className="booking-calendar-event-time">{calendarTimeRange(row,timezone)}</span><span className="booking-calendar-event-title">{row.title}</span></button>)}
-        {meetings.length>3&&<button type="button" className="booking-calendar-more" aria-label={`Show all ${meetings.length} meetings on ${day}`} onClick={()=>choose(day)}>+{meetings.length-3} more</button>}
+        {meetings.length>3&&<button type="button" className="booking-calendar-more" aria-label={`Show all ${meetings.length} meetings on ${day}`} onClick={()=>chooseMonthDay(day)}>+{meetings.length-3} more</button>}
       </div>;})}
     </div></div>:<><p className="booking-mobile-week-hint">{mode==="week"?'Select a day above the timeline to browse this week.':''}</p><TimeGrid rows={rows} days={mode==="week"?week:[selected]} selected={selected} timezone={timezone} onSelect={choose} onOpen={setEventKey}/></>}
     <section className="booking-calendar-agenda" aria-label="Selected day meetings">

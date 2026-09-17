@@ -323,3 +323,20 @@ test('short events reserve visible space without overlapping the next visual lan
   const blocks=calendar.timelineMeetings([{key:'a',startAt:start,endAt:start+60000},{key:'b',startAt:start+120000,endAt:start+180000}],'2026-09-17','Asia/Singapore');
   assert.equal(blocks[0].end-blocks[0].start,30);assert.equal(blocks[0].lanes,2);assert.notEqual(blocks[0].lane,blocks[1].lane);
 });
+
+const listRules=await import('../convex/lib/bookingList.ts');
+test('booking list always has a today anchor between sorted past and future groups',()=>{
+  const row=(key,date)=>({...publicRules.publicMeetings(booking({status:'approved',occurrences:undefined}))[0],key,startAt:Date.parse(`${date}T09:00:00+08:00`),endAt:Date.parse(`${date}T10:00:00+08:00`)});
+  const groups=listRules.bookingListGroups([row('future','2026-09-19'),row('past','2026-09-16')],'2026-09-17','Asia/Singapore');
+  assert.deepEqual(groups.map(group=>group.day),['2026-09-16','2026-09-17','2026-09-19']);
+  assert.deepEqual(groups[1].meetings,[]);
+  assert.deepEqual(listRules.bookingListGroups([],'2026-09-17','Asia/Singapore'),[{day:'2026-09-17',meetings:[]}]);
+});
+test('list includes overnight ongoing events today but excludes events ending at local midnight',()=>{
+  const base=publicRules.publicMeetings(booking({status:'approved',occurrences:undefined}))[0];
+  const startAt=Date.parse('2026-09-16T23:00:00+08:00');
+  const rows=[{...base,key:'continuing',startAt,endAt:Date.parse('2026-09-17T01:00:00+08:00')},{...base,key:'ended',startAt,endAt:Date.parse('2026-09-17T00:00:00+08:00')}];
+  const groups=listRules.bookingListGroups(rows,'2026-09-17','Asia/Singapore');
+  assert.equal(groups[0].meetings.length,2);
+  assert.deepEqual(groups[1].meetings.map(row=>row.key),['continuing']);
+});

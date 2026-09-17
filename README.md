@@ -98,7 +98,7 @@ approved meetings, across all ministries and rooms. This is a public
 read-only view; it grants no administrator permissions. Pending, rejected, unavailable,
 and processing bookings are excluded by the server.
 
-Filters apply to both calendar and table views:
+Filters apply to both calendar and list views:
 
 - **Ministry:** select one or more ministries. No selection means all ministries.
   Meetings without a ministry are labelled Unspecified.
@@ -120,7 +120,9 @@ Calendar entries show both start and end times, including dates for overnight
 meetings. Crowded days show a count and the agenda lists every
 matching meeting. Multi-day events appear on each occupied date; midnight end
 times are exclusive. Times use `BOOKING_TIME_ZONE`, not the browser timezone.
-The whole month day box is selectable, including its empty space. Event buttons
+The whole month day box is selectable, including its empty space. On screens
+700 px wide or narrower, selecting a month day immediately opens Week view with
+that day selected. Desktop month selections stay in Month view. Event buttons
 open details independently. On phones the month grid fits the screen, showing
 booking counts with a full selected-day agenda below. Week view uses a seven-day
 selector and the selected day's hourly timeline on phones; wider screens show
@@ -128,8 +130,13 @@ seven timelines side by side. Day view shows a single hourly timeline. Overlappi
 meetings use separate columns. Short meetings have a minimum visible height;
 their exact start/end times remain in event details. Timelines initially scroll
 to 07:00 and can be scrolled to all 24 hours. Switching views preserves the
-selected date. Filters apply to all three views. Table view lists meetings
-in booking-date order and progressively reveals additional rows.
+selected date. Filters apply to all three views. List view groups meetings by date with their title, room, ministry, and start/end
+times. It opens at Today, even when there are no bookings today. Scroll up within
+the list for history and down for future events; the Today button returns to
+today. Changing filters or reopening List returns to today, while live booking
+updates preserve browsing position. Overnight meetings continuing into today also
+appear in today's section. Tap any event to open its full details. The list fits
+phone screens without horizontal scrolling.
 
 The public API exposes event title, ministry, room, status, and meeting times,
 with an opaque key for rendering. It does not expose requester names/emails,
