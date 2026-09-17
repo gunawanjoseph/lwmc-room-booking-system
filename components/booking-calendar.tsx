@@ -2,9 +2,10 @@
 import { useState } from "react";
 import { dateKey, type SubmitterMeeting } from "@/convex/lib/submitterBookings";
 import { meetingsOnDay, monthDays, shiftMonth } from "@/convex/lib/bookingCalendar";
+import type { PublicMeeting } from "@/convex/lib/publicBookings";
 import { formatDateTime } from "@/lib/ui";
 
-export function BookingCalendar({rows,timezone,now}:{rows:SubmitterMeeting[];timezone:string;now:number}) {
+export function BookingCalendar({rows,timezone,now}:{rows:(SubmitterMeeting|PublicMeeting)[];timezone:string;now:number}) {
   const today=dateKey(now,timezone);
   const [month,setMonth]=useState(()=>today.slice(0,7));
   const [selected,setSelected]=useState(today);
@@ -36,7 +37,7 @@ export function BookingCalendar({rows,timezone,now}:{rows:SubmitterMeeting[];tim
       {!selectedRows.length&&<p>No bookings on this day in the selected filter.</p>}
       {selectedRows.map(row=><article className="booking-calendar-detail" key={row.key}>
         <button type="button" aria-expanded={expanded===row.key} className="booking-calendar-detail-toggle" onClick={()=>setExpanded(expanded===row.key?null:row.key)}><strong>{row.title}</strong><span>{row.room} · {row.status}</span><span>{formatDateTime(row.startAt,timezone)} – {formatDateTime(row.endAt,timezone)}</span></button>
-        {expanded===row.key&&<div className="booking-calendar-detail-body"><p>Reference {row.reference}</p><p>Submitted: {formatDateTime(row.submittedAt,timezone)}{row.submissionDateEstimated?' (RoomOps received date)':''}</p>{row.calendarSyncStatus==='creating'&&<p>Google Calendar synchronization is pending.</p>}{row.calendarSyncStatus==='failed'&&<p>Google Calendar synchronization needs administrator attention.</p>}</div>}
+        {expanded===row.key&&<div className="booking-calendar-detail-body">{'ministry' in row&&<p>Ministry: {row.ministry||"Unspecified"}</p>}{'reference' in row&&<p>Reference {row.reference}</p>}{'submittedAt' in row&&<p>Submitted: {formatDateTime(row.submittedAt,timezone)}{row.submissionDateEstimated?' (RoomOps received date)':''}</p>}{'calendarSyncStatus' in row&&row.calendarSyncStatus==='creating'&&<p>Google Calendar synchronization is pending.</p>}{'calendarSyncStatus' in row&&row.calendarSyncStatus==='failed'&&<p>Google Calendar synchronization needs administrator attention.</p>}</div>}
       </article>)}
     </section>
   </div>;

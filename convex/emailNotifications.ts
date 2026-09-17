@@ -2251,11 +2251,11 @@ async function withSubmitterBookings(ctx: ActionCtx, email: string, message: {su
   const ordered=sortMeetings(rows,"booking","asc");
   const {today}=bookingWindow(now,timezone);
   const table=meetingTable(ordered);
-  const link=`${gmailConfiguration().appBaseUrl}/my-bookings`;
+  const link=`${gmailConfiguration().appBaseUrl}/booking-calendar`;
   const heading=`Your outstanding bookings (from ${today}, ${timezone})`;
   const snapshotLabel=snapshot ? `Snapshot when your change was saved (${new Date(now).toISOString()}).` : "Snapshot at email sending time.";
-  const text=`${message.text}\n\n${heading}\nPending and approved meetings. ${snapshotLabel}\n${table.text}\n\nView all your bookings: ${link}\nSign in with the verified email ${email}.`;
-  const footer=`<section style="max-width:640px;margin:24px auto;padding:24px;background:#fff;font-family:Arial,sans-serif"><h2 style="font-size:18px">${escapeBookingHtml(heading)}</h2><p>Pending and approved meetings. ${snapshotLabel}</p>${table.html}<p><a href="${escapeBookingHtml(link)}">View all your bookings</a> · Sign in with the verified email used for your booking.</p></section>`;
+  const text=`${message.text}\n\n${heading}\nPending and approved meetings. ${snapshotLabel}\n${table.text}\n\nView the public booking calendar: ${link}\nNo sign-in required.`;
+  const footer=`<section style="max-width:640px;margin:24px auto;padding:24px;background:#fff;font-family:Arial,sans-serif"><h2 style="font-size:18px">${escapeBookingHtml(heading)}</h2><p>Pending and approved meetings. ${snapshotLabel}</p>${table.html}<p><a href="${escapeBookingHtml(link)}">View the public booking calendar</a> · No sign-in required.</p></section>`;
   return {...message,text,html:message.html.includes("</body>")?message.html.replace("</body>",`${footer}</body>`):`${message.html}${footer}`};
 }
 
@@ -2271,7 +2271,7 @@ export const sendBookingNotice=internalAction({args:{noticeId:v.id("bookingNotic
     const summary=notice.kind==="deleted"&&notice.scope!=="series"
       ? `Selected meetings in booking ${notice.bookingReference} were removed. Scope: ${scope}.`
       : `Your booking ${notice.bookingReference} was ${notice.kind}. Scope: ${scope}.`;
-    const calendar=notice.calendarPending?"The change is saved in RoomOps. Google Calendar synchronization may still be pending; this email does not confirm room-control changes.":"Please check the latest booking status in My bookings.";
+    const calendar=notice.calendarPending?"The change is saved in RoomOps. Google Calendar synchronization may still be pending; this email does not confirm room-control changes.":"Please check the latest booking status in the booking calendar.";
     const message=await withSubmitterBookings(ctx,notice.recipientEmail,{
       subject:`Room booking ${notice.kind}: ${notice.bookingReference}`,
       text:`${summary}\n${calendar}\n${notice.detailChanges}\n\n${notice.kind==="deleted"?"Removed meetings":"Previous details"}\n${before.text}${notice.kind==="edited"?`\n\nUpdated details\n${after.text}`:""}`,

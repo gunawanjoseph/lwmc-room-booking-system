@@ -33,7 +33,7 @@ export default function LandingPage() {
       <nav className="landing-nav shell-width">
         <Brand />
         <div className="landing-actions">
-          <Link href="/my-bookings" className="button button-secondary button-small">My bookings</Link>
+          <Link href="/booking-calendar" className="button button-secondary button-small">Booking calendar</Link>
           <a
             className="text-link hide-mobile"
             href={JOTFORM_FORM_URL}

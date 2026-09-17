@@ -125,7 +125,7 @@ for(const kind of ['requester_submission_received','requester_approved','request
     throw Error(name);
   },runMutation:async(name,args)=>mutations.push({name,args})};
   await emails.sendDelivery.handler(ctx,{deliveryId:'delivery',leaseToken:'lease'});assert.equal(sent.length,1,JSON.stringify(mutations));
-  if(kind.startsWith('requester_')){assert.match(sent[0],/OUTSTANDING-ROW/);assert.match(sent[0],/\/my-bookings/);assert.match(sent[0],/Your outstanding bookings/);assert.equal(pages,2);}else{assert.doesNotMatch(sent[0],/OUTSTANDING-ROW|Your outstanding bookings|\/my-bookings/);assert.equal(pages,0);}
+  if(kind.startsWith('requester_')){assert.match(sent[0],/OUTSTANDING-ROW/);assert.match(sent[0],/\/booking-calendar/);assert.match(sent[0],/Your outstanding bookings/);assert.equal(pages,2);}else{assert.doesNotMatch(sent[0],/OUTSTANDING-ROW|Your outstanding bookings|\/booking-calendar/);assert.equal(pages,0);}
   assert.equal(mutations.at(-1).name,'completeDelivery');
 }));
 test('deletion notification sends snapshot and saved remaining-bookings footer without needing the deleted row',async()=>gmail(async sent=>{
@@ -226,3 +226,66 @@ test('legacy queued notices without a snapshot still deliver using a clearly lab
   ctx.runQuery=async()=>({page:[],isDone:true,continueCursor:'',timezone:'Asia/Singapore'});
   await emails.sendBookingNotice.handler(ctx,{noticeId});assert.equal(sent.length,1);assert.match(sent[0],/Snapshot at email sending time/);
 }));
+
+const publicRules=await import('../convex/lib/publicBookings.ts');
+test('public booking queries work anonymously and return only approved or pending allowlisted fields',async()=>{
+  const ctx=context({bookings:['approved','pending','rejected','unavailable','processing'].map(status=>booking({_id:status,status,ministry:'Youth',purpose:'PRIVATE-PURPOSE',requesterName:'PRIVATE-NAME',requesterEmail:'PRIVATE-EMAIL',formResponses:[{value:'PRIVATE-ANSWER'}],calendarSyncError:'PRIVATE-ERROR'}))});
+  ctx.auth={getUserIdentity:async()=>{throw Error('Public queries must not require identity');}};
+  for(const status of ['approved','pending']) {
+    const result=await own.publicList.handler(ctx,{status,paginationOpts:{numItems:20,cursor:null}});
+    assert.equal(result.page.length,1);assert.equal(result.page[0].id,status);
+    assert.equal(result.page[0].meetings.length,3);
+    for(const row of result.page[0].meetings){
+      assert.equal(row.status,status);
+      assert.deepEqual(Object.keys(row).sort(),['key','title','room','rooms','ministry','status','startAt','endAt','timezone'].sort());
+    }
+    assert.doesNotMatch(JSON.stringify(result),/PRIVATE-|requester|purpose|formResponses|reference|submittedAt|calendarSync/);
+  }
+  await assert.rejects(own.publicList.handler(ctx,{status:'rejected',paginationOpts:{numItems:20,cursor:null}}));
+  assert.ok((await own.publicSettings.handler(ctx,{})).timezone);
+});
+test('public projection omits every nonpublic status and handles scoped ministry/room changes',()=>{
+  for(const status of ['rejected','unavailable','processing','unknown'])assert.deepEqual(publicRules.publicMeetings(booking({status})),[]);
+  const b=booking({ministry:'Youth',resolvedVenues:['Room A','Room B']});
+  b.occurrences[1]={...b.occurrences[1],room:'Room C',resolvedVenues:['Room C'],details:{ministry:'Children',eventName:'Current title'}};
+  b.occurrences[2]={...b.occurrences[2],details:{ministry:''}};
+  const rows=publicRules.publicMeetings(b);
+  assert.equal(rows[0].ministry,'Youth');assert.deepEqual(rows[0].rooms,['Room A','Room B']);
+  assert.equal(rows[1].ministry,'Children');assert.equal(rows[1].room,'Room C');assert.equal(rows[1].title,'Current title');assert.deepEqual(rows[1].rooms,['Room C']);
+  assert.equal(rows[2].ministry,'');
+});
+test('public status/ministry/room filters combine with AND between categories and OR within them',()=>{
+  const rows=[
+    ['a','approved','Youth','A'],['b','pending','Youth','A'],['c','pending','Children','A'],['d','pending','Youth','B'],
+  ].flatMap(([id,status,ministry,room])=>publicRules.publicMeetings(booking({_id:id,status,ministry,room,occurrences:undefined})));
+  const filter=extra=>publicRules.filterPublicMeetings(rows,{statuses:['approved','pending'],ministries:[],rooms:[],...extra}).map(row=>row.key);
+  assert.deepEqual(filter({}),['a:0','b:0','c:0','d:0']);
+  assert.deepEqual(filter({statuses:['pending'],ministries:['Youth']}),['b:0','d:0']);
+  assert.deepEqual(filter({statuses:['pending'],rooms:['A']}),['b:0','c:0']);
+  assert.deepEqual(filter({ministries:['Youth'],rooms:['A']}),['a:0','b:0']);
+  assert.deepEqual(filter({statuses:['pending'],ministries:['Youth'],rooms:['A']}),['b:0']);
+  assert.deepEqual(filter({statuses:['pending'],ministries:['Youth','Children'],rooms:['A','B']}),['b:0','c:0','d:0']);
+  assert.deepEqual(filter({statuses:[]}),[]);
+  assert.deepEqual(filter({rooms:['missing']}),[]);
+});
+test('public filters match combined venue components and unspecified ministries without a date limit',()=>{
+  const rows=publicRules.publicMeetings(booking({occurrences:undefined,room:'A & B',resolvedVenues:['A','B'],ministry:undefined,startAt:Date.now()+1000*86400000}));
+  for(const room of ['A','B','A & B'])assert.equal(publicRules.filterPublicMeetings(rows,{statuses:['pending'],ministries:[''],rooms:[room]}).length,1);
+  assert.equal(publicRules.filterPublicMeetings(rows,{statuses:['approved'],ministries:[],rooms:[]}).length,0);
+  assert.equal(calendar.meetingsOnDay(rows,rules.dateKey(rows[0].startAt,rows[0].timezone),rows[0].timezone).length,1);
+});
+test('public queries preserve pagination and immediately reflect persisted edits, cancellations, and status changes',async()=>{
+  const ctx=context({bookings:[booking({_id:'first',ministry:'Old'}),booking({_id:'second'})]});
+  const first=await own.publicList.handler(ctx,{status:'pending',paginationOpts:{numItems:1,cursor:null}});
+  assert.equal(first.page.length,1);assert.equal(first.isDone,false);
+  const b=await ctx.db.get('first');
+  await ctx.db.patch('first',{occurrences:b.occurrences.slice(1).map(row=>({...row,room:'Updated room',details:{ministry:'Updated ministry',eventName:'Updated event'}}))});
+  const updated=await own.publicList.handler(ctx,{status:'pending',paginationOpts:{numItems:20,cursor:null}});
+  const meetings=updated.page.find(row=>row.id==='first').meetings;
+  assert.equal(meetings.length,2);assert.ok(meetings.every(row=>row.ministry==='Updated ministry'&&row.title==='Updated event'&&row.room==='Updated room'));
+  await ctx.db.patch('first',{status:'rejected'});
+  const rejected=await own.publicList.handler(ctx,{status:'pending',paginationOpts:{numItems:20,cursor:null}});
+  assert.equal(rejected.page.some(row=>row.id==='first'),false);
+  await ctx.db.delete('second');
+  assert.equal((await own.publicList.handler(ctx,{status:'pending',paginationOpts:{numItems:20,cursor:null}})).page.length,0);
+});
