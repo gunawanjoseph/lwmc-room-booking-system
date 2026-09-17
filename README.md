@@ -111,7 +111,12 @@ meetings in Shema Space. **Show all / reset filters** restores the default selec
 There is no status filter; only approved bookings are public.
 
 The month calendar provides previous/next navigation, Today, a month picker, and
-an expandable daily agenda. Crowded days show a count and the agenda lists every
+a daily agenda. Selecting an event in the grid or agenda opens an in-app
+details window with its full title, start/end dates and times, timezone, room,
+ministry, and status. Close it with the Close button or Escape; keyboard focus
+returns to the event. The window follows live changes to the selected meeting.
+Calendar entries show both start and end times, including dates for overnight
+meetings. Crowded days show a count and the agenda lists every
 matching meeting. Multi-day events appear on each occupied date; midnight end
 times are exclusive. Times use `BOOKING_TIME_ZONE`, not the browser timezone.
 On narrow screens the month grid scrolls horizontally. Table view lists meetings

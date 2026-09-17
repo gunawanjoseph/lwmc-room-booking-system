@@ -16,3 +16,13 @@ export function meetingsOnDay<T extends Pick<SubmitterMeeting,"key"|"startAt"|"e
   return rows.filter(row=>dateKey(row.startAt,timezone)<=day&&dateKey(Math.max(row.startAt,row.endAt-1),timezone)>=day)
     .sort((a,b)=>a.startAt-b.startAt||a.key.localeCompare(b.key));
 }
+
+/** Show both endpoints; include dates when a meeting crosses local midnight. */
+export function calendarTimeRange(meeting:Pick<SubmitterMeeting,"startAt"|"endAt">,timezone:string):string {
+  const crossesDate=dateKey(meeting.startAt,timezone)!==dateKey(meeting.endAt,timezone);
+  const format=new Intl.DateTimeFormat("en-SG",{
+    hour:"numeric",minute:"2-digit",timeZone:timezone,
+    ...(crossesDate?{day:"numeric" as const,month:"short" as const}:{}),
+  });
+  return `${format.format(meeting.startAt)} – ${format.format(meeting.endAt)}`;
+}

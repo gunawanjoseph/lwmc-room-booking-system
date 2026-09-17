@@ -286,3 +286,16 @@ test('public queries preserve pagination and immediately reflect persisted edits
   await ctx.db.delete('second');
   assert.equal((await own.publicList.handler(ctx,{paginationOpts:{numItems:20,cursor:null}})).page.length,0);
 });
+
+test('calendar previews show both start and end times in the booking timezone',()=>{
+  const startAt=Date.parse('2026-09-17T01:30:00Z'),endAt=Date.parse('2026-09-17T03:00:00Z');
+  const format=new Intl.DateTimeFormat('en-SG',{hour:'numeric',minute:'2-digit',timeZone:'Asia/Singapore'});
+  assert.equal(calendar.calendarTimeRange({startAt,endAt},'Asia/Singapore'),`${format.format(startAt)} – ${format.format(endAt)}`);
+});
+test('overnight and midnight-ending calendar previews identify both endpoint dates',()=>{
+  for(const end of ['2026-09-17T16:00:00Z','2026-09-18T01:00:00Z']){
+    const startAt=Date.parse('2026-09-17T15:00:00Z'),endAt=Date.parse(end);
+    const format=new Intl.DateTimeFormat('en-SG',{hour:'numeric',minute:'2-digit',timeZone:'Asia/Singapore',day:'numeric',month:'short'});
+    assert.equal(calendar.calendarTimeRange({startAt,endAt},'Asia/Singapore'),`${format.format(startAt)} – ${format.format(endAt)}`);
+  }
+});
