@@ -94,23 +94,21 @@ guide also documents retiring a legacy Google Sheets connection.
 sign-in/sign-up links redirect there.
 
 The default is **Calendar view** with **All bookings (god mode)**: everyone's
-approved and pending meetings, across all ministries and rooms. This is a public
-read-only view; it grants no administrator permissions. Rejected, unavailable,
+approved meetings, across all ministries and rooms. This is a public
+read-only view; it grants no administrator permissions. Pending, rejected, unavailable,
 and processing bookings are excluded by the server.
 
 Filters apply to both calendar and table views:
 
-- **Booking status:** Approved and Pending are selected initially. Select either
-  or both; clearing both shows no meetings.
 - **Ministry:** select one or more ministries. No selection means all ministries.
   Meetings without a ministry are labelled Unspecified.
 - **Room:** select one or more rooms. No selection means all rooms. A combined
   venue matches its display name or one of its resolved constituent rooms.
 
 Selections within a category match any selected value. Different categories
-must all match: for example, Pending + Youth + Shema Space shows pending Youth
+must all match: for example, Youth + Shema Space shows approved Youth
 meetings in Shema Space. **Show all / reset filters** restores the default selection.
-Pending requests are not confirmed reservations.
+There is no status filter; only approved bookings are public.
 
 The month calendar provides previous/next navigation, Today, a month picker, and
 an expandable daily agenda. Crowded days show a count and the agenda lists every
@@ -129,7 +127,7 @@ meeting, following meetings, or the full series update the displayed times, room
 titles, and ministries. Removed occurrences disappear. There is no one-year date
 cutoff; the page shows concrete occurrences saved in RoomOps, including past dates.
 It does not invent additional future recurrences. Public booking queries paginate
-by approved/pending status; the view loads all pages before applying its filters.
+by approved status; the view loads all pages before applying its filters.
 
 ## Administrator access
 

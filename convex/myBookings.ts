@@ -26,12 +26,14 @@ export const emailPage=internalQuery({args:{email:v.string(),paginationOpts:pagi
   return {...result,page:result.page.flatMap(submitterMeetings),timezone:process.env.BOOKING_TIME_ZONE||"Asia/Singapore"};
 }});
 
-// Public availability view. Index each visible status separately; never fetch rejected rows.
+// Public availability view: only approved bookings may leave the server.
 export const publicList=query({
-  args:{status:v.union(v.literal("approved"),v.literal("pending")),paginationOpts:paginationOptsValidator},
+  args:{status:v.optional(v.union(v.literal("approved"),v.literal("pending"))),paginationOpts:paginationOptsValidator},
   handler:async(ctx,args)=>{
-    if(args.status!=="approved"&&args.status!=="pending")throw new ConvexError("Invalid public booking status.");
-    const result=await ctx.db.query("bookings").withIndex("by_status",q=>q.eq("status",args.status)).order("desc").paginate(args.paginationOpts);
+    if(args.status!==undefined&&args.status!=="approved"&&args.status!=="pending")throw new ConvexError("Invalid public booking status.");
+    // Older open tabs still request pending pages. Return none, without exposing them.
+    if(args.status==="pending")return {page:[],isDone:true,continueCursor:""};
+    const result=await ctx.db.query("bookings").withIndex("by_status",q=>q.eq("status","approved")).order("desc").paginate(args.paginationOpts);
     return {...result,page:result.page.map(booking=>({id:booking._id,meetings:publicMeetings(booking)}))};
   },
 });

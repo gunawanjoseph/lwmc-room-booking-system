@@ -228,10 +228,10 @@ test('legacy queued notices without a snapshot still deliver using a clearly lab
 }));
 
 const publicRules=await import('../convex/lib/publicBookings.ts');
-test('public booking queries work anonymously and return only approved or pending allowlisted fields',async()=>{
+test('public booking queries work anonymously and return only approved allowlisted fields',async()=>{
   const ctx=context({bookings:['approved','pending','rejected','unavailable','processing'].map(status=>booking({_id:status,status,ministry:'Youth',purpose:'PRIVATE-PURPOSE',requesterName:'PRIVATE-NAME',requesterEmail:'PRIVATE-EMAIL',formResponses:[{value:'PRIVATE-ANSWER'}],calendarSyncError:'PRIVATE-ERROR'}))});
   ctx.auth={getUserIdentity:async()=>{throw Error('Public queries must not require identity');}};
-  for(const status of ['approved','pending']) {
+  for(const status of ['approved']) {
     const result=await own.publicList.handler(ctx,{status,paginationOpts:{numItems:20,cursor:null}});
     assert.equal(result.page.length,1);assert.equal(result.page[0].id,status);
     assert.equal(result.page[0].meetings.length,3);
@@ -241,12 +241,13 @@ test('public booking queries work anonymously and return only approved or pendin
     }
     assert.doesNotMatch(JSON.stringify(result),/PRIVATE-|requester|purpose|formResponses|reference|submittedAt|calendarSync/);
   }
+  assert.deepEqual((await own.publicList.handler(ctx,{status:'pending',paginationOpts:{numItems:20,cursor:null}})).page,[]);
   await assert.rejects(own.publicList.handler(ctx,{status:'rejected',paginationOpts:{numItems:20,cursor:null}}));
   assert.ok((await own.publicSettings.handler(ctx,{})).timezone);
 });
 test('public projection omits every nonpublic status and handles scoped ministry/room changes',()=>{
-  for(const status of ['rejected','unavailable','processing','unknown'])assert.deepEqual(publicRules.publicMeetings(booking({status})),[]);
-  const b=booking({ministry:'Youth',resolvedVenues:['Room A','Room B']});
+  for(const status of ['pending','rejected','unavailable','processing','unknown'])assert.deepEqual(publicRules.publicMeetings(booking({status})),[]);
+  const b=booking({status:'approved',ministry:'Youth',resolvedVenues:['Room A','Room B']});
   b.occurrences[1]={...b.occurrences[1],room:'Room C',resolvedVenues:['Room C'],details:{ministry:'Children',eventName:'Current title'}};
   b.occurrences[2]={...b.occurrences[2],details:{ministry:''}};
   const rows=publicRules.publicMeetings(b);
@@ -254,38 +255,34 @@ test('public projection omits every nonpublic status and handles scoped ministry
   assert.equal(rows[1].ministry,'Children');assert.equal(rows[1].room,'Room C');assert.equal(rows[1].title,'Current title');assert.deepEqual(rows[1].rooms,['Room C']);
   assert.equal(rows[2].ministry,'');
 });
-test('public status/ministry/room filters combine with AND between categories and OR within them',()=>{
-  const rows=[
-    ['a','approved','Youth','A'],['b','pending','Youth','A'],['c','pending','Children','A'],['d','pending','Youth','B'],
-  ].flatMap(([id,status,ministry,room])=>publicRules.publicMeetings(booking({_id:id,status,ministry,room,occurrences:undefined})));
-  const filter=extra=>publicRules.filterPublicMeetings(rows,{statuses:['approved','pending'],ministries:[],rooms:[],...extra}).map(row=>row.key);
-  assert.deepEqual(filter({}),['a:0','b:0','c:0','d:0']);
-  assert.deepEqual(filter({statuses:['pending'],ministries:['Youth']}),['b:0','d:0']);
-  assert.deepEqual(filter({statuses:['pending'],rooms:['A']}),['b:0','c:0']);
-  assert.deepEqual(filter({ministries:['Youth'],rooms:['A']}),['a:0','b:0']);
-  assert.deepEqual(filter({statuses:['pending'],ministries:['Youth'],rooms:['A']}),['b:0']);
-  assert.deepEqual(filter({statuses:['pending'],ministries:['Youth','Children'],rooms:['A','B']}),['b:0','c:0','d:0']);
-  assert.deepEqual(filter({statuses:[]}),[]);
+test('public ministry and room filters combine and reject stale pending rows',()=>{
+  const rows=[['a','Youth','A'],['b','Youth','B'],['c','Children','A']].flatMap(([id,ministry,room])=>publicRules.publicMeetings(booking({_id:id,status:'approved',ministry,room,occurrences:undefined})));
+  const filter=extra=>publicRules.filterPublicMeetings(rows,{ministries:[],rooms:[],...extra}).map(row=>row.key);
+  assert.deepEqual(filter({}),['a:0','b:0','c:0']);
+  assert.deepEqual(filter({ministries:['Youth']}),['a:0','b:0']);
+  assert.deepEqual(filter({rooms:['A']}),['a:0','c:0']);
+  assert.deepEqual(filter({ministries:['Youth'],rooms:['A']}),['a:0']);
+  assert.deepEqual(filter({ministries:['Youth','Children'],rooms:['A','B']}),['a:0','b:0','c:0']);
   assert.deepEqual(filter({rooms:['missing']}),[]);
+  assert.deepEqual(publicRules.filterPublicMeetings([{...rows[0],status:'pending'}],{ministries:[],rooms:[]}),[]);
 });
 test('public filters match combined venue components and unspecified ministries without a date limit',()=>{
-  const rows=publicRules.publicMeetings(booking({occurrences:undefined,room:'A & B',resolvedVenues:['A','B'],ministry:undefined,startAt:Date.now()+1000*86400000}));
-  for(const room of ['A','B','A & B'])assert.equal(publicRules.filterPublicMeetings(rows,{statuses:['pending'],ministries:[''],rooms:[room]}).length,1);
-  assert.equal(publicRules.filterPublicMeetings(rows,{statuses:['approved'],ministries:[],rooms:[]}).length,0);
+  const rows=publicRules.publicMeetings(booking({status:'approved',occurrences:undefined,room:'A & B',resolvedVenues:['A','B'],ministry:undefined,startAt:Date.now()+1000*86400000}));
+  for(const room of ['A','B','A & B'])assert.equal(publicRules.filterPublicMeetings(rows,{ministries:[''],rooms:[room]}).length,1);
   assert.equal(calendar.meetingsOnDay(rows,rules.dateKey(rows[0].startAt,rows[0].timezone),rows[0].timezone).length,1);
 });
 test('public queries preserve pagination and immediately reflect persisted edits, cancellations, and status changes',async()=>{
-  const ctx=context({bookings:[booking({_id:'first',ministry:'Old'}),booking({_id:'second'})]});
-  const first=await own.publicList.handler(ctx,{status:'pending',paginationOpts:{numItems:1,cursor:null}});
+  const ctx=context({bookings:[booking({_id:'first',status:'approved',ministry:'Old'}),booking({_id:'second',status:'approved'})]});
+  const first=await own.publicList.handler(ctx,{paginationOpts:{numItems:1,cursor:null}});
   assert.equal(first.page.length,1);assert.equal(first.isDone,false);
   const b=await ctx.db.get('first');
   await ctx.db.patch('first',{occurrences:b.occurrences.slice(1).map(row=>({...row,room:'Updated room',details:{ministry:'Updated ministry',eventName:'Updated event'}}))});
-  const updated=await own.publicList.handler(ctx,{status:'pending',paginationOpts:{numItems:20,cursor:null}});
+  const updated=await own.publicList.handler(ctx,{paginationOpts:{numItems:20,cursor:null}});
   const meetings=updated.page.find(row=>row.id==='first').meetings;
   assert.equal(meetings.length,2);assert.ok(meetings.every(row=>row.ministry==='Updated ministry'&&row.title==='Updated event'&&row.room==='Updated room'));
-  await ctx.db.patch('first',{status:'rejected'});
-  const rejected=await own.publicList.handler(ctx,{status:'pending',paginationOpts:{numItems:20,cursor:null}});
+  await ctx.db.patch('first',{status:'pending'});
+  const rejected=await own.publicList.handler(ctx,{paginationOpts:{numItems:20,cursor:null}});
   assert.equal(rejected.page.some(row=>row.id==='first'),false);
   await ctx.db.delete('second');
-  assert.equal((await own.publicList.handler(ctx,{status:'pending',paginationOpts:{numItems:20,cursor:null}})).page.length,0);
+  assert.equal((await own.publicList.handler(ctx,{paginationOpts:{numItems:20,cursor:null}})).page.length,0);
 });
