@@ -98,6 +98,12 @@ approved meetings, across all ministries and rooms. This is a public
 read-only view; it grants no administrator permissions. Pending, rejected, unavailable,
 and processing bookings are excluded by the server.
 
+The Calendar/List switch sits below the filters, next to the calendar controls.
+Reset filters remains beside the filter heading. While data or a view update is
+pending, the booking area retains its layout and blocks interaction with stale
+results. A loading overlay appears only for waits longer than 150 ms; quick
+changes do not flash a loading screen.
+
 Filters apply to both calendar and list views:
 
 - **Ministry:** select one or more ministries. No selection means all ministries.

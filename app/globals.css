@@ -3058,3 +3058,18 @@ textarea:focus-visible {
 .booking-list-event:focus-visible,.booking-list-scroll:focus-visible { outline:2px solid #467eb0; outline-offset:-2px; }
 .booking-list-empty { color:var(--muted); font-size:.85rem; padding:4px; }
 @media(max-width:480px) { .booking-list-event { gap:10px; } .booking-list-times { flex-basis:92px; font-size:.78rem; } .booking-list-copy strong { font-size:.92rem; } .booking-list-day h3 { font-size:.85rem; } }
+
+.booking-filter-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.booking-filter-heading p { margin:0; }
+.booking-display-switch { display:flex; width:fit-content; padding:3px; margin:20px 0 12px; border:1px solid var(--line); border-radius:12px; background:white; }
+.booking-display-switch button { min-height:44px; padding:8px 22px; border:0; border-radius:9px; background:transparent; color:var(--forest); cursor:pointer; font:inherit; }
+.booking-display-switch button[aria-pressed=true] { background:var(--forest); color:white; }
+.booking-display-switch button:focus-visible { outline:2px solid #467eb0; outline-offset:2px; }
+.booking-loading-region { position:relative; min-width:0; }
+.booking-loading-content.is-loading { opacity:.4; }
+.booking-loading-overlay { position:absolute; inset:0; z-index:4; display:flex; align-items:flex-start; justify-content:center; gap:10px; padding-top:48px; background:rgb(255 255 255 / 65%); color:var(--forest); font-size:.9rem; }
+.booking-loading-spinner { width:18px; height:18px; border:2px solid #cbded3; border-top-color:#255f53; border-radius:50%; animation:booking-spin .8s linear infinite; }
+.booking-initial-loading { min-height:360px; }
+@keyframes booking-spin { to { transform:rotate(360deg); } }
+@media(prefers-reduced-motion:reduce) { .booking-loading-spinner { animation:none; } }
+@media(max-width:700px) { .booking-display-switch { width:100%; box-sizing:border-box; } .booking-display-switch button { flex:1; } .booking-filter-heading .button { min-height:44px; padding:8px 12px; } }
