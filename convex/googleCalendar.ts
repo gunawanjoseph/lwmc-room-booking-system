@@ -649,6 +649,7 @@ export const deleteBooking = action({
   args: {
     bookingId: v.id("bookings"),
     expectedRevision: v.number(),
+    notifySubmitter: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<{ deleted: boolean }> => {
     const user = await requireActionCapability(ctx, "table.edit");
@@ -709,6 +710,7 @@ export const deleteBooking = action({
           bookingId: deletion.booking._id,
           actorId: user.clerkUserId,
           deletionToken,
+          notifySubmitter: args.notifySubmitter,
         },
       )) as { deleted: boolean };
     } catch (error) {

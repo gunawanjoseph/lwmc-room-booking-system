@@ -19,6 +19,7 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
   const recurring = occurrences.length > 1;
   const [scope, setScope] = useState<RecurrenceScope>(recurring ? "occurrence" : "series");
   const [sequence, setSequence] = useState(() => occurrences.find(item => item.endAt > Date.now())?.sequence ?? occurrences[0].sequence);
+  const [notifySubmitter, setNotifySubmitter] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const panel = useRef<HTMLElement>(null);
@@ -36,13 +37,13 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
     setBusy(true); setError("");
     try {
       if (scope !== "series") {
-        const result = await removeSome({bookingId:booking._id,expectedRevision:booking.revision ?? 0,scope,occurrenceSequence:sequence});
+        const result = await removeSome({bookingId:booking._id,expectedRevision:booking.revision ?? 0,scope,occurrenceSequence:sequence,notifySubmitter});
         if (!result.deleteAllRequired) {
           close(result.calendarQueued ? `${count} meeting(s) selected for removal. Calendar synchronization is in progress; check its status before relying on room controls.` : `${count} meeting(s) removed; the other meetings were kept.`);
           return;
         }
       }
-      await removeAll({bookingId:booking._id,expectedRevision:booking.revision ?? 0});
+      await removeAll({bookingId:booking._id,expectedRevision:booking.revision ?? 0,notifySubmitter});
       close("Booking removed after Calendar cleanup. Check room controls if a meeting was due to start or already running.");
     } catch (caught) { setError(messageFromError(caught)); setBusy(false); }
   }
@@ -70,6 +71,7 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
         ] as const).map(([value,title,description])=><label className={`scope-option ${scope===value?"selected":""}`} key={value}><input type="radio" name="remove-scope" checked={scope===value} onChange={()=>setScope(value)}/><span><strong>{title}</strong><small>{description}</small></span></label>)}</fieldset>
       </>}
       <div className="removal-impact"><strong>{count} meeting{count===1?"":"s"} will be removed</strong><p>{occurrences.length-count} will remain. This cannot be undone automatically. Calendar changes must finish before you rely on the room schedule.</p></div>
+      <label className="notification-choice"><input type="checkbox" checked={notifySubmitter} disabled={busy} onChange={event=>setNotifySubmitter(event.target.checked)}/><span>Email the submitter after this removal is saved</span></label>
       {error && <div className="form-error" role="alert">{error}</div>}
       <div className="drawer-actions"><button type="button" className="button button-secondary" disabled={busy} onClick={()=>close()}>Keep booking</button><button type="button" className="button button-danger" disabled={busy} onClick={submit}><Trash2 size={16}/>{busy ? "Removing…" : `Remove ${count===1?"meeting":"meetings"}`}</button></div>
     </aside>

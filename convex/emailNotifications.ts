@@ -1,3 +1,4 @@
+import { bookingWindow, filterMeetings, sortMeetings, meetingTable, escapeBookingHtml, type SubmitterMeeting } from "./lib/submitterBookings";
 import { writeAuditLog } from "./lib/auditLog";
 import { ConvexError, v } from "convex/values";
 import {
@@ -1781,7 +1782,10 @@ export const sendDelivery = internalAction({
     }
     const context = lookup.context;
     try {
-      const message = composeDelivery(context);
+      const composed = composeDelivery(context);
+      const message = context.delivery.kind.startsWith("requester_")
+        ? await withSubmitterBookings(ctx,context.delivery.recipientEmail,composed)
+        : composed;
       const result = await sendGmail({
         ...message,
         messageKey: String(context.delivery._id),
@@ -2097,7 +2101,12 @@ export const retryFailedInternal = internalMutation({
         { deliveryId: delivery._id },
       );
     }
-    return { queued: failed.length };
+    const notices=await ctx.db.query("bookingNotices").withIndex("by_status",q=>q.eq("status","failed")).take(50);
+    for(const notice of notices){
+      await ctx.db.patch(notice._id,{status:"pending",attempts:0,token:undefined,leaseExpiresAt:undefined,error:undefined,updatedAt:now});
+      await ctx.scheduler.runAfter(0,internal.emailNotifications.sendBookingNotice,{noticeId:notice._id});
+    }
+    return { queued: failed.length + notices.length };
   },
 });
 
@@ -2224,3 +2233,48 @@ export const sendSupportMessage = internalAction({
     await ctx.runMutation(internal.support.finishDelivery,{...args,token,error:errorMessage});
   },
 });
+
+/** Adds recipient-owned bookings only to submitter mail, never administrator mail. */
+async function withSubmitterBookings(ctx: ActionCtx, email: string, message: {subject:string;text:string;html:string}) {
+  const now=Date.now();
+  let cursor:string|null=null;
+  const rows: SubmitterMeeting[]=[];
+  let timezone="Asia/Singapore";
+  do {
+    const result: {page:SubmitterMeeting[];isDone:boolean;continueCursor:string;timezone:string} = await ctx.runQuery(internal.myBookings.emailPage,{email,paginationOpts:{numItems:20,cursor}});
+    timezone=result.timezone;
+    rows.push(...filterMeetings(result.page,"outstanding",now,timezone));
+    cursor=result.isDone?null:result.continueCursor;
+  } while(cursor!==null);
+  const ordered=sortMeetings(rows,"booking","asc");
+  const {today,until}=bookingWindow(now,timezone);
+  const table=meetingTable(ordered);
+  const link=`${gmailConfiguration().appBaseUrl}/my-bookings`;
+  const heading=`Your outstanding bookings (${today} to ${until}, ${timezone})`;
+  const text=`${message.text}\n\n${heading}\nPending and approved meetings. Snapshot at email sending time.\n${table.text}\n\nView all your bookings: ${link}\nSign in with the verified email ${email}.`;
+  const footer=`<section style="max-width:640px;margin:24px auto;padding:24px;background:#fff;font-family:Arial,sans-serif"><h2 style="font-size:18px">${escapeBookingHtml(heading)}</h2><p>Pending and approved meetings. Snapshot at email sending time.</p>${table.html}<p><a href="${escapeBookingHtml(link)}">View all your bookings</a> · Sign in with the verified email used for your booking.</p></section>`;
+  return {...message,text,html:message.html.includes("</body>")?message.html.replace("</body>",`${footer}</body>`):`${message.html}${footer}`};
+}
+
+export const sendBookingNotice=internalAction({args:{noticeId:v.id("bookingNotices")},handler:async(ctx,args):Promise<void>=>{
+  const token=crypto.randomUUID();
+  const notice=await ctx.runMutation(internal.bookingNotices.claim,{...args,token});
+  if(!notice)return;
+  let error:string|undefined;
+  try {
+    const before=meetingTable(JSON.parse(notice.beforeJson) as SubmitterMeeting[]);
+    const after=meetingTable(JSON.parse(notice.afterJson) as SubmitterMeeting[]);
+    const scope=notice.scope==="occurrence"?"This event":notice.scope==="following"?"This and following events":"All events";
+    const summary=notice.kind==="deleted"&&notice.scope!=="series"
+      ? `Selected meetings in booking ${notice.bookingReference} were removed. Scope: ${scope}.`
+      : `Your booking ${notice.bookingReference} was ${notice.kind}. Scope: ${scope}.`;
+    const calendar=notice.calendarPending?"The change is saved in RoomOps. Google Calendar synchronization may still be pending; this email does not confirm room-control changes.":"Please check the latest booking status in My bookings.";
+    const message=await withSubmitterBookings(ctx,notice.recipientEmail,{
+      subject:`Room booking ${notice.kind}: ${notice.bookingReference}`,
+      text:`${summary}\n${calendar}\n${notice.detailChanges}\n\n${notice.kind==="deleted"?"Removed meetings":"Previous details"}\n${before.text}${notice.kind==="edited"?`\n\nUpdated details\n${after.text}`:""}`,
+      html:`<html><body><main style="max-width:640px;margin:auto;padding:24px;font-family:Arial,sans-serif"><h1 style="font-size:22px">${escapeBookingHtml(summary)}</h1><p>${escapeBookingHtml(calendar)}</p>${notice.detailChanges?`<p style="white-space:pre-wrap">${escapeBookingHtml(notice.detailChanges)}</p>`:""}<h2>${notice.kind==="deleted"?"Removed meetings":"Previous details"}</h2>${before.html}${notice.kind==="edited"?`<h2>Updated details</h2>${after.html}`:""}</main></body></html>`,
+    });
+    await sendGmail({...message,to:notice.recipientEmail,messageKey:`booking-change-${args.noticeId}`});
+  }catch(caught){error=caught instanceof Error?caught.message:"Booking change email failed.";}
+  await ctx.runMutation(internal.bookingNotices.finish,{...args,token,error});
+}});

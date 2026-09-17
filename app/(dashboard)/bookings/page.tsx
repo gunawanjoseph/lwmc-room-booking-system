@@ -315,6 +315,7 @@ function EditDialog({
 }) {
   const convex = useConvex();
   const edit = useMutation(api.bookings.edit);
+  const [notifySubmitter, setNotifySubmitter] = useState(false);
   const [form, setForm] = useState({
     requesterName: booking.requesterName,
     requesterEmail: booking.requesterEmail,
@@ -479,6 +480,7 @@ function EditDialog({
       }
       await edit({
         ...editArgs,
+        notifySubmitter,
         acknowledgedConflictBookingIds: preview.conflicts.map(
           (conflict) => conflict.bookingId,
         ),
@@ -832,6 +834,7 @@ function EditDialog({
           </span>
         </label>
         {error && <div className="form-error">{error}</div>}
+        <label className="notification-choice"><input type="checkbox" checked={notifySubmitter} disabled={busy} onChange={event=>setNotifySubmitter(event.target.checked)}/><span>Email the submitter after saving these changes</span></label>
         <div className="modal-actions">
           <button
             type="button"

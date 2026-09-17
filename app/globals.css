@@ -2923,3 +2923,18 @@ textarea:focus-visible {
 .drawer-actions { margin-top: auto; display: flex; justify-content: flex-end; gap: 12px; padding-top: 12px; }
 .support-list { display: grid; gap: 12px; margin: 20px 0; }
 .support-recipient { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid #dce4df; overflow-wrap: anywhere; }
+
+.notification-choice { display:flex; align-items:center; gap:10px; margin:14px 0; font-size:.85rem; line-height:1.5; }
+.notification-choice input { width:18px; height:18px; flex:0 0 auto; }
+.my-bookings-header,.my-bookings-lookup,.my-bookings-controls,.my-bookings-tabs { display:flex; align-items:center; flex-wrap:wrap; gap:14px; }
+.my-bookings-header { justify-content:space-between; margin-bottom:32px; }
+.my-bookings-lookup { align-items:end; margin:24px 0 12px; }
+.my-bookings-lookup .field { flex:1; max-width:480px; min-width:200px; }
+.my-bookings-panel { margin-top:28px; padding:24px; }
+.my-bookings-tabs [aria-pressed=true] { background:var(--mint); border-color:var(--forest); }
+.my-bookings-controls { margin:24px 0; }
+.my-bookings-table { overflow-x:auto; }
+.my-bookings-table table { width:100%; border-collapse:collapse; min-width:650px; }
+.my-bookings-table th,.my-bookings-table td { text-align:left; padding:12px; border-bottom:1px solid var(--line); vertical-align:top; font-size:.85rem; }
+.my-bookings-table small { color:var(--muted); }
+@media(max-width:600px) { .my-bookings-panel { padding:16px; } .my-bookings-tabs .button { flex:1 1 40%; } }

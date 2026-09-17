@@ -1,3 +1,4 @@
+import { queueBookingNotice } from "./lib/bookingNotice";
 import { writeAuditLog } from "./lib/auditLog";
 import { editScopedOccurrences, scopedSequences, type ScopedOccurrence } from "./lib/recurrenceScope";
 import { DateTime } from "luxon";
@@ -1095,6 +1096,7 @@ export const stageJotformSubmission = internalMutation({
     submissionId: v.string(),
     requesterName: v.string(),
     requesterEmail: v.string(),
+    submittedAt: v.optional(v.number()),
     room: v.string(),
     startAt: v.number(),
     endAt: v.number(),
@@ -1228,6 +1230,7 @@ export const stageJotformSubmission = internalMutation({
       jotformSubmissionId: args.submissionId,
       requesterName: normalizeAdminName(args.requesterName),
       requesterEmail: normalizeAdminEmail(args.requesterEmail),
+      submittedAt: args.submittedAt,
       room,
       roomKey,
       startAt: args.startAt,
@@ -1538,6 +1541,7 @@ export const finalizeJotformSubmission = internalMutation({
 
 export const saveTableEdits = mutation({
   args: {
+    notifySubmitter: v.optional(v.boolean()),
     clientRequestId: v.string(),
     edits: v.array(
       v.object({
@@ -1796,6 +1800,7 @@ export const saveTableEdits = mutation({
 
     const now = Date.now();
     for (const change of planned) {
+      const beforeNotice = args.notifySubmitter ? await ctx.db.get(change.bookingId) : null;
       const newRevision = change.previousRevision + 1;
       const nextCalendarAttempt = change.calendarSyncAttempts + 1;
       const syncToken = change.shouldReconcileCalendar
@@ -1834,6 +1839,7 @@ export const saveTableEdits = mutation({
         sheetSyncLeaseToken: undefined,
         sheetSyncLeaseExpiresAt: undefined,
       });
+      if (beforeNotice) await queueBookingNotice(ctx,beforeNotice,(await ctx.db.get(change.bookingId))!,"edited");
       await writeAuditLog(ctx, {
         level: "info",
         category: "booking",
@@ -2100,6 +2106,7 @@ export const recordBookingDeletionTargets = internalMutation({
 
 export const completeBookingDeletion = internalMutation({
   args: {
+    notifySubmitter: v.optional(v.boolean()),
     bookingId: v.id("bookings"),
     actorId: v.string(),
     deletionToken: v.string(),
@@ -2119,6 +2126,7 @@ export const completeBookingDeletion = internalMutation({
         "This deletion worker lease expired before it could finish. Retry deletion.",
       );
     }
+    if (args.notifySubmitter) await queueBookingNotice(ctx,booking,null,"deleted");
     await deleteBookingRecord(ctx, booking, args.actorId);
     return { deleted: true };
   },
@@ -2230,6 +2238,7 @@ export const deleteTableRow = mutation({
 /** Partial cancellation keeps the row and shows Calendar sync until verified. */
 export const removeOccurrences = mutation({
   args: {
+    notifySubmitter: v.optional(v.boolean()),
     bookingId: v.id("bookings"), expectedRevision: v.number(),
     scope: v.union(v.literal("occurrence"), v.literal("following")),
     occurrenceSequence: v.number(),
@@ -2303,6 +2312,7 @@ export const removeOccurrences = mutation({
       message: `${selected.size} meeting(s) removed from the booking; ${calendarQueued ? "Calendar synchronization queued" : "no approved Calendar events"}.`,
       detailsJson: JSON.stringify({ scope: args.scope, selected: [...selected], remaining: occurrences.length }), createdAt: now,
     });
+    if (args.notifySubmitter) await queueBookingNotice(ctx,booking,(await ctx.db.get(booking._id))!,"deleted",args.scope,args.occurrenceSequence);
     return { deleteAllRequired: false, calendarQueued };
   },
 });
@@ -3998,6 +4008,7 @@ export const previewEdit = query({
 
 export const edit = mutation({
   args: {
+    notifySubmitter: v.optional(v.boolean()),
     ...adminEditArgs,
     acknowledgedConflictBookingIds: v.optional(
       v.array(v.id("bookings")),
@@ -4251,6 +4262,7 @@ export const edit = mutation({
         },
       );
     }
+    if (args.notifySubmitter) await queueBookingNotice(ctx,booking,(await ctx.db.get(booking._id))!,"edited",args.editScope??"series",args.occurrenceSequence);
   },
 });
 

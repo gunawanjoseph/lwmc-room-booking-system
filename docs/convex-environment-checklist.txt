@@ -34,6 +34,10 @@ JOTFORM_FIELD_MAP_JSON=
 # IANA zone for Jotform answers without an explicit offset.
 BOOKING_TIME_ZONE=Asia/Singapore
 
+# Optional: timezone of unzoned Jotform created_at values, if different from
+# BOOKING_TIME_ZONE. Used only for sorting by original submission time.
+# JOTFORM_SUBMISSION_TIME_ZONE=Asia/Singapore
+
 # Keep false until the API, service account, calendar sharing, and map are ready.
 GOOGLE_CALENDAR_ENABLED=false
 

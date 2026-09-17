@@ -105,6 +105,12 @@ export const jotformResponseValidator = v.object({
 });
 
 export default defineSchema({
+  bookingNotices: defineTable({
+    bookingReference:v.string(),recipientEmail:v.string(),kind:v.union(v.literal("edited"),v.literal("deleted")),
+    scope:v.string(),detailChanges:v.string(),beforeJson:v.string(),afterJson:v.string(),calendarPending:v.boolean(),
+    status:v.union(v.literal("pending"),v.literal("sending"),v.literal("sent"),v.literal("failed")),
+    attempts:v.number(),token:v.optional(v.string()),leaseExpiresAt:v.optional(v.number()),error:v.optional(v.string()),createdAt:v.number(),updatedAt:v.number(),
+  }).index("by_created",["createdAt"]).index("by_status",["status"]),
   supportThreads: defineTable({
     kind: v.union(v.literal("report"), v.literal("announcement")),
     title: v.string(), severity: v.union(v.literal("low"), v.literal("medium"), v.literal("high"), v.literal("critical")),
@@ -171,6 +177,7 @@ export default defineSchema({
     jotformSubmissionId: v.string(),
     requesterName: v.string(),
     requesterEmail: v.string(),
+    submittedAt: v.optional(v.number()),
     room: v.string(),
     roomKey: v.string(),
     startAt: v.number(),
@@ -252,6 +259,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_submission_id", ["jotformSubmissionId"])
+    .index("by_requester_email", ["requesterEmail"])
     .index("by_room_start", ["roomKey", "startAt"])
     .index("by_status", ["status"])
     .index("by_conflict_booking", ["conflictBookingId"])

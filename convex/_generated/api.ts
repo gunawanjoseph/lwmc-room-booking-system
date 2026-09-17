@@ -9,6 +9,8 @@
  */
 
 import type * as approvers from "../approvers.js";
+import type * as bookingNotices from "../bookingNotices.js";
+import type * as myBookings from "../myBookings.js";
 import type * as bookings from "../bookings.js";
 import type * as conflictAdmins from "../conflictAdmins.js";
 import type * as emailNotifications from "../emailNotifications.js";
@@ -47,6 +49,8 @@ import { anyApi, componentsGeneric } from "convex/server";
 const fullApi: ApiFromModules<{
   approvers: typeof approvers;
   bookings: typeof bookings;
+  bookingNotices: typeof bookingNotices;
+  myBookings: typeof myBookings;
   conflictAdmins: typeof conflictAdmins;
   emailNotifications: typeof emailNotifications;
   googleCalendar: typeof googleCalendar;

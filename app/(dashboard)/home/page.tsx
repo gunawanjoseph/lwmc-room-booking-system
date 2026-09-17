@@ -58,6 +58,7 @@ export default function HomePage() {
 
   return (
     <div className="page">
+      <Link href="/my-bookings" className="button button-secondary">My bookings — check by email</Link>
       <header className="page-header overview-header">
         <div>
           <span className="eyebrow">OPERATIONS OVERVIEW</span>

@@ -555,3 +555,113 @@ blocked by the previously documented npm registry 403. The local browser runtime
 was unavailable and its download also returned HTTP 403, so visual/browser
 verification still needs to run on a test deployment at mobile, tablet and desktop
 widths before release. No live deployment was changed.
+
+## Submitter booking lookup and change emails
+
+Apply `lwmc-submitter-bookings-notifications.patch` after
+`lwmc-support-layout-publishing.patch`:
+
+```bash
+git apply --check "$HOME/Downloads/lwmc-submitter-bookings-notifications.patch"
+git apply "$HOME/Downloads/lwmc-submitter-bookings-notifications.patch"
+```
+
+### Optional edit and deletion emails
+
+The booking editor, table editor and recurring-removal drawer now offer an
+**Email the submitter** checkbox, off by default. Saving with it checked records
+a durable notification in the same database transaction as the change. Emails
+include the reference, selected recurrence scope, old/new meeting details for
+edits, removed meetings for deletions, and changed descriptive fields. Table
+edits notify only rows that actually changed. If an edit corrects the requester
+email, the notification goes to the newly saved address; it is not copied to the
+previous address.
+
+Whole-booking deletion creates the notice only in the final commit after managed
+Google Calendar cleanup has been verified. A failed or expired deletion attempt
+cannot send a success email. The notice keeps the necessary snapshot after the
+booking row is deleted. Partial cancellations and edits notify after the RoomOps
+change commits; when Calendar synchronization is queued or has failed, the email
+explicitly says it does not confirm Calendar or room-control completion. Existing
+Calendar reconciliation, conflict checks and revision guards remain in place.
+
+Notifications use the existing Gmail configuration. A separate `bookingNotices`
+outbox provides leases, five attempts, backoff and abandoned-worker recovery.
+Exhausted failures write an error log for the Developer. The existing Integrations
+**Retry failed emails** action also retries these notices. Delivery can be delayed;
+Gmail acceptance followed by a timeout can still cause a duplicate on retry.
+
+### My bookings
+
+A **My bookings** link is available on the public landing page and administrator
+home page. `/my-bookings` has its own submitter sign-in/sign-up routes. Users sign
+in through Clerk and verify the same email used on the booking form; no RoomOps
+administrator registration or approval is needed. The page provides an email
+lookup field, but the backend permits only the current verified email owner.
+Typing someone else's email never grants access, even to a signed-in administrator.
+Public users do not gain any administrator permissions.
+
+Views and ordering:
+
+- **Outstanding:** pending or approved meetings starting from today through the
+  same calendar date next year, inclusive, using `BOOKING_TIME_ZONE` (default
+  Asia/Singapore). February 29 anniversaries clamp to February 28. Rejected and
+  unavailable requests are excluded.
+- **Pending:** all pending requests, including older requests still awaiting a
+  decision. **All bookings:** every retained booking, regardless of status/date.
+- **Past:** meetings whose start date is before today in the system timezone.
+- Sort by booking date or submission date, oldest/newest first. Recurring meetings
+  are shown individually, including their scoped room/title overrides. Server
+  pages are loaded before sorting/filtering the complete result; the display then
+  reveals 50 meetings at a time. Deleted records are not retained as booking history.
+
+New Jotform intake captures `created_at` for original submission sorting when
+available. Unzoned timestamps use `JOTFORM_SUBMISSION_TIME_ZONE`, falling back to
+`BOOKING_TIME_ZONE`. Set that optional Convex variable to the timezone of your
+Jotform account if it differs from the room timezone. Older records or missing
+source timestamps use the original RoomOps received date, explicitly labelled in
+the table. Editing a booking does not change its submission timestamp.
+
+Clerk must allow submitters to sign up/sign in and include `email` and boolean
+`email_verified` in the Convex token. A separate verified account is only needed
+if the submitter does not already have a Clerk login. The dedicated redirects keep
+submitters out of the administrator registration flow. Existing admin sign-in is
+unchanged. See [Clerk's sign-in component reference](https://clerk.com/docs/nextjs/reference/components/authentication/sign-in)
+for the redirect properties used by these routes.
+
+### Outstanding bookings in submitter emails
+
+Every requester receipt, approval, rejection, unavailability message and opted-in
+edit/deletion notification ends with a table of that recipient's outstanding
+meetings and a `/my-bookings` link. Both HTML and plain-text versions include the
+schedule. Email workers read all indexed pages for that recipient and apply the
+same outstanding-date/status rules as the lookup. Empty schedules show an explicit
+no-bookings message. The table is a snapshot at sending time; the link shows current
+data. Administrator approval/conflict emails, Developer alerts, and Support
+conversation notifications do not receive this footer.
+
+### Deploy and validate
+
+Deploy Convex schema/functions and the Next.js frontend together and regenerate
+bindings. The schema adds `bookingNotices`, the `bookings.by_requester_email` index
+and optional `bookings.submittedAt`; standard RoomOps booking emails are already
+normalized. No destructive migration or historical timestamp backfill is needed.
+Use the existing Clerk/Gmail configuration and application origin. No production
+configuration, deployment, or real email was changed during preparation.
+
+`npm run test:regression` passes **124 tests** (the previous 101 plus 23 submitter
+checks). New coverage includes verified-email privacy, per-occurrence filtering,
+local midnight/year/leap boundaries, status filtering, both sorts, optional edit
+and table-edit notices, deletion commit/lease safety, surviving deletion snapshots,
+recipient corrections, retries/recovery, HTML escaping, paginated email footers,
+and their exclusion from administrator mail. Changed TypeScript/TSX files passed
+syntax parsing and the incremental patch was checked against its baseline.
+
+Full dependency installation/build/typecheck and live browser verification remain
+unavailable in this environment because package/browser downloads returned HTTP
+403 in the preceding checks. Before release, run `npm ci`, `npm test`,
+`npm run typecheck`, `npm run lint`, `npm run build`, and `npm run test:regression`.
+On staging, sign up as a non-admin submitter, verify a different email cannot be
+queried, exercise each filter/sort, and confirm opt-in/off emails for whole-series
+and scoped edits/removals. Confirm real Gmail messages contain the final schedule
+and that failed Calendar deletion sends no deletion-success email.

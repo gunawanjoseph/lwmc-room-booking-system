@@ -1,3 +1,4 @@
+import { DateTime } from "luxon";
 import { writeAuditLog } from "./lib/auditLog";
 import { ConvexError, v } from "convex/values";
 import {
@@ -35,6 +36,7 @@ type JotformEnvelope<T> = {
 };
 
 type JotformSubmission = {
+  created_at?: string;
   id?: string;
   form_id?: string;
   answers?: JotformAnswers;
@@ -419,6 +421,8 @@ export const processSubmission = internalAction({
         count: mapped.recurrenceCount,
         untilAt: mapped.recurrenceUntilAt,
       });
+      const submitted = typeof content.created_at === "string"
+        ? DateTime.fromISO(content.created_at.replace(" ", "T"), {zone:process.env.JOTFORM_SUBMISSION_TIME_ZONE?.trim()||timezone}) : null;
       const booking = (await ctx.runMutation(
         internal.bookings.stageJotformSubmission,
         {
@@ -427,6 +431,7 @@ export const processSubmission = internalAction({
           formId: expectedFormId,
           submissionId: args.submissionId,
           ...mapped,
+          submittedAt: submitted?.isValid ? submitted.toMillis() : undefined,
           // Persist the exact bounded series accepted by Convex. This is
           // especially important when Jotform supplies an until date without
           // an explicit occurrence count.

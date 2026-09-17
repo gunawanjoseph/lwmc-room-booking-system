@@ -210,6 +210,7 @@ export default function BookingDataPage() {
   const draftClearTimersRef = useRef(
     new Map<string, ReturnType<typeof setTimeout>>(),
   );
+  const [notifySubmitter, setNotifySubmitter] = useState(false);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState<BookingRow | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -470,6 +471,7 @@ export default function BookingDataPage() {
       });
       const result = await saveTableEdits({
         clientRequestId: requestId("table-save"),
+        notifySubmitter,
         edits,
       });
       setDrafts({});
@@ -698,6 +700,7 @@ export default function BookingDataPage() {
               <X size={15} />
               Cancel
             </button>
+            <label className="notification-choice"><input type="checkbox" checked={notifySubmitter} disabled={saving} onChange={event=>setNotifySubmitter(event.target.checked)}/><span>Email affected submitters after saving</span></label>
             <button
               type="button"
               className="button button-primary button-small"
