@@ -1353,6 +1353,24 @@ export class GoogleCalendarClient {
     };
   }
 
+  /** Read the actual schedule, including externally-created and expanded recurring events. */
+  async listPublicSchedule(calendarId:string,timeMin:string,timeMax:string,timeZone:string):Promise<import("./googlePublicCalendar").PublicGoogleEvent[]> {
+    const events:import("./googlePublicCalendar").PublicGoogleEvent[]=[];
+    let pageToken:string|undefined;const seen=new Set<string>();
+    do {
+      const query=new URLSearchParams({timeMin,timeMax,timeZone,singleEvents:"true",showDeleted:"false",maxResults:"250",orderBy:"startTime",fields:"accessRole,nextPageToken,items(id,status,summary,visibility,start,end,extendedProperties/private)"});
+      if(pageToken)query.set("pageToken",pageToken);
+      const response=await this.request(`/calendars/${encodeURIComponent(calendarId)}/events?${query}`,{method:"GET"});
+      if(!response.ok)throw Error("Google Calendar schedule could not be read.");
+      const result=await response.json() as {accessRole?:string;items?:import("./googlePublicCalendar").PublicGoogleEvent[];nextPageToken?:string};
+      if(!["reader","writer","owner","writerWithoutPrivateAccess"].includes(result.accessRole??""))throw Error("Calendar event read permission is required.");
+      events.push(...(result.items??[]));pageToken=result.nextPageToken;
+      if(events.length>2500||seen.size>=20||pageToken&&seen.has(pageToken))throw Error("Calendar schedule exceeds safe read limits.");
+      if(pageToken)seen.add(pageToken);
+    }while(pageToken);
+    return events;
+  }
+
   /** Discover all owned events, including recurring parents and lost references. */
   async listManagedEvents(bookingId: string, calendarId: string): Promise<Array<{
     calendarId: string;

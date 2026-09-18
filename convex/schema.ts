@@ -105,6 +105,7 @@ export const jotformResponseValidator = v.object({
 });
 
 export default defineSchema({
+  publicCalendarCache:defineTable({key:v.string(),json:v.optional(v.string()),fetchedAt:v.optional(v.number()),retryAt:v.number(),token:v.optional(v.string()),leaseUntil:v.optional(v.number()),error:v.optional(v.string())}).index("by_key",["key"]).index("by_retry",["retryAt"]),
   bookingNotices: defineTable({
     bookingReference:v.string(),recipientEmail:v.string(),kind:v.union(v.literal("edited"),v.literal("deleted")),
     outstandingJson:v.optional(v.string()),

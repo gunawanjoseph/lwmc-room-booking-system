@@ -10,6 +10,7 @@
 
 import type * as approvers from "../approvers.js";
 import type * as bookingNotices from "../bookingNotices.js";
+import type * as publicCalendar from "../publicCalendar.js";
 import type * as myBookings from "../myBookings.js";
 import type * as bookings from "../bookings.js";
 import type * as conflictAdmins from "../conflictAdmins.js";
@@ -51,6 +52,7 @@ const fullApi: ApiFromModules<{
   bookings: typeof bookings;
   bookingNotices: typeof bookingNotices;
   myBookings: typeof myBookings;
+  publicCalendar: typeof publicCalendar;
   conflictAdmins: typeof conflictAdmins;
   emailNotifications: typeof emailNotifications;
   googleCalendar: typeof googleCalendar;

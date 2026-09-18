@@ -93,16 +93,35 @@ guide also documents retiring a legacy Google Sheets connection.
 `/booking-calendar`, without sign-in. Existing `/my-bookings` links and its old
 sign-in/sign-up links redirect there.
 
-The default is **Calendar view** with **All bookings (god mode)**: everyone's
-approved meetings, across all ministries and rooms. This is a public
-read-only view; it grants no administrator permissions. Pending, rejected, unavailable,
-and processing bookings are excluded by the server.
+The default is **Calendar view**, reading the actual events in the seven bookable
+venue Google calendars configured in `GOOGLE_CALENDAR_VENUE_MAP_JSON`. Events
+created directly in Google are included; RoomOps-only bookings do not appear
+until their events exist in Google. Cancelled events are excluded. Google
+recurring events are expanded, including moved instances and cancellations.
+A booking copied to three venue calendars appears as three entries, just as in
+Google. Retired office calendars and personal calendars are not included.
 
-The Calendar/List switch sits below the filters, next to the calendar controls.
-Reset filters remains beside the filter heading. While data or a view update is
-pending, the booking area retains its layout and blocks interaction with stale
-results. A loading overlay appears only for waits longer than 150 ms; quick
-changes do not flash a loading screen.
+This is a public read-only view. Google events do not gain a RoomOps approval
+status by being displayed: details identify them as Google confirmed/tentative.
+Pending RoomOps requests are not read by this page. Titles of public/default
+Google events are visible to visitors; events explicitly marked private or
+confidential are labelled Busy, with no ministry. Contact details, attendees,
+descriptions, meeting links, and raw Google IDs are never returned publicly.
+
+The Calendar/List switch sits below the filters. Slow updates show a loading
+overlay without flashing on quick changes. A last-updated time and Refresh button
+show the schedule's freshness. The shared cache lasts 60 seconds; open pages poll
+every minute. Refresh respects the cache and rate limit. This is not instant push
+synchronization. On errors, the last complete snapshot can remain visible with a
+warning. RoomOps data is never silently substituted for a failed Google read.
+
+Deploy the `publicCalendarCache` table and backend functions with the frontend.
+Use the existing Calendar credentials; enable `GOOGLE_CALENDAR_ENABLED` and share
+all mapped venue calendars with the service account. Event-read permission is
+needed for this view; the existing booking-write operations still need their
+normal write permission. Missing access to any calendar fails the refresh rather
+than presenting an incomplete schedule as complete. Failed refreshes write an
+audit error and use existing Developer notifications.
 
 Filters apply to both calendar and list views:
 
@@ -114,7 +133,7 @@ Filters apply to both calendar and list views:
 Selections within a category match any selected value. Different categories
 must all match: for example, Youth + Shema Space shows approved Youth
 meetings in Shema Space. **Show all / reset filters** restores the default selection.
-There is no status filter; only approved bookings are public.
+There is no status filter; this view shows Google events, not the approval queue.
 
 The calendar provides Day, Week, and Month views, previous/next navigation for
 the selected period, Today, a date picker, and
@@ -144,17 +163,31 @@ updates preserve browsing position. Overnight meetings continuing into today als
 appear in today's section. Tap any event to open its full details. The list fits
 phone screens without horizontal scrolling.
 
-The public API exposes event title, ministry, room, status, and meeting times,
-with an opaque key for rendering. It does not expose requester names/emails,
-submission references, form answers, purpose, internal notes, or integration errors.
-Anyone with the page URL can read the published booking details.
+The public API exposes event title, ministry where known, mapped room, Google
+status, all-day flag, and meeting times, with a hashed key for rendering. Ministry
+is optional RoomOps metadata for linked approved bookings; standalone events and
+moved scoped events that cannot be matched safely use Unspecified. Google remains
+authoritative for title/time/existence. Applying a ministry filter can therefore
+hide events without RoomOps metadata. All-day dates use `BOOKING_TIME_ZONE` and
+Google's exclusive end-date convention; configure the venue timezone correctly.
 
-Both views subscribe to the current saved occurrences. Repeated edits to a single
-meeting, following meetings, or the full series update the displayed times, rooms,
-titles, and ministries. Removed occurrences disappear. There is no one-year date
-cutoff; the page shows concrete occurrences saved in RoomOps, including past dates.
-It does not invent additional future recurrences. Public booking queries paginate
-by approved status; the view loads all pages before applying its filters.
+Google is queried for the displayed month grid, with neighboring dates for complete
+weeks. Calendar navigation loads the corresponding range. List view opens at today
+and includes history within the loaded range; previous/next month and the month
+picker load other dates without a one-year cutoff. This replaces downloading the
+entire booking history, which cannot represent infinite Google recurrence safely.
+Each refresh follows all Google pages, with safety limits of 2,500 events per
+calendar and a 750 KB sanitized snapshot. Exceeding a limit reports an error instead
+of truncating the schedule. A shared lease avoids duplicate refreshes for a range;
+a deployment-wide start limit spaces uncached requests by at least three seconds.
+Unused snapshots older than a day are removed in bounded batches on later reads.
+
+This read model does not import Google changes into RoomOps booking records,
+change requester-email snapshots, repair failed calendar writes, or operate room
+hardware. Administrative edits can still overwrite manual Google changes when
+reconciliation runs. Use the existing synchronization status and retry controls
+for failed writes. Compare the same venue calendars, dates, timezone, and filters
+when checking against Google Calendar.
 
 ## Administrator access
 

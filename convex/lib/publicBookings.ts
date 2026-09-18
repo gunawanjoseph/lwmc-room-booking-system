@@ -1,6 +1,7 @@
 import type { SubmitterBooking } from "./submitterBookings";
 
 export type PublicMeeting = {
+  allDay?:boolean; source?:"google"; googleStatus?:"confirmed"|"tentative";
   key:string; title:string; room:string; rooms:string[]; ministry:string;
   status:"approved"; startAt:number; endAt:number; timezone:string;
 };

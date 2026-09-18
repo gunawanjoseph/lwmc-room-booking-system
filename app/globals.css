@@ -3096,3 +3096,6 @@ textarea:focus-visible {
     box-sizing: border-box;
   }
 }
+
+.google-schedule-status { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; color:var(--muted); font-size:.8rem; }
+.google-schedule-status button { min-height:44px; }

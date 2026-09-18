@@ -26,7 +26,8 @@ export function EventDetails({meeting,timezone,onClose}:{meeting:CalendarMeeting
       <dt>Timezone</dt><dd>{timezone}</dd>
       <dt>Room</dt><dd>{meeting.room}</dd>
       {'ministry' in meeting&&<><dt>Ministry</dt><dd>{meeting.ministry||"Unspecified"}</dd></>}
-      <dt>Status</dt><dd>{meeting.status}</dd>
+      <dt>Status</dt><dd>{'source' in meeting&&meeting.source==='google'?`Google Calendar · ${meeting.googleStatus}`:meeting.status}</dd>
+      {'allDay' in meeting&&meeting.allDay&&<><dt>Duration</dt><dd>All day (end date is exclusive)</dd></>}
       {'reference' in meeting&&<><dt>Reference</dt><dd>{meeting.reference}</dd></>}
       {'submittedAt' in meeting&&<><dt>Submitted</dt><dd>{formatDateTime(meeting.submittedAt,timezone)}{meeting.submissionDateEstimated?' (RoomOps received date)':''}</dd></>}
     </dl>:<p>This event was removed or no longer matches the current view.</p>}
@@ -52,13 +53,14 @@ function TimeGrid({rows,days,selected,timezone,onSelect,onOpen}:{rows:CalendarMe
   </div>;
 }
 
-export function BookingCalendar({rows,timezone,now}:{rows:CalendarMeeting[];timezone:string;now:number}) {
+export function BookingCalendar({rows,timezone,now,initialDate,onMonthChange}:{rows:CalendarMeeting[];timezone:string;now:number;initialDate?:string;onMonthChange?:(month:string)=>void}) {
   const [pending,startTransition]=useTransition();
   const today=dateKey(now,timezone);
   const [mode,setMode]=useState<"day"|"week"|"month">("month");
-  const [selected,setSelected]=useState(today);
+  const [selected,setSelected]=useState(initialDate??today);
   const [eventKey,setEventKey]=useState<string|null>(null);
   const month=selected.slice(0,7);
+  useEffect(()=>{onMonthChange?.(month);},[month,onMonthChange]);
   const days=monthDays(month);
   const week=weekDays(selected);
   const label=(day:string,options:Intl.DateTimeFormatOptions)=>new Intl.DateTimeFormat("en-SG",{...options,timeZone:"UTC"}).format(new Date(`${day}T12:00:00Z`));
@@ -93,7 +95,7 @@ export function BookingCalendar({rows,timezone,now}:{rows:CalendarMeeting[];time
       <h3>{label(selected,{weekday:"long",day:"numeric",month:"short"})} · {selectedRows.length} meeting{selectedRows.length===1?'':'s'}</h3>
       {!selectedRows.length&&<p>No bookings on this day in the selected filter.</p>}
       {selectedRows.map(row=><article className="booking-calendar-detail" key={row.key}>
-        <button type="button" aria-haspopup="dialog" className="booking-calendar-detail-toggle" onClick={()=>setEventKey(row.key)}><strong>{row.title}</strong><span>{row.room} · {row.status}</span><span>{formatDateTime(row.startAt,timezone)} – {formatDateTime(row.endAt,timezone)}</span><span>View event details</span></button>
+        <button type="button" aria-haspopup="dialog" className="booking-calendar-detail-toggle" onClick={()=>setEventKey(row.key)}><strong>{row.title}</strong><span>{row.room} · {'source' in row&&row.source==='google'?row.googleStatus:row.status}</span><span>{formatDateTime(row.startAt,timezone)} – {formatDateTime(row.endAt,timezone)}</span><span>View event details</span></button>
       </article>)}
     </section>
     </BookingLoading>

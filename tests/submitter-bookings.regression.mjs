@@ -340,3 +340,74 @@ test('list includes overnight ongoing events today but excludes events ending at
   assert.equal(groups[0].meetings.length,2);
   assert.deepEqual(groups[1].meetings.map(row=>row.key),['continuing']);
 });
+
+const googlePublic=await import('../convex/lib/googlePublicCalendar.ts');
+const googleSchedule=await import('../convex/publicCalendar.ts');
+const googleClientModule=await import('../convex/lib/googleCalendar.ts');
+function googleEvent(extra={}){return {id:'event',summary:'Google title',status:'confirmed',start:{dateTime:'2026-09-18T19:00:00+08:00'},end:{dateTime:'2026-09-18T22:30:00+08:00'},...extra};}
+test('Google projection uses Google title/time, removes cancelled entries and redacts private details',()=>{
+  const event=googleEvent({description:'SECRET',attendees:[{email:'SECRET'}]});
+  const row=googlePublic.projectGoogleEvent(event,'opaque',['Shema Space'],'Asia/Singapore','Youth');
+  assert.equal(row.title,'Google title');assert.equal(row.startAt,Date.parse(event.start.dateTime));assert.equal(row.source,'google');assert.equal(row.googleStatus,'confirmed');assert.doesNotMatch(JSON.stringify(row),/SECRET|description|attendees/);
+  assert.equal(googlePublic.projectGoogleEvent({status:'cancelled'},'key',[],'Asia/Singapore'),null);
+  for(const visibility of ['private','confidential']){const hidden=googlePublic.projectGoogleEvent({...event,visibility},'key',['Room'],'Asia/Singapore','Youth');assert.equal(hidden.title,'Busy');assert.equal(hidden.ministry,'');}
+  assert.equal(googlePublic.projectGoogleEvent(googleEvent({status:'tentative'}),'key',[],'Asia/Singapore').googleStatus,'tentative');
+});
+test('Google all-day events use local midnight and exclusive end, including DST',()=>{
+  const row=googlePublic.projectGoogleEvent(googleEvent({start:{date:'2026-09-18'},end:{date:'2026-09-20'}}),'key',['Room'],'Asia/Singapore');
+  assert.equal(row.startAt,Date.parse('2026-09-17T16:00:00Z'));assert.equal(row.endAt,Date.parse('2026-09-19T16:00:00Z'));assert.equal(row.allDay,true);
+  assert.equal(googlePublic.midnightInZone('2026-03-09','America/New_York'),Date.parse('2026-03-09T04:00:00Z'));
+  assert.throws(()=>googlePublic.projectGoogleEvent(googleEvent({end:{dateTime:'bad'}}),'key',[],'Asia/Singapore'));
+});
+test('Google public ranges cover a complete month grid with no one-year limit',()=>{
+  assert.equal(googlePublic.publicCalendarRange('2028-02').firstDay,'2028-01-30');
+  assert.equal(googlePublic.publicCalendarRange('2028-02').lastDay,'2028-03-11');
+  for(const month of ['bad','2026-13','2026-00'])assert.throws(()=>googlePublic.publicCalendarRange(month));
+});
+test('Google schedule reads expanded instances across every page and rejects partial permissions or repeated tokens',async()=>{
+  function client(pages){const calls=[];const c=new googleClientModule.GoogleCalendarClient({credentials:{},maxAttempts:1,fetch:async url=>{calls.push(new URL(url));return new Response(JSON.stringify(pages.shift()));}});c.accessToken={value:'fake',expiresAt:Date.now()+3600000};return {c,calls};}
+  const {c,calls}=client([{accessRole:'reader',items:[],nextPageToken:'next'},{accessRole:'reader',items:[googleEvent()]}]);
+  assert.equal((await c.listPublicSchedule('calendar','2026-09-01T00:00:00Z','2026-10-01T00:00:00Z','Asia/Singapore')).length,1);
+  assert.equal(calls[0].searchParams.get('singleEvents'),'true');assert.equal(calls[0].searchParams.get('showDeleted'),'false');assert.equal(calls[1].searchParams.get('pageToken'),'next');assert.equal(calls[0].searchParams.has('privateExtendedProperty'),false);
+  for(const pages of [[{accessRole:'freeBusyReader',items:[]}],[{accessRole:'reader',nextPageToken:'x'},{accessRole:'reader',nextPageToken:'x'}]])await assert.rejects(client(pages).c.listPublicSchedule('c','2026-09-01T00:00:00Z','2026-10-01T00:00:00Z','Asia/Singapore'));
+});
+test('Google cache leases prevent duplicate reads, replace deleted events and retain stale snapshots on failure',async()=>{
+  const ctx=context();
+  assert.equal((await googleSchedule.claim.handler(ctx,{key:'month',token:'one'})).fetch,true);
+  assert.equal((await googleSchedule.claim.handler(ctx,{key:'month',token:'two'})).fetch,false);
+  await googleSchedule.finish.handler(ctx,{key:'month',token:'one',json:'[{"key":"old"}]'});
+  const saved=ctx.rows('publicCalendarCache').find(x=>x.key==='month');await ctx.db.patch(saved._id,{retryAt:0});await ctx.db.patch(ctx.rows('publicCalendarCache').find(x=>x.key==='global')._id,{retryAt:0});
+  await googleSchedule.claim.handler(ctx,{key:'month',token:'three'});
+  assert.equal(await googleSchedule.finish.handler(ctx,{key:'month',token:'stale',json:'[]'}),null);
+  await googleSchedule.finish.handler(ctx,{key:'month',token:'three',error:'Failed'});
+  assert.equal((await ctx.db.get(saved._id)).json,'[{"key":"old"}]');
+  await ctx.db.patch(saved._id,{retryAt:0});await ctx.db.patch(ctx.rows('publicCalendarCache').find(x=>x.key==='global')._id,{retryAt:0});
+  await googleSchedule.claim.handler(ctx,{key:'month',token:'four'});await googleSchedule.finish.handler(ctx,{key:'month',token:'four',json:'[]'});
+  assert.equal((await ctx.db.get(saved._id)).json,'[]');assert.equal((await ctx.db.get(saved._id)).error,undefined);
+});
+test('public Google action displays external events, reuses cache and never publishes a partial refresh',async()=>{
+  const names=['GOOGLE_CALENDAR_ENABLED','GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON_B64','GOOGLE_CALENDAR_VENUE_MAP_JSON','BOOKING_TIME_ZONE'];
+  const old=Object.fromEntries(names.map(name=>[name,process.env[name]]));const original=googleClientModule.GoogleCalendarClient.prototype.listPublicSchedule;
+  try{
+    process.env.GOOGLE_CALENDAR_ENABLED='true';process.env.BOOKING_TIME_ZONE='Asia/Singapore';
+    process.env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON_B64=Buffer.from(JSON.stringify({client_email:'calendar@example.com',private_key:'-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----'})).toString('base64');
+    process.env.GOOGLE_CALENDAR_VENUE_MAP_JSON=JSON.stringify(Object.fromEntries(googleClientModule.GOOGLE_CALENDAR_VENUES.map((venue,i)=>[venue,`calendar-${i}`])));
+    const ctx=context();ctx.runMutation=async(name,args)=>googleSchedule[name].handler(ctx,args);ctx.runQuery=async()=>{throw Error('External events must not require a RoomOps row');};
+    let calls=0;googleClientModule.GoogleCalendarClient.prototype.listPublicSchedule=async function(){calls++;return [googleEvent()];};
+    const result=await googleSchedule.read.handler(ctx,{month:'2026-09'});
+    assert.equal(result.error,null);assert.equal(result.rows.length,7);assert.equal(new Set(result.rows.map(row=>row.key)).size,7);assert.equal(calls,7);
+    assert.ok(result.rows.every(row=>row.title==='Google title'&&row.ministry===''));
+    await googleSchedule.read.handler(ctx,{month:'2026-09'});assert.equal(calls,7);
+    for(const row of ctx.rows('publicCalendarCache'))await ctx.db.patch(row._id,{retryAt:0});
+    calls=0;googleClientModule.GoogleCalendarClient.prototype.listPublicSchedule=async function(){if(++calls===2)throw Error('private details must not escape');return [googleEvent({summary:'PARTIAL'})];};
+    const failed=await googleSchedule.read.handler(ctx,{month:'2026-09'});
+    assert.ok(failed.error);assert.equal(failed.rows.length,7);assert.equal(failed.fetchedAt,result.fetchedAt);assert.doesNotMatch(JSON.stringify(failed),/PARTIAL|private details/);
+  }finally{googleClientModule.GoogleCalendarClient.prototype.listPublicSchedule=original;for(const name of names){if(old[name]===undefined)delete process.env[name];else process.env[name]=old[name];}}
+});
+test('Google-linked ministry lookup respects scoped overrides and avoids guessing after an external move',async()=>{
+  const b=booking({status:'approved',ministry:'Base'});b.occurrences[1].details={ministry:'Scoped'};
+  const ctx=context({bookings:[b]});ctx.db.normalizeId=(_,id)=>id==='booking'?id:null;
+  assert.equal(await googleSchedule.ministry.handler(ctx,{bookingId:'booking',startAt:b.occurrences[1].startAt}),'Scoped');
+  assert.equal(await googleSchedule.ministry.handler(ctx,{bookingId:'booking',startAt:0}),'');
+  assert.equal(await googleSchedule.ministry.handler(ctx,{bookingId:'invalid',startAt:0}),'');
+});
