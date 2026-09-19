@@ -5,6 +5,7 @@ import { BOOKABLE_GOOGLE_CALENDAR_VENUES, googleCalendarRuntimeFromEnv } from ".
 import { publicCalendarRange, projectGoogleEvent, isInPublicRange } from "./lib/googlePublicCalendar";
 import type { PublicMeeting } from "./lib/publicBookings";
 import { writeAuditLog } from "./lib/auditLog";
+import { ministryCalendarLabel } from "../shared/requestFields";
 
 type Cache={json?:string;fetchedAt?:number;error?:string};
 type Result={rows:PublicMeeting[];fetchedAt:number|null;error:string|null;refreshing:boolean};
@@ -38,7 +39,7 @@ async function linkedMinistry(ctx:QueryCtx,args:{bookingId:string;startAt:number
   const booking=await ctx.db.get(id);if(!booking||booking.status!=='approved')return '';
   const occurrence=booking.occurrences?.find(row=>row.startAt===args.startAt);
   if(booking.occurrences?.some(row=>row.details?.ministry!==undefined)&&!occurrence)return '';
-  return occurrence?.details?.ministry??booking.ministry??'';
+  return ministryCalendarLabel(occurrence?.details?.ministry??booking.ministry??'');
 }
 export const ministry=internalQuery({args:{bookingId:v.string(),startAt:v.number()},handler:linkedMinistry});
 export const ministries=internalQuery({args:{items:v.array(v.object({bookingId:v.string(),startAt:v.number()}))},handler:async(ctx,args)=>{

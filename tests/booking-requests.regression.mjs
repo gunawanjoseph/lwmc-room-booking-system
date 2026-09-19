@@ -433,12 +433,14 @@ test('ministry validation rejects arbitrary values and safely handles missing co
  await requests.submit.handler(ctx,input);assert.equal((await ctx.db.get('booking')).requesterEditCount,1);
 });
 test('phone format handles legacy Jotform values, rejects invalid numbers and normalizes',async()=>{
- assert.equal(fields.normalizePhone('full: (65) 9087 3541'),'(65) 9087 3541');assert.equal(fields.normalizePhone('+65 90873541'),'(65) 9087 3541');assert.equal(fields.phoneInput('(65) 9'),'(65) 9');
- for(const bad of ['abc','2423 4342','123','9087 35410','+1 90873541'])assert.throws(()=>fields.normalizePhone(bad),/Singapore/);
- const ctx=setup({formResponses:[{qid:'phone',label:'Phone Number',type:'control_phone',value:'full: (65) 9087 3541'}]});const input=await args(ctx);
- await assert.rejects(requests.submit.handler(ctx,{...input,edit:{...input.edit,responses:[{qid:'phone',value:'bad'}]}}),/Singapore/);
- await requests.submit.handler(ctx,{...input,edit:{...input.edit,responses:[{qid:'phone',value:'90873541'}]}});
- assert.equal(JSON.parse(ctx.rows('bookingRequests')[0].candidate).occurrences[0].details.responses[0].value,'(65) 9087 3541');
+ assert.equal(fields.normalizePhone('full: (65) 8123 4567'),'(65) 8123 4567');assert.equal(fields.normalizePhone('+65 81234567'),'(65) 8123 4567');assert.equal(fields.phoneInput('(65) 8'),'(65) 8');
+ for(const [input,expected] of [['+44 20 7946 0958','+44 20 7946 0958'],['+1-415-555-0132','+1 415 555 0132'],['(61) 2 5550 1234','(61) 2 5550 1234'],['+442079460958','+442079460958']])assert.equal(fields.normalizePhone(input),expected);
+ for(const bad of ['abc','2423 4342','123','8123 45670','+65 1234 5678','(65) 1234 5678','+44 123','+0 2079460958','+1 415 555 0132 99999','12ab34 5678'])assert.throws(()=>fields.normalizePhone(bad),/valid phone number/);
+ assert.equal(fields.phoneForEdit('81234567'),'(65) 8123 4567');assert.equal(fields.phoneForEdit('full: 12'),'12');
+ const ctx=setup({formResponses:[{qid:'phone',label:'Phone Number',type:'control_phone',value:'full: (65) 8123 4567'}]});const input=await args(ctx);
+ await assert.rejects(requests.submit.handler(ctx,{...input,edit:{...input.edit,responses:[{qid:'phone',value:'bad'}]}}),/valid phone number/);
+ await requests.submit.handler(ctx,{...input,edit:{...input.edit,responses:[{qid:'phone',value:'81234567'}]}});
+ assert.equal(JSON.parse(ctx.rows('bookingRequests')[0].candidate).occurrences[0].details.responses[0].value,'(65) 8123 4567');
 });
 test('duration is never exposed or accepted as a requester editable field',async()=>{
  const ctx=setup({formResponses:[{qid:'duration',label:'Duration (hours)',type:'control_number',value:'1.2'}]});assert.deepEqual((await requests.view.handler(ctx,{token})).meetings[0].fields,[]);const input=await args(ctx);
@@ -463,11 +465,22 @@ test('full deletion comment is retained after the booking is deleted',async()=>{
  await adminBookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'delete',notifySubmitter:true,reason:'Venue closed'});
  assert.equal(await ctx.db.get('booking'),null);assert.match(ctx.rows('bookingNotices')[0].detailChanges,/Venue closed/);assert.ok(ctx.rows('auditLogs').some(row=>row.detailsJson?.includes('Venue closed')));
 });
+test('international phone numbers are accepted and stored as entered',async()=>{
+ const ctx=setup({formResponses:[{qid:'phone',label:'Phone Number',type:'control_phone',value:'full: (65) 8123 4567'}]});const input=await args(ctx);
+ await requests.submit.handler(ctx,{...input,edit:{...input.edit,responses:[{qid:'phone',value:'+44 20 7946 0958'}]}});
+ assert.equal(JSON.parse(ctx.rows('bookingRequests')[0].candidate).occurrences[0].details.responses[0].value,'+44 20 7946 0958');
+});
+test('calendar ministry label drops the Others (Please Specify) prefix only',()=>{
+ assert.equal(fields.ministryCalendarLabel('Others (Please Specify): testing'),'testing');
+ assert.equal(fields.ministryCalendarLabel('Youth Ministry'),'Youth Ministry');
+ assert.equal(fields.ministryCalendarLabel('Others (Please Specify)'),'Others (Please Specify)');
+ assert.equal(fields.ministryCalendarLabel(''),'');
+});
 test('invalid omitted phone cannot bypass validation and retries preserve payload identity',async()=>{
  const ctx=setup({formResponses:[{qid:'phone',label:'Phone',type:'control_phone',value:'full: (65) 2423 4342'}]});const input=await args(ctx);
- await assert.rejects(requests.submit.handler(ctx,input),/Singapore/);
- const valid={...input,edit:{...input.edit,responses:[{qid:'phone',value:'90873541'}]}};await requests.submit.handler(ctx,valid);await requests.submit.handler(ctx,valid);
- assert.equal(valid.edit.responses[0].value,'90873541');assert.equal((await ctx.db.get('booking')).requesterEditCount,1);
+ await assert.rejects(requests.submit.handler(ctx,input),/valid phone number/);
+ const valid={...input,edit:{...input.edit,responses:[{qid:'phone',value:'81234567'}]}};await requests.submit.handler(ctx,valid);await requests.submit.handler(ctx,valid);
+ assert.equal(valid.edit.responses[0].value,'81234567');assert.equal((await ctx.db.get('booking')).requesterEditCount,1);
 });
 test('rejection comment is included in the durable requester email',async()=>{
  const ctx=setup();const id=await submitPending(ctx);await requests.resolve.handler(ctx,{requestId:id,expectedRequestRevision:1,outcome:'declined',response:'Room is reserved for another ministry.'});

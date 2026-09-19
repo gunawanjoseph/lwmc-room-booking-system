@@ -12,6 +12,7 @@ import {
   JOTFORM_VENUE_ALIASES,
   JOTFORM_VENUES,
 } from "../../shared/jotformConstants";
+import { ministryCalendarLabel } from "../../shared/requestFields";
 
 export const GOOGLE_CALENDAR_VENUES = JOTFORM_VENUES;
 
@@ -392,7 +393,10 @@ export function buildGoogleCalendarTitle(input: {
     cleanSingleLine(input.eventName ?? "", 500) ||
     cleanSingleLine(input.purpose ?? "", 500) ||
     "Room Booking";
-  const ministry = cleanSingleLine(input.ministry ?? "", 300);
+  const ministry = cleanSingleLine(
+    ministryCalendarLabel(input.ministry ?? ""),
+    300,
+  );
   return cleanSingleLine(
     `[${venue}] ${eventNameOrPurpose}${ministry ? ` ${ministry}` : ""}`,
   );
@@ -410,7 +414,9 @@ export function buildGoogleCalendarEventText(input: {
   summary: string;
 } {
   const venue = resolveVenueSelection(input.venue).displayName;
-  const ministry = cleanSingleLine(input.ministry ?? "", 300) || "-";
+  const ministry =
+    cleanSingleLine(ministryCalendarLabel(input.ministry ?? ""), 300) ||
+    "-";
   const eventNameOrPurpose =
     cleanSingleLine(input.eventName ?? "", 500) ||
     cleanSingleLine(input.purpose ?? "", 2_000) ||

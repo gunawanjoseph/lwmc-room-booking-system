@@ -465,8 +465,10 @@ to this JSON array of ministries:
 ```
 
 Selecting **Others (Please Specify)** reveals a required ministry name field
-(1–120 characters). The server validates it and stores `Others (Please Specify): <name>` in the affected meetings. Reviews, emails and Calendar descriptions include
-the specified name, and reopening the editor restores both fields.
+(1–120 characters). The server validates it and stores `Others (Please Specify): <name>` in the affected meetings. Reviews and emails
+show the full value. Google Calendar event titles and descriptions, and the public
+calendar, show only `<name>`, without the `Others (Please Specify):` prefix.
+Reopening the editor restores both fields.
 
 This is the authoritative dropdown and server
 allowlist; it is not inferred from historical free-text submissions. Configure it
@@ -475,7 +477,10 @@ submission with a helpful message; cancellations remain available. Legacy bookin
 with unlisted ministries must select a valid ministry before submitting changes.
 
 Phone fields accept Singapore eight-digit numbers beginning with 3, 6, 8 or 9 and
-store them as `(65) 9087 3541`. Legacy `full:` values are normalized when edited.
+store them as `(65) 8123 4567`. Numbers from other countries are accepted when they
+start with a country code, as `+44 20 7946 0958` or `(44) 20 7946 0958`
+(8–15 digits in total), and are stored as entered. Legacy `full:` values are
+normalized when edited.
 Start and end times define duration; no separate Duration input is shown.
 Administrator edits, bulk table edits and cancellations have optional comments,
 stored in the audit log and included when an email notification is selected.

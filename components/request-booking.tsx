@@ -8,7 +8,7 @@ import { formatDateTime, messageFromError } from "@/lib/ui";
 import { Brand } from "@/components/brand";
 import { BookingChangeComparison, requestStatusLabel, type ProposedEdit } from "@/components/booking-change-comparison";
 
-import { isPhoneField, normalizePhone, phoneInput, recurrenceLabel, recurrenceDescription, OTHER_MINISTRY, ministrySelection } from "@/shared/requestFields";
+import { isPhoneField, normalizePhone, phoneForEdit, phoneInput, PHONE_ERROR, PHONE_INPUT_PATTERN, PHONE_PLACEHOLDER, recurrenceLabel, recurrenceDescription, OTHER_MINISTRY, ministrySelection } from "@/shared/requestFields";
 type Step = "summary" | "edit" | "review" | "cancel";
 export function RequestBooking() {
   const [token, setToken] = useState<string | null>(null);
@@ -53,7 +53,7 @@ export function RequestBooking() {
     const saved = editing?.proposed ? JSON.parse(editing.proposed) as ProposedEdit : undefined;
     setPendingVersion(editing ? {key:editing.requestKey, revision:editing.requestRevision} : {});
     setSequence(String(meeting.sequence));
-    setResponses(meeting.fields.map(field => ({ qid: field.qid, value: isPhoneField(field) ? phoneInput(saved?.responses?.find(row => row.qid === field.qid)?.value ?? field.value) : saved?.responses?.find(row => row.qid === field.qid)?.value ?? field.value })));
+    setResponses(meeting.fields.map(field => ({ qid: field.qid, value: isPhoneField(field) ? phoneForEdit(saved?.responses?.find(row => row.qid === field.qid)?.value ?? field.value) : saved?.responses?.find(row => row.qid === field.qid)?.value ?? field.value })));
     setDraft({ room: saved?.room ?? meeting.room, eventName: saved?.eventName ?? meeting.title, purpose: saved?.purpose ?? meeting.purpose, ...ministrySelection(saved?.ministry ?? meeting.ministry), ...(saved?.ministry === OTHER_MINISTRY ? {otherMinistry:saved.otherMinistry ?? ""} : {}),
       start: DateTime.fromMillis(saved?.startAt ?? meeting.startAt, { zone: data.timezone }).toFormat("yyyy-MM-dd'T'HH:mm"),
       end: DateTime.fromMillis(saved?.endAt ?? meeting.endAt, { zone: data.timezone }).toFormat("yyyy-MM-dd'T'HH:mm") });
@@ -121,7 +121,7 @@ export function RequestBooking() {
         {!data.ministries.length && <p role="alert">Ministry options are not available yet. Please contact the administrator.</p>}
         {draft.ministry && !data.ministries.includes(draft.ministry) && <p className="request-muted">The previous ministry is no longer listed. Please select a current ministry.</p>}
         <label>Purpose<textarea rows={3} maxLength={2000} value={draft.purpose} onChange={e => setDraft({ ...draft, purpose: e.target.value })}/></label>
-        {selected?.fields.map(field => <label key={field.qid}>{field.label}<input onInvalid={e => { if (isPhoneField(field)) e.currentTarget.setCustomValidity("Enter a Singapore phone number, for example (65) 9087 3541."); }} onInput={e => e.currentTarget.setCustomValidity("")} required={isPhoneField(field)} placeholder={isPhoneField(field) ? "12345678" : undefined} pattern={isPhoneField(field) ? "\\(65\\) [3689][0-9]{3} [0-9]{4}" : undefined} inputMode={isPhoneField(field) ? "tel" : undefined} type={field.type === "control_number" ? "number" : field.type === "control_email" ? "email" : field.type === "control_phone" ? "tel" : "text"} step={field.type === "control_number" ? "any" : undefined} maxLength={4000} value={responses.find(row => row.qid === field.qid)?.value ?? ""} onChange={e => setResponses(responses.map(row => row.qid === field.qid ? { ...row, value: isPhoneField(field) ? phoneInput(e.target.value) : e.target.value } : row))}/></label>)}
+        {selected?.fields.map(field => <label key={field.qid}>{field.label}<input onInvalid={e => { if (isPhoneField(field)) e.currentTarget.setCustomValidity(PHONE_ERROR); }} onInput={e => e.currentTarget.setCustomValidity("")} required={isPhoneField(field)} placeholder={isPhoneField(field) ? PHONE_PLACEHOLDER : undefined} pattern={isPhoneField(field) ? PHONE_INPUT_PATTERN : undefined} inputMode={isPhoneField(field) ? "tel" : undefined} type={field.type === "control_number" ? "number" : field.type === "control_email" ? "email" : field.type === "control_phone" ? "tel" : "text"} step={field.type === "control_number" ? "any" : undefined} maxLength={4000} value={responses.find(row => row.qid === field.qid)?.value ?? ""} onChange={e => setResponses(responses.map(row => row.qid === field.qid ? { ...row, value: isPhoneField(field) ? phoneInput(e.target.value) : e.target.value } : row))}/></label>)}
         <label>Note to the approver (optional)<textarea rows={2} maxLength={4000} value={message} onChange={e => setMessage(e.target.value)}/></label>
         {scope === "following" && <p className="request-muted">{recurrenceLabel(data.recurrenceFrequency)} frequency stays unchanged. Changing the date re-anchors the remaining meetings to the new day, keeping the same number of meetings. Earlier meetings are kept. The room, times and details apply to all selected meetings.</p>}
         <div className="request-actions"><button type="button" className="button button-secondary" onClick={() => go("summary")}><ArrowLeft size={16}/>Back</button><button className="button" disabled={stale || closed}>Review changes</button></div>

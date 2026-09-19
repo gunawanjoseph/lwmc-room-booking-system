@@ -1,16 +1,33 @@
 // Shared by the public form and server; no credentials or booking data.
+export const PHONE_PLACEHOLDER = "(65) 1234 5678";
+export const PHONE_ERROR = "Enter a valid phone number with its country code, for example (65) 8123 4567 or +44 20 7946 0958.";
+// Loose browser-side hint only; normalizePhone is the source of truth.
+export const PHONE_INPUT_PATTERN = "[+\\(]?\\d[\\d\\s\\(\\)\\.\\-]{6,30}";
+
+// Live typing: strip Jotform's "full:" prefix and anything that cannot be part of a phone number.
 export function phoneInput(value: string): string {
-  let digits = value.replace(/^full:\s*/i, "").replace(/^(?:\(65\)|\+65)\s*/, "").replace(/\D/g, "");
-  if (digits.startsWith("65") && digits.length > 8) digits = digits.slice(2);
-  digits = digits.slice(0, 8);
-  return digits ? `(65) ${digits.slice(0, 4)}${digits.length > 4 ? " " + digits.slice(4) : ""}` : "";
+  return value.replace(/^full:\s*/i, "").replace(/[^\d\s+()\-.]/g, "").replace(/\s+/g, " ").replace(/^\s+/, "").slice(0, 32);
 }
+// Existing values: show the canonical form when valid, otherwise whatever the person previously typed.
+export function phoneForEdit(value: string): string {
+  try { return normalizePhone(value); } catch { return phoneInput(value); }
+}
+const tidyPhoneGroups = (value: string) => value.replace(/[\s().-]+/g, " ").trim();
+// Singapore numbers (local, 65, +65 or (65)) are stored as "(65) 1234 5678". Any other country must
+// give its code as "+<code> ..." or "(<code>) ...", with 8-15 digits in total (E.164 length limits).
 export function normalizePhone(value: string): string {
   const clean = value.replace(/^full:\s*/i, "").trim();
-  if (!/^(?:(?:\+65|\(65\)|65)\s*)?[3689]\d{3}\s?\d{4}$/.test(clean)) {
-    throw Error("Enter a Singapore phone number, for example (65) 9087 3541.");
+  if (!/^[\d\s+()\-.]+$/.test(clean)) throw Error(PHONE_ERROR);
+  const digits = clean.replace(/\D/g, "");
+  if (/^(?:(?:\+65|\(65\)|65)\s*)?[3689]\d{3}\s?\d{4}$/.test(clean)) {
+    const national = digits.slice(-8);
+    return `(65) ${national.slice(0, 4)} ${national.slice(4)}`;
   }
-  return phoneInput(clean);
+  const plus = /^\+\s*([1-9][\d\s().-]*)$/.exec(clean);
+  const paren = /^\(\s*([1-9]\d{0,2})\s*\)\s*(\d[\d\s().-]*)$/.exec(clean);
+  const international = plus ?? paren;
+  if (!international || digits.length < 8 || digits.length > 15 || digits.startsWith("65")) throw Error(PHONE_ERROR);
+  return plus ? `+${tidyPhoneGroups(plus[1])}` : `(${paren![1]}) ${tidyPhoneGroups(paren![2])}`;
 }
 export function isPhoneField(field: {type?: string; label: string}): boolean {
   return field.type === "control_phone" || /phone|mobile|contact number/i.test(field.label);
@@ -39,4 +56,9 @@ export function ministrySelection(value: string): {ministry:string;otherMinistry
   return value.startsWith(prefix)
     ? {ministry:OTHER_MINISTRY,otherMinistry:value.slice(prefix.length)}
     : {ministry:value,otherMinistry:""};
+}
+// Google Calendar and the public calendar show only the name people typed, not the "Others (Please Specify)" label.
+export function ministryCalendarLabel(value: string): string {
+  const {ministry, otherMinistry} = ministrySelection(value.trim());
+  return ministry === OTHER_MINISTRY && otherMinistry.trim() ? otherMinistry.trim() : value;
 }

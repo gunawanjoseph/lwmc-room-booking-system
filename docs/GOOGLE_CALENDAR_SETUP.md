@@ -60,6 +60,10 @@ example:
 [Board Room] Leaders Meeting Youth Ministry
 ```
 
+When a requester chooses **Others (Please Specify)**, only the name they typed
+is used as the ministry in both the title and the description, without the
+`Others (Please Specify):` prefix.
+
 The Calendar description intentionally uses this exact, compact format.
 RoomOps sends safely escaped HTML so Google Calendar renders the four
 labels in bold, matching the event-details layout:
