@@ -1,3 +1,6 @@
+import { normalizePhone, isPhoneField } from "../../shared/requestFields";
+import { validateRequestMinistry } from "./requestMinistries";
+import { expandRecurrence } from "./recurrence";
 import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { writeAuditLog } from "./auditLog";
@@ -21,22 +24,45 @@ export function requestCandidate(booking: Doc<"bookings">, sequence: number, sco
       startAt: occurrences[0]?.startAt ?? booking.startAt, endAt: occurrences[0]?.endAt ?? booking.endAt });
   }
   if (!edit.eventName.trim() || edit.eventName.length > 300 || edit.purpose.length > 2000 || edit.ministry.length > 160) throw Error("Enter a title and keep the details within the field limits.");
-  const proposal = adminReservationProposal(booking, {
+  validateRequestMinistry(edit.ministry);
+  // Prepare the recurrence before the shared reservation validator checks claims
+  // and overlaps. It must validate actual monthly dates, not a millisecond shift.
+  const reanchor = scope === "following" && edit.startAt !== selected[0].startAt && booking.recurrenceFrequency && booking.recurrenceFrequency !== "none";
+  let reservationBase = booking;
+  if (reanchor) {
+    const dates = expandRecurrence({ startAt: edit.startAt, endAt: edit.endAt, timezone: booking.timezone, frequency: booking.recurrenceFrequency!, count: selected.length });
+    const times = new Map(selected.map((row,i) => [row.sequence,dates[i]]));
+    const shift = edit.startAt - selected[0].startAt;
+    reservationBase = { ...booking, occurrences: (booking.occurrences ?? [{sequence:0,startAt:booking.startAt,endAt:booking.endAt}]).map(row => {
+      const date = times.get(row.sequence);
+      return date ? { ...row, startAt:date.startAt-shift, endAt:date.endAt-shift } : row;
+    }) };
+  }
+  const proposal = adminReservationProposal(reservationBase, {
     ...edit, requesterName: booking.requesterName, requesterEmail: booking.requesterEmail,
     editScope: scope, occurrenceSequence: sequence,
     recurrenceFrequency: booking.recurrenceFrequency ?? "none", recurrenceHasEndDate: booking.recurrenceHasEndDate ?? false,
     recurrenceUntilAt: booking.recurrenceUntilAt,
   });
+  if (reanchor) proposal.recurrenceUntilAt = proposal.occurrences.at(-1)!.startAt;
   const fields = editableRequestFields(booking);
   if ((edit.responses?.length ?? 0) > 40 || new Set(edit.responses?.map(row => row.qid)).size !== (edit.responses?.length ?? 0)) throw Error("Too many or repeated additional fields.");
   for (const answer of edit.responses ?? []) {
     const field = fields.find(row => row.qid === answer.qid);
     if (!field || answer.value.length > 4000) throw Error("An additional booking field is invalid. Refresh and try again.");
+    if (isPhoneField(field)) normalizePhone(answer.value);
     if (field.type === "control_number" && answer.value && !Number.isFinite(Number(answer.value))) throw Error(`Enter a valid number for ${field.label}.`);
     if (field.type === "control_email" && answer.value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(answer.value)) throw Error(`Enter a valid email for ${field.label}.`);
   }
+  const normalizedResponses = (edit.responses ?? []).map(row => ({...row}));
+  for (const field of fields.filter(isPhoneField)) {
+    const submitted = normalizedResponses.find(row => row.qid === field.qid);
+    const value = normalizePhone(submitted?.value ?? selected[0].fields.find(row => row.qid === field.qid)?.value ?? field.value);
+    if (submitted) submitted.value = value;
+    else normalizedResponses.push({qid:field.qid,value});
+  }
   const affected = new Set(selected.map(row => row.sequence));
-  if (edit.responses) proposal.occurrences = proposal.occurrences.map(row => affected.has(row.sequence) ? { ...row, details: { ...row.details, responses: edit.responses!.map(answer => ({ qid: answer.qid, value: answer.value.trim() })) } } : row);
+  if (normalizedResponses.length) proposal.occurrences = proposal.occurrences.map(row => affected.has(row.sequence) ? { ...row, details: { ...row.details, responses: [...(row.details?.responses ?? []).filter(answer => !normalizedResponses.some(next => next.qid === answer.qid)), ...normalizedResponses.map(answer => ({ qid: answer.qid, value: isPhoneField(fields.find(field => field.qid === answer.qid)!) ? normalizePhone(answer.value) : answer.value.trim() }))] } } : row);
   const candidate = canonicalCandidate({ ...booking, ...proposal, recurrenceCount: proposal.occurrences.length });
   const selectedIds = new Set(selected.map(item => item.sequence));
   checkRequestWindow(requestMeetings(candidate).filter(item => selectedIds.has(item.sequence)), Date.now());

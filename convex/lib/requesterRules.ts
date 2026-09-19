@@ -9,7 +9,7 @@ export function editableRequestFields(booking: Booking) {
   // Files, signatures, payment and structural controls need their original intake
   // UI. Text answers use the same bounded values as RoomOps table edits.
   const editableTypes = new Set(["control_textbox", "control_textarea", "control_number", "control_email", "control_phone"]);
-  return (booking.formResponses ?? []).filter(row => !row.canonicalField && (!row.type || editableTypes.has(row.type))).slice(0, 40);
+  return (booking.formResponses ?? []).filter(row => !row.canonicalField && !/duration/i.test(row.label) && (!row.type || editableTypes.has(row.type))).slice(0, 40);
 }
 export function requestMeetings(booking: Booking) {
   return (booking.occurrences ?? [{ sequence: 0, startAt: booking.startAt, endAt: booking.endAt }])

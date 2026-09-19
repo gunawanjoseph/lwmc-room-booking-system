@@ -210,6 +210,7 @@ export default function BookingDataPage() {
   const draftClearTimersRef = useRef(
     new Map<string, ReturnType<typeof setTimeout>>(),
   );
+  const [reason, setReason] = useState("");
   const [notifySubmitter, setNotifySubmitter] = useState(false);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState<BookingRow | null>(null);
@@ -422,6 +423,7 @@ export default function BookingDataPage() {
     setNotice("");
     setSaveError("");
     setDrafts({});
+    setReason("");
     setEditMode(true);
   }
 
@@ -435,6 +437,7 @@ export default function BookingDataPage() {
       return;
     }
     setDrafts({});
+    setReason("");
     setSaveError("");
     setEditMode(false);
   }
@@ -472,9 +475,11 @@ export default function BookingDataPage() {
       const result = await saveTableEdits({
         clientRequestId: requestId("table-save"),
         notifySubmitter,
+        reason,
         edits,
       });
       setDrafts({});
+    setReason("");
       setEditMode(false);
       setNotice(
         `${result.updated} booking${result.updated === 1 ? "" : "s"} saved to Convex.`,
@@ -700,7 +705,8 @@ export default function BookingDataPage() {
               <X size={15} />
               Cancel
             </button>
-            <label className="notification-choice"><input type="checkbox" checked={notifySubmitter} disabled={saving} onChange={event=>setNotifySubmitter(event.target.checked)}/><span>Email affected submitters after saving</span></label>
+            <label className="field"><span>Reason / comment (optional)</span><textarea rows={2} maxLength={2000} value={reason} onChange={e=>setReason(e.target.value)}/></label>
+        <label className="notification-choice"><input type="checkbox" checked={notifySubmitter} disabled={saving} onChange={event=>setNotifySubmitter(event.target.checked)}/><span>Email affected submitters after saving</span></label>
             <button
               type="button"
               className="button button-primary button-small"

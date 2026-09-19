@@ -1544,6 +1544,7 @@ export const finalizeJotformSubmission = internalMutation({
 export const saveTableEdits = mutation({
   args: {
     notifySubmitter: v.optional(v.boolean()),
+    reason: v.optional(v.string()),
     clientRequestId: v.string(),
     edits: v.array(
       v.object({
@@ -1564,6 +1565,7 @@ export const saveTableEdits = mutation({
     ),
   },
   handler: async (ctx, args) => {
+    if ((args.reason?.length ?? 0) > 2000) throw new ConvexError("Keep the comment within 2000 characters.");
     const user = await requireCapability(ctx, "table.edit");
     const clientRequestId = args.clientRequestId.trim().slice(0, 120);
     if (!clientRequestId) {
@@ -1882,8 +1884,9 @@ export const saveTableEdits = mutation({
     }
 
     for (const before of noticeBookings) {
-      await queueBookingNotice(ctx,before,(await ctx.db.get(before._id))!,"edited");
+      await queueBookingNotice(ctx,before,(await ctx.db.get(before._id))!,"edited","series",undefined,args.reason);
     }
+    for (const item of planned) await recordAdminComment(ctx,item.bookingId,user.clerkUserId,args.reason);
     return { updated: planned.length };
   },
 });
@@ -1999,7 +2002,7 @@ export const beginBookingDeletion = internalMutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) return null;
+    if (!booking) bookingError("BOOKING_NOT_FOUND", "This booking has already been cancelled or is no longer available. Review the latest booking list.");
     const now = Date.now();
     if (booking.requesterOperationId) bookingError("REQUEST_IN_PROGRESS", "A requester operation is in progress. Review it in Edit Requests.");
     if (bookingDeletionInProgress(booking, now)) {
@@ -2114,11 +2117,13 @@ export const recordBookingDeletionTargets = internalMutation({
 export const completeBookingDeletion = internalMutation({
   args: {
     notifySubmitter: v.optional(v.boolean()),
+    reason: v.optional(v.string()),
     bookingId: v.id("bookings"),
     actorId: v.string(),
     deletionToken: v.string(),
   },
   handler: async (ctx, args) => {
+    if ((args.reason?.length ?? 0) > 2000) throw new ConvexError("Keep the comment within 2000 characters.");
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return { deleted: false };
     if (booking.deletionToken !== args.deletionToken) {
@@ -2133,7 +2138,8 @@ export const completeBookingDeletion = internalMutation({
         "This deletion worker lease expired before it could finish. Retry deletion.",
       );
     }
-    if (args.notifySubmitter) await queueBookingNotice(ctx,booking,null,"deleted");
+    if (args.notifySubmitter) await queueBookingNotice(ctx,booking,null,"deleted","series",undefined,args.reason);
+    await recordAdminComment(ctx,booking._id,args.actorId,args.reason);
     await deleteBookingRecord(ctx, booking, args.actorId);
     return { deleted: true };
   },
@@ -2246,11 +2252,13 @@ export const deleteTableRow = mutation({
 export const removeOccurrences = mutation({
   args: {
     notifySubmitter: v.optional(v.boolean()),
+    reason: v.optional(v.string()),
     bookingId: v.id("bookings"), expectedRevision: v.number(),
     scope: v.union(v.literal("occurrence"), v.literal("following")),
     occurrenceSequence: v.number(),
   },
   handler: async (ctx, args) => {
+    if ((args.reason?.length ?? 0) > 2000) throw new ConvexError("Keep the comment within 2000 characters.");
     const user = await requireCapability(ctx, "table.edit");
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) bookingError("BOOKING_NOT_FOUND", "This booking no longer exists.");
@@ -2319,7 +2327,8 @@ export const removeOccurrences = mutation({
       message: `${selected.size} meeting(s) removed from the booking; ${calendarQueued ? "Calendar synchronization queued" : "no approved Calendar events"}.`,
       detailsJson: JSON.stringify({ scope: args.scope, selected: [...selected], remaining: occurrences.length }), createdAt: now,
     });
-    if (args.notifySubmitter) await queueBookingNotice(ctx,booking,(await ctx.db.get(booking._id))!,"deleted",args.scope,args.occurrenceSequence);
+    await recordAdminComment(ctx,booking._id,user.clerkUserId,args.reason);
+    if (args.notifySubmitter) await queueBookingNotice(ctx,booking,(await ctx.db.get(booking._id))!,"deleted",args.scope,args.occurrenceSequence,args.reason);
     return { deleteAllRequired: false, calendarQueued };
   },
 });
@@ -4016,12 +4025,14 @@ export const previewEdit = query({
 export const edit = mutation({
   args: {
     notifySubmitter: v.optional(v.boolean()),
+    reason: v.optional(v.string()),
     ...adminEditArgs,
     acknowledgedConflictBookingIds: v.optional(
       v.array(v.id("bookings")),
     ),
   },
   handler: async (ctx, args) => {
+    if ((args.reason?.length ?? 0) > 2000) throw new ConvexError("Keep the comment within 2000 characters.");
     const user = await requireCapability(ctx, "bookings.edit");
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) {
@@ -4269,7 +4280,8 @@ export const edit = mutation({
         },
       );
     }
-    if (args.notifySubmitter) await queueBookingNotice(ctx,booking,(await ctx.db.get(booking._id))!,"edited",args.editScope??"series",args.occurrenceSequence);
+    await recordAdminComment(ctx,booking._id,user.clerkUserId,args.reason);
+    if (args.notifySubmitter) await queueBookingNotice(ctx,booking,(await ctx.db.get(booking._id))!,"edited",args.editScope??"series",args.occurrenceSequence,args.reason);
   },
 });
 
@@ -4299,3 +4311,8 @@ export const setSheetSyncResult = internalMutation({
     });
   },
 });
+
+async function recordAdminComment(ctx: MutationCtx, bookingId: Id<"bookings">, actorId: string, reason?: string) {
+  if (!reason?.trim()) return;
+  await writeAuditLog(ctx,{level:"info",category:"booking",action:"booking_admin_comment",actorType:"user",actorId,entityType:"booking",entityId:bookingId,message:"Administrator provided a reason for the booking change.",detailsJson:JSON.stringify({reason:reason.trim()}),createdAt:Date.now()});
+}

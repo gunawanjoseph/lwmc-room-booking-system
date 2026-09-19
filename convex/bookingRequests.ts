@@ -5,8 +5,11 @@ import { requireCapability } from "./lib/auth";
 import { writeAuditLog } from "./lib/auditLog";
 import { requestMeetings, requestScope, checkRequestWindow, REQUEST_NOTICE_MS } from "./lib/requesterRules";
 
+import { requestMinistries } from "./lib/requestMinistries";
+const stale = () => new ConvexError("This booking has been updated. Please review the latest booking details before trying again.");
 const scopeValidator = v.union(v.literal("occurrence"), v.literal("following"));
 const kindValidator = v.union(v.literal("change"), v.literal("cancel"));
+const requestKey = (row: {operationKey?:string;createdAt:number}) => row.operationKey ?? `legacy:${row.createdAt}`;
 const emailKey = (email: string) => email.trim().toLowerCase();
 
 // Only the approval email worker can issue bearer links. Never return links to the admin list.
@@ -45,11 +48,13 @@ export const view = query({
     const history = await ctx.db.query("bookingRequests").withIndex("by_booking", q => q.eq("bookingId", booking?._id ?? link!.bookingId)).order("desc").take(100);
     if (!booking && !history.some(item => item.kind === "cancel" && item.status === "completed" && emailKey(item.requesterEmail) === link!.email)) return null;
     return { timezone: booking?.timezone ?? history[0].timezone, version: booking ? requestVersion(booking) : "",
+      ministries: requestMinistries(), recurrenceFrequency: booking?.recurrenceFrequency,
+      editCount: booking?.requesterEditCount ?? history.filter(row => row.kind === "change").reduce((total,row) => total + (row.requestRevision ?? 1), 0),
       rooms: ROOM_OPTIONS, busy: !!booking?.requesterOperationId,
       meetings: booking ? requestMeetings(booking).map(item => ({ ...item, deadline: item.startAt - REQUEST_NOTICE_MS })) : [],
       requests: history.map(item => ({ kind: item.kind, scope: item.scope, sequence: item.sequence,
         message: item.message, status: item.status, response: item.response, createdAt: item.createdAt,
-        proposed: item.proposal, before: item.snapshot })),
+        requestKey: requestKey(item), requestRevision: item.requestRevision ?? 1, proposed: item.proposal, before: item.snapshot })),
     };
   },
 });
@@ -97,6 +102,7 @@ async function unreserve(ctx: MutationCtx, request: Doc<"bookingRequests">, book
 // Old clients cannot silently create a free-text-only request after deployment.
 export const submit = mutation({
   args: { token: v.string(), sequence: v.number(), scope: scopeValidator, kind: kindValidator, message: v.string(), version: v.string(),
+    expectedRequestKey: v.optional(v.string()), expectedRequestRevision: v.optional(v.number()),
     edit: v.optional(editValidator), operationKey: v.optional(v.string()), confirmed: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const booking = await authorizedBooking(ctx, args.token);
@@ -115,6 +121,11 @@ export const submit = mutation({
       if (duplicate.kind !== args.kind || duplicate.sequence !== args.sequence || duplicate.scope !== args.scope || duplicate.message !== args.message.trim() || (args.kind === "change" && duplicate.proposal !== JSON.stringify(args.edit))) throw new ConvexError("This submission key belongs to a different request. Reopen the editor.");
       return { submitted: true };
     }
+    for (const previous of history.flatMap(row => row.revisions ?? [])) {
+      if (previous.operationKey !== args.operationKey) continue;
+      if (args.kind !== "change" || previous.sequence !== args.sequence || previous.scope !== args.scope || previous.message !== args.message.trim() || previous.proposal !== JSON.stringify(args.edit)) throw stale();
+      return { submitted: true };
+    }
     if (booking.deletionToken || booking.calendarSyncToken || booking.calendarSyncStatus === "creating") throw new ConvexError("This booking is being updated. Please try again shortly.");
     if (args.version !== requestVersion(booking)) throw new ConvexError("The booking has changed. Review the latest details before submitting.");
     if (args.kind === "change" && !args.edit) throw new ConvexError("Refresh this page to use the booking editor.");
@@ -122,20 +133,34 @@ export const submit = mutation({
     if (args.message.length > 4000) throw new ConvexError("Keep your message within 4000 characters.");
     if (history.length >= 100) throw new ConvexError("Contact the administrator for further changes.");
     const pending = history.find(active);
-    if (pending && !(args.kind === "cancel" && pending.status === "pending")) throw new ConvexError("There is already a request being processed for this booking.");
+    const updating = args.kind === "change" && !!args.expectedRequestKey;
+    if (updating && (!pending || pending.status !== "pending" || requestKey(pending) !== args.expectedRequestKey || (pending.requestRevision ?? 1) !== args.expectedRequestRevision)) throw stale();
+    if (pending && !(pending.status === "pending" && (args.kind === "cancel" || updating))) throw stale();
+    const editCount = booking.requesterEditCount ?? history.filter(row => row.kind === "change").reduce((sum,row) => sum + (row.requestRevision ?? 1), 0);
+    if (args.kind === "change" && editCount >= 3) throw new ConvexError("You have reached the maximum of 3 edit requests for this booking. You can still cancel eligible meetings or contact the administrator.");
     let candidate: Doc<"bookings">;
     try { candidate = requestCandidate(booking, args.sequence, args.scope, args.kind === "change" ? args.edit : undefined); }
     catch (error) { throw new ConvexError(error instanceof Error ? error.message : "Invalid booking changes."); }
     const conflicts = args.kind === "change" ? await findConflicts(ctx, { occurrences: candidate.occurrences!, resolvedVenues: candidate.resolvedVenues ?? [candidate.room], excludeBookingId: booking._id }) : [];
-    const requestId = await ctx.db.insert("bookingRequests", {
+    // The booking revision is the common compare-and-swap fence used by admin
+    // edits/deletions too. Convex retries racing transactions against fresh state.
+    const revisedBooking = { ...booking, revision: (booking.revision ?? 0) + 1 };
+    await ctx.db.patch(booking._id, { revision: revisedBooking.revision, requesterEditCount: editCount + (args.kind === "change" ? 1 : 0), updatedAt: Date.now() });
+    const values = {
       bookingId: booking._id, requesterEmail: booking.requesterEmail, requesterName: booking.requesterName,
       kind: args.kind, scope: args.scope, sequence: args.sequence, snapshot: JSON.stringify(requestScope(booking, args.sequence, args.scope)),
       original: JSON.stringify(booking), candidate: JSON.stringify(candidate), proposal: args.kind === "change" && args.edit ? JSON.stringify(args.edit) : undefined,
-      version: args.version, operationKey: args.operationKey, message: args.message.trim(), timezone: booking.timezone,
-      status: args.kind === "cancel" ? "applying" : "checking", phase: "validate", createdAt: Date.now(), attempts: 0,
-    });
+      version: requestVersion(revisedBooking), requestRevision: updating ? (pending!.requestRevision ?? 1) + 1 : 1, operationKey: args.operationKey, message: args.message.trim(), timezone: booking.timezone,
+      status: args.kind === "cancel" ? "applying" as const : "checking" as const, phase: "validate" as const, createdAt: Date.now(), attempts: 0,
+    };
+    let requestId: Id<"bookingRequests">;
+    if (updating) {
+      requestId = pending!._id;
+      await ctx.db.patch(requestId, { ...values, createdAt: pending!.createdAt, response: undefined, resolvedAt: undefined, resolvedBy: undefined, workerToken: undefined, leaseUntil: undefined,
+        revisions: [...(pending!.revisions ?? []), { revision: pending!.requestRevision ?? 1, snapshot: pending!.snapshot, version: pending!.version, operationKey: requestKey(pending!), proposal: pending!.proposal, message: pending!.message, sequence: pending!.sequence, scope: pending!.scope, createdAt: Date.now() }] });
+    } else requestId = await ctx.db.insert("bookingRequests", values);
     const request = (await ctx.db.get(requestId))!;
-    if (pending) {
+    if (pending && !updating) {
       if (pending.original && pending.candidate) await reject(ctx, pending, "Superseded by the requester's cancellation.", false);
       else await ctx.db.patch(pending._id, { status: "declined", response: "Superseded by cancellation.", resolvedAt: Date.now() });
     }
@@ -149,24 +174,30 @@ export const submit = mutation({
   },
 });
 
-export const list = query({ args: { status: statusValidator, paginationOpts: paginationOptsValidator }, handler: async (ctx, args) => {
+export const list = query({ args: { status: v.union(statusValidator, v.literal("all")), paginationOpts: paginationOptsValidator }, handler: async (ctx, args) => {
   await requireCapability(ctx, "bookings.approve");
-  const result = await ctx.db.query("bookingRequests").withIndex("by_status", q => q.eq("status", args.status)).order("desc").paginate(args.paginationOpts);
+  const result = args.status === "all"
+    ? await ctx.db.query("bookingRequests").order("desc").paginate(args.paginationOpts)
+    : await ctx.db.query("bookingRequests").withIndex("by_status", q => q.eq("status", args.status as Exclude<typeof args.status,"all">)).order("desc").paginate(args.paginationOpts);
   // Never return full worker snapshots (which can contain calendar references) to the UI.
   return { ...result, page: result.page.map(row => ({ _id: row._id, kind: row.kind, requesterName: row.requesterName,
     requesterEmail: row.requesterEmail, snapshot: row.snapshot, proposal: row.proposal, scope: row.scope, timezone: row.timezone,
+    requestRevision: row.requestRevision ?? 1, recurrenceFrequency: row.original ? (JSON.parse(row.original) as Doc<"bookings">).recurrenceFrequency : undefined,
     message: row.message, status: row.status, response: row.response, createdAt: row.createdAt, resolvedAt: row.resolvedAt })) };
 }});
-export const resolve = mutation({ args: { requestId: v.id("bookingRequests"), outcome: v.union(v.literal("completed"), v.literal("declined")), response: v.string() }, handler: async (ctx, args) => {
+export const resolve = mutation({ args: { expectedRequestRevision: v.number(), requestId: v.id("bookingRequests"), outcome: v.union(v.literal("completed"), v.literal("declined")), response: v.string() }, handler: async (ctx, args) => {
   const actor = await requireCapability(ctx, "bookings.approve");
   const request = await ctx.db.get(args.requestId);
   if (!request) throw new ConvexError("This request no longer exists.");
-  if (request.status !== "pending") return;
+  if (request.status !== "pending" || (request.requestRevision ?? 1) !== args.expectedRequestRevision) throw stale();
   if (args.response.length > 4000) throw new ConvexError("Keep your response within 4000 characters.");
   await ctx.db.patch(request._id, { resolvedBy: actor.clerkUserId, response: args.response.trim() });
   const updated = (await ctx.db.get(request._id))!;
   // Legacy free-text requests remain readable and can be declined; never guess their intent.
   if (args.outcome === "declined") {
+    const current = await ctx.db.get(request.bookingId);
+    if (!current || current.calendarSyncToken || current.deletionToken || (request.version && request.version !== requestVersion(current))) throw stale();
+    await ctx.db.patch(current._id, { revision: (current.revision ?? 0) + 1, updatedAt: Date.now() });
     if (request.original && request.candidate) await reject(ctx, updated, args.response.trim() || "The requested changes were not approved.", false);
     else await ctx.db.patch(request._id, { status: "declined", resolvedAt: Date.now() });
     return;
@@ -174,24 +205,26 @@ export const resolve = mutation({ args: { requestId: v.id("bookingRequests"), ou
   if (!request.proposal || !request.original || !request.candidate || request.kind !== "change") throw new ConvexError("This older request has no structured changes. Ask the requester to resubmit using their link.");
   const booking = await ctx.db.get(request.bookingId);
   if (!booking || request.version !== requestVersion(booking) || booking.status !== "approved" || emailKey(booking.requesterEmail) !== emailKey(request.requesterEmail)) {
-    await reject(ctx, updated, "The booking changed after this request. Please submit a new request.", false); return;
+    await reject(ctx, updated, "The booking changed after this request. Please submit a new request.", false); return {message:"This booking has been updated. The outdated request was not applied. Review the latest booking details."};
   }
   if (booking.requesterOperationId || booking.calendarSyncToken || booking.deletionToken) throw new ConvexError("Wait for the current booking operation to finish.");
   let candidate: Doc<"bookings">;
   try { candidate = requestCandidate(booking, request.sequence, request.scope, JSON.parse(request.proposal)); }
-  catch { await reject(ctx, updated, "The change can no longer be applied within the two-hour cutoff. Please contact the administrator.", false); return; }
+  catch { await reject(ctx, updated, "The request is no longer valid. Review the current booking, ministry options and two-hour cutoff before submitting again.", false); return {message:"This request can no longer be applied. The original booking remains unchanged and the requester has been notified."}; }
   const conflicts = await findConflicts(ctx, { occurrences: candidate.occurrences!, resolvedVenues: candidate.resolvedVenues ?? [candidate.room], excludeBookingId: booking._id });
-  if (conflicts.length) { await reject(ctx, updated, "The requested room or time is no longer available. Your original booking remains unchanged."); return; }
-  await ctx.db.patch(request._id, { status: "applying", candidate: JSON.stringify(candidate), phase: "validate", attempts: 0 });
+  if (conflicts.length) { await reject(ctx, updated, "The requested room or time is no longer available. Your original booking remains unchanged."); return {message:"The room or time is no longer available. The original booking remains unchanged and the requester has been notified."}; }
+  const accepted = { ...booking, revision: (booking.revision ?? 0) + 1 };
+  await ctx.db.patch(booking._id, { revision: accepted.revision, updatedAt: Date.now() });
+  await ctx.db.patch(request._id, { version: requestVersion(accepted), status: "applying", candidate: JSON.stringify(candidate), phase: "validate", attempts: 0 });
   await reserve(ctx, updated, booking, candidate);
   await schedule(ctx, request._id);
   await audit(ctx, updated, "Approver accepted changes; reservations held while Calendar is synchronized.");
 }});
 
-export const retry = mutation({ args: { requestId: v.id("bookingRequests") }, handler: async (ctx, args) => {
+export const retry = mutation({ args: { expectedRequestRevision: v.number(), requestId: v.id("bookingRequests") }, handler: async (ctx, args) => {
   await requireCapability(ctx, "bookings.approve");
   const request = await ctx.db.get(args.requestId);
-  if (!request || request.status !== "failed") return;
+  if (!request || request.status !== "failed" || (request.requestRevision ?? 1) !== args.expectedRequestRevision) throw stale();
   await ctx.db.patch(request._id, { status: request.resolvedBy || request.kind === "cancel" ? "applying" : "checking", attempts: 0, response: undefined });
   await schedule(ctx, request._id);
 }});

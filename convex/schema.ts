@@ -115,6 +115,8 @@ export default defineSchema({
     scope: v.union(v.literal("occurrence"), v.literal("following")),
     sequence: v.number(), snapshot: v.string(), message: v.string(), timezone: v.string(),
     status: v.union(v.literal("pending"), v.literal("completed"), v.literal("declined"), v.literal("checking"), v.literal("applying"), v.literal("failed")),
+    requestRevision: v.optional(v.number()),
+    revisions: v.optional(v.array(v.object({ revision: v.number(), snapshot: v.optional(v.string()), version: v.optional(v.string()), operationKey: v.string(), proposal: v.optional(v.string()), message: v.string(), sequence: v.number(), scope: v.union(v.literal("occurrence"),v.literal("following")), createdAt: v.number() }))),
     proposal: v.optional(v.string()), version: v.optional(v.string()), operationKey: v.optional(v.string()),
     original: v.optional(v.string()), candidate: v.optional(v.string()),
     phase: v.optional(v.union(v.literal("validate"), v.literal("create"), v.literal("delete"), v.literal("rollback"))),
@@ -194,6 +196,7 @@ export default defineSchema({
     .index("by_email", ["email"]),
 
   bookings: defineTable({
+    requesterEditCount: v.optional(v.number()),
     requesterOperationId: v.optional(v.id("bookingRequests")),
     source: v.literal("jotform"),
     jotformFormId: v.string(),

@@ -650,8 +650,10 @@ export const deleteBooking = action({
     bookingId: v.id("bookings"),
     expectedRevision: v.number(),
     notifySubmitter: v.optional(v.boolean()),
+    reason: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ deleted: boolean }> => {
+    if ((args.reason?.length ?? 0) > 2000) throw new Error("Keep the comment within 2000 characters.");
     const user = await requireActionCapability(ctx, "table.edit");
     const deletionToken = crypto.randomUUID();
     let started = false;
@@ -711,6 +713,7 @@ export const deleteBooking = action({
           actorId: user.clerkUserId,
           deletionToken,
           notifySubmitter: args.notifySubmitter,
+          reason: args.reason,
         },
       )) as { deleted: boolean };
     } catch (error) {

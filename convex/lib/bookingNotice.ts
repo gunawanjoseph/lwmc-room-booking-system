@@ -3,11 +3,11 @@ import type { Doc } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { filterMeetings, sortMeetings, submitterMeetings } from "./submitterBookings";
 import { scopedSequences } from "./recurrenceScope";
-export async function queueBookingNotice(ctx: MutationCtx, before: Doc<"bookings">, after: Doc<"bookings"> | null, kind: "edited"|"deleted", scope: "series"|"occurrence"|"following" = "series", sequence?:number) {
+export async function queueBookingNotice(ctx: MutationCtx, before: Doc<"bookings">, after: Doc<"bookings"> | null, kind: "edited"|"deleted", scope: "series"|"occurrence"|"following" = "series", sequence?:number, reason?:string) {
   const selected=scopedSequences(before.occurrences??[{sequence:0,startAt:before.startAt,endAt:before.endAt}],scope,sequence);
   const beforeRows=submitterMeetings(before).filter(row=>selected.has(Number(row.key.split(":").at(-1))));
   const afterRows=after?submitterMeetings(after).filter(row=>scope==="series"||selected.has(Number(row.key.split(":").at(-1)))):[];
-  const changes: string[]=[];
+  const changes: string[]=reason?.trim() ? [`Administrator comment: ${reason.trim()}`] : [];
   if (after) {
     for (const field of ["requesterName","requesterEmail","eventName","purpose","ministry"] as const) {
       if(before[field]!==after[field]) changes.push(`${field}: ${before[field]??"(empty)"} → ${after[field]??"(empty)"}`);

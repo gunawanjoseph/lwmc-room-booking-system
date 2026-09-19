@@ -3143,7 +3143,7 @@ textarea:focus-visible {
 .request-comparison dd { margin: 0; display: grid; gap: 8px; white-space: pre-wrap; line-height: 1.5; }
 .request-before { color: #64736e; text-decoration: line-through; }
 .request-changed-label { display: block; margin-top: 6px; font-size: .7rem; color: #286357; }
-.edit-requests-page { max-width: 1000px; }
+.edit-requests-page { min-width: 0; }
 @media(max-width:640px) {
   .requester-page { padding: 24px 12px 40px; }
   .request-brand { margin-bottom: 24px; }
@@ -3156,3 +3156,17 @@ textarea:focus-visible {
 }
 
 .request-comparison .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+.edit-request-filters {display:flex;gap:1rem;padding:1rem;margin-bottom:1rem;align-items:center}
+.edit-request-search {display:flex;align-items:center;gap:.75rem;flex:1;min-width:0}
+.edit-request-search input {width:100%;min-width:0;padding:.8rem;border:1px solid var(--border,#dce4e1);border-radius:12px}
+.edit-request-filters select {padding:.8rem;border:1px solid var(--border,#dce4e1);border-radius:12px;background:white;min-height:44px}
+.edit-request-list {overflow:hidden;padding:0}
+.edit-request-list > p {padding:1.25rem}
+.edit-request-row {display:grid;grid-template-columns:1fr 1.3fr .8fr auto;gap:1.25rem;padding:1.25rem;border-bottom:1px solid #e3ebe8;align-items:center}
+.edit-request-row > div {min-width:0;overflow-wrap:anywhere}
+.edit-request-row small {display:block;margin-top:.4rem;color:#65756f}
+.request-review-dialog {width:min(900px,calc(100% - 24px));max-height:90dvh;overflow:auto;border:0;border-radius:20px;padding:1.25rem;background:#f5f7f5}
+.request-review-dialog::backdrop {background:#12282288}
+.request-review-dialog > button {margin-bottom:1rem}
+@media(max-width:640px){.edit-request-filters{flex-direction:column;align-items:stretch}.edit-request-row{grid-template-columns:1fr;gap:.8rem}.edit-request-row .button{width:100%}.request-review-dialog{padding:.75rem}.edit-request-search input{font-size:16px}}

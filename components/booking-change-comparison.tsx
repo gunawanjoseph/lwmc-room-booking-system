@@ -8,7 +8,7 @@ export function BookingChangeComparison({ before, after, timezone }: { before: M
     ["Starts", formatDateTime(before.startAt, timezone), formatDateTime(after.startAt, timezone)],
     ["Ends", formatDateTime(before.endAt, timezone), formatDateTime(after.endAt, timezone)],
     ["Ministry", before.ministry || "—", after.ministry || "—"], ["Purpose", before.purpose || "—", after.purpose || "—"],
-    ...(before.fields ?? []).map(field => [field.label, field.value || "—", (after.responses?.find(row => row.qid === field.qid)?.value ?? field.value) || "—"]),
+    ...(before.fields ?? []).filter(field => !/duration/i.test(field.label)).map(field => [field.label, field.value || "—", (after.responses?.find(row => row.qid === field.qid)?.value ?? field.value) || "—"]),
   ];
   return <dl className="request-comparison">{fields.map(([label, old, next]) => <div key={label} className={old !== next ? "is-changed" : ""}>
     <dt>{label}{old !== next && <span className="request-changed-label">Changed</span>}</dt>

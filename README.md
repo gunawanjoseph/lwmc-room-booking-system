@@ -374,8 +374,12 @@ rules, including combined Ministry Centre rooms. Desktop and mobile layouts shar
 the same steps and clear progress/error states.
 
 Choose **This event only** or **This event and following events**. Following edits
-shift the selected and later meetings by the selected meeting's time difference,
-apply its new duration and details, and preserve earlier meetings. Availability is
+keep the frequency unchanged (daily, weekly, fortnightly or monthly). Changing the
+start re-anchors the remaining concrete meetings to the new calendar day while
+keeping their identities and count; earlier meetings are preserved. Monthly rules
+use calendar dates/ordinal weekdays, not a fixed number of milliseconds. Months
+without the required day are skipped. Previously deleted meetings are not recreated.
+The remaining meetings adopt the selected times and details. Availability is
 checked for every affected occurrence. Existing occurrence exceptions are used;
 sequence numbers are not assumed to be chronological.
 
@@ -383,14 +387,24 @@ Requests and confirmed cancellations must begin at least two hours before every
 affected original meeting. Proposed edit starts must also stay outside that window.
 The server checks again before an edit enters approval and when approval begins.
 An outdated booking snapshot or an expired cutoff prevents the change. One active
-operation is allowed per booking, with idempotent submission and approval handling.
-A pending edit can be superseded by a confirmed cancellation.
+operation is allowed per booking, with idempotent submission handling and version-checked approval.
+A pending edit can be updated in place or superseded by a confirmed cancellation.
+Each edit submission, including an update to a pending request, uses one of three
+lifetime edits per booking. Rejected and completed edits count; cancellation does
+not. Historical requests seed the counter when it is first used. Previous pending
+versions remain in request history. The server checks both the booking revision and
+the exact request revision reviewed by the approver. The first committed conflicting
+operation wins; stale actions cannot silently overwrite it. This is transaction
+commit ordering, not a guarantee of which network request arrives first.
 
 ### Edit approval
 
 Booking approvers, managers, the head admin and the developer use **Edit Requests**
 at `/booking-requests`. Compare current and requested details, then approve or
-reject. Approval automatically applies the change; no manual booking edit is needed.
+reject, with an optional reason included in the requester email. The searchable
+list uses the same cards, status badges and controls as the booking page. Opening a
+request captures its reviewed version; close and reopen it after a stale-state message.
+Approval automatically applies the change; no manual booking edit is needed.
 Older free-text requests remain visible but cannot be automatically approved; ask
 the requester to resubmit a structured request using their existing link.
 
@@ -443,7 +457,22 @@ outstanding bookings captured in the lifecycle transaction; approver messages do
 ### Deployment
 
 Deploy Convex schema/functions and the frontend together, then refresh old tabs.
-No new environment variables are required. Configure the existing Calendar service
+Set `BOOKING_MINISTRIES_JSON` in the **Convex deployment environment variables**
+to a JSON array containing the exact ministries offered by your booking form, for
+example `["Church Office","Worship & Music","Young Adults Ministry"]` (replace
+this example with your complete list). This is the authoritative dropdown and server
+allowlist; it is not inferred from historical free-text submissions. Configure it
+separately in dev and production. Missing or invalid configuration disables edit
+submission with a helpful message; cancellations remain available. Legacy bookings
+with unlisted ministries must select a valid ministry before submitting changes.
+
+Phone fields accept Singapore eight-digit numbers beginning with 3, 6, 8 or 9 and
+store them as `(65) 9087 3541`. Legacy `full:` values are normalized when edited.
+Start and end times define duration; no separate Duration input is shown.
+Administrator edits, bulk table edits and cancellations have optional comments,
+stored in the audit log and included when an email notification is selected.
+
+Configure the existing Calendar service
 account, venue map and `GOOGLE_CALENDAR_ENABLED=true`, Gmail credentials, active
 Approver Emails, and Convex `APP_BASE_URL` for the intended frontend deployment.
 The Calendar identity needs full event read/write access to each mapped calendar;
@@ -453,7 +482,8 @@ Keep the public `/booking-request` route outside the Clerk-authenticated layout.
 Schema additions are optional for existing rows: request proposal/version, original
 and candidate snapshots, idempotency key, processing phase, lease and event targets;
 a booking operation lock; link revocation; and request-specific fields in the existing
-booking-notice outbox. Existing records need no backfill. Histories retain the previous
+booking-notice outbox. Existing records need no backfill. Request revisions and the lifetime edit counter
+are initialized lazily; do not reset these fields to grant additional attempts. Histories retain the previous
 `pending`, `completed` and `declined` states and add `checking`, `applying` and `failed`.
 Do not remove the requester operation fields while a synchronization is in flight.
 
