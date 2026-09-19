@@ -46,14 +46,13 @@ const navigation: Array<{
   capability?: Capability;
 }> = [
   { href: "/home", label: "Overview", icon: Home, capability: "bookings.view" },
-  { href: "/booking-requests", label: "Edit Requests", icon: BookOpenCheck, capability: "bookings.approve" },
-  { href: "/support", label: "Support", icon: MessagesSquare, capability: "support.view" },
   {
     href: "/bookings",
     label: "Bookings",
     icon: BookOpenCheck,
     capability: "bookings.view",
   },
+  { href: "/booking-requests", label: "Edit Requests", icon: BookOpenCheck, capability: "bookings.approve" },
   {
     href: "/calendar",
     label: "Calendar",
@@ -66,6 +65,7 @@ const navigation: Array<{
     icon: TableProperties,
     capability: "table.view",
   },
+  { href: "/support", label: "Support", icon: MessagesSquare, capability: "support.view" },
   {
     href: "/logs",
     label: "System logs",

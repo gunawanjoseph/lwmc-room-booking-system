@@ -636,12 +636,29 @@ function renderDetailRows(rows: EmailDetailRow[]): string {
     .join("");
 }
 
-function renderActionButton(label: string, href: string): string {
-  return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr><td><a href="${escapeHtml(
+function actionButtonLink(label: string, href: string): string {
+  return `<a href="${escapeHtml(
     href,
   )}" style="display:inline-block;background:#2f6fdd;color:#fff;text-decoration:none;font-family:Arial,sans-serif;font-size:14px;font-weight:700;padding:12px 18px;border-radius:8px">${escapeHtml(
     label,
-  )}</a></td></tr></table>`;
+  )}</a>`;
+}
+
+function renderActionButton(label: string, href: string): string {
+  return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr><td>${actionButtonLink(label, href)}</td></tr></table>`;
+}
+
+// Buttons share one table row so they sit side by side in email clients.
+function renderActionButtonRow(
+  buttons: ReadonlyArray<{ label: string; href: string }>,
+): string {
+  const cells = buttons
+    .map(
+      (button, index) =>
+        `<td style="padding:0 ${index < buttons.length - 1 ? 12 : 0}px 0 0">${actionButtonLink(button.label, button.href)}</td>`,
+    )
+    .join("");
+  return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr>${cells}</tr></table>`;
 }
 
 function renderApprovedBookingAccessNotice(): string {
@@ -1790,7 +1807,7 @@ export const sendDelivery = internalAction({
         const link = `${gmailConfiguration().appBaseUrl}/booking-request#token=${token}`;
         const explanation = "Request changes or cancel at least two hours before the selected meeting starts. Changes require approval. Cancellation takes effect after you confirm and Calendar cleanup succeeds. Keep these private links to yourself.";
         const cancelLink = `${link}&action=cancel`;
-        const section = `<div style="margin-top:24px;padding-top:20px;border-top:1px solid #eef0f4">${renderActionButton("Request Changes", link)}${renderActionButton("Cancel Booking", cancelLink)}<p style="font-size:13px;line-height:1.6;color:#667085">${explanation}</p></div>`;
+        const section = `<div style="margin-top:24px;padding-top:20px;border-top:1px solid #eef0f4">${renderActionButtonRow([{ label: "Request Changes", href: link }, { label: "Cancel Booking", href: cancelLink }])}<p style="font-size:13px;line-height:1.6;color:#667085">${explanation}</p></div>`;
         composed = { ...composed, text: `${composed.text}\n\nRequest Changes: ${link}\nCancel Booking: ${cancelLink}\n${explanation}`,
           html: composed.html.replace("<!--booking-management-->", section) };
       }

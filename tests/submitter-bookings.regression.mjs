@@ -127,7 +127,7 @@ for(const kind of ['requester_submission_received','requester_approved','request
   await emails.sendDelivery.handler(ctx,{deliveryId:'delivery',leaseToken:'lease'});assert.equal(sent.length,1,JSON.stringify(mutations));
   if(kind.startsWith('requester_')){assert.match(sent[0],/OUTSTANDING-ROW/);assert.match(sent[0],/\/booking-calendar/);assert.match(sent[0],/Your outstanding bookings/);assert.equal(pages,2);}else{assert.doesNotMatch(sent[0],/OUTSTANDING-ROW|Your outstanding bookings|\/booking-calendar/);assert.equal(pages,0);}
   assert.equal(mutations.at(-1).name,'completeDelivery');
-  if(kind==='requester_approved') {assert.match(sent[0],/booking-request#token=a{64}/);assert.match(sent[0],/Request Changes/);assert.doesNotMatch(sent[0],/booking-request[^\s"<]*bookingId/);}
+  if(kind==='requester_approved') {assert.match(sent[0],/booking-request#token=a{64}/);assert.match(sent[0],/Request Changes<\/a><\/td><td[^>]*><a[^>]*>Cancel Booking<\/a><\/td><\/tr>/);assert.doesNotMatch(sent[0],/booking-request[^\s"<]*bookingId/);}
   else assert.doesNotMatch(sent[0],/booking-request#token=/);
 }));
 test('deletion notification sends snapshot and saved remaining-bookings footer without needing the deleted row',async()=>gmail(async sent=>{
