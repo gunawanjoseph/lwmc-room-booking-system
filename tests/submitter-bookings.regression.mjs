@@ -127,7 +127,7 @@ for(const kind of ['requester_submission_received','requester_approved','request
   await emails.sendDelivery.handler(ctx,{deliveryId:'delivery',leaseToken:'lease'});assert.equal(sent.length,1,JSON.stringify(mutations));
   if(kind.startsWith('requester_')){assert.match(sent[0],/OUTSTANDING-ROW/);assert.match(sent[0],/\/booking-calendar/);assert.match(sent[0],/Your outstanding bookings/);assert.equal(pages,2);}else{assert.doesNotMatch(sent[0],/OUTSTANDING-ROW|Your outstanding bookings|\/booking-calendar/);assert.equal(pages,0);}
   assert.equal(mutations.at(-1).name,'completeDelivery');
-  if(kind==='requester_approved') {assert.match(sent[0],/booking-request#token=a{64}/);assert.match(sent[0],/Request changes \/ booking cancellation/);assert.doesNotMatch(sent[0],/booking-request[^\s"<]*bookingId/);}
+  if(kind==='requester_approved') {assert.match(sent[0],/booking-request#token=a{64}/);assert.match(sent[0],/Request Changes/);assert.doesNotMatch(sent[0],/booking-request[^\s"<]*bookingId/);}
   else assert.doesNotMatch(sent[0],/booking-request#token=/);
 }));
 test('deletion notification sends snapshot and saved remaining-bookings footer without needing the deleted row',async()=>gmail(async sent=>{
@@ -413,3 +413,15 @@ test('Google-linked ministry lookup respects scoped overrides and avoids guessin
   assert.equal(await googleSchedule.ministry.handler(ctx,{bookingId:'booking',startAt:0}),'');
   assert.equal(await googleSchedule.ministry.handler(ctx,{bookingId:'invalid',startAt:0}),'');
 });
+
+for (const admin of [false,true]) test(`request lifecycle emails reuse template and ${admin?'exclude':'include'} outstanding snapshot`,async()=>gmail(async sent=>{
+  const ctx=context();const before=rules.submitterMeetings(booking());
+  const noticeId=await ctx.db.insert('bookingNotices',{bookingReference:'123',recipientEmail:admin?'admin@example.com':'person@example.com',kind:'edited',scope:'occurrence',beforeJson:JSON.stringify(before),afterJson:JSON.stringify(before.map(row=>({...row,title:'Changed event'}))),detailChanges:'Room: Old → New\n<script>bad</script>',requestSubject:'Booking Change Request Received',requestText:'Awaiting approval.',approverNotice:admin,outstandingJson:JSON.stringify({capturedAt:now,timezone:'Asia/Singapore',rows:before}),calendarPending:false,status:'pending',attempts:0,createdAt:now,updatedAt:now});
+  ctx.runMutation=async(name,args)=>notices[name].handler(ctx,args);
+  ctx.runQuery=async()=>{throw Error('Must use committed snapshot');};
+  await emails.sendBookingNotice.handler(ctx,{noticeId});assert.equal(sent.length,1);
+  assert.match(sent[0],/Living Waters Methodist Church/);assert.match(sent[0],/Changed event/);assert.match(sent[0],/&lt;script&gt;bad&lt;\/script&gt;/);
+  if(admin){assert.doesNotMatch(sent[0],/Your outstanding bookings/);assert.match(sent[0],/\/booking-requests/);}
+  else assert.match(sent[0],/Your outstanding bookings/);
+  assert.equal((await ctx.db.get(noticeId)).status,'sent');
+}));

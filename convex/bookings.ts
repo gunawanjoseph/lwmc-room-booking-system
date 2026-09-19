@@ -172,6 +172,7 @@ function requireBookingDeletionIdle(
   booking: Doc<"bookings">,
   now = Date.now(),
 ) {
+  if (booking.requesterOperationId) bookingError("REQUEST_IN_PROGRESS", "A requester operation is in progress. Review it in Edit Requests.");
   if (bookingDeletionInProgress(booking, now)) {
     bookingError(
       "BOOKING_DELETION_IN_PROGRESS",
@@ -372,7 +373,7 @@ function normalizeMinistry(
   return ministry || undefined;
 }
 
-function updateCanonicalResponseValues(
+export function updateCanonicalResponseValues(
   responses: Doc<"bookings">["formResponses"],
   values: {
     requesterName: string;
@@ -548,7 +549,7 @@ type BookingConflict = {
   targetVenue: string;
 };
 
-async function findConflicts(
+export async function findConflicts(
   ctx: MutationCtx | QueryCtx,
   args: {
     occurrences: BookingOccurrence[];
@@ -664,7 +665,7 @@ async function addReciprocalConflictWarnings(
   }
 }
 
-async function clearReciprocalConflictWarnings(
+export async function clearReciprocalConflictWarnings(
   ctx: MutationCtx,
   booking: Doc<"bookings">,
   now: number,
@@ -691,7 +692,7 @@ async function clearReciprocalConflictWarnings(
   }
 }
 
-async function clearBlockingConflictReferences(
+export async function clearBlockingConflictReferences(
   ctx: MutationCtx,
   bookingId: Id<"bookings">,
   now: number,
@@ -712,7 +713,7 @@ async function clearBlockingConflictReferences(
   return peers.length;
 }
 
-async function addClaims(
+export async function addClaims(
   ctx: MutationCtx,
   bookingId: Id<"bookings">,
   args: {
@@ -742,7 +743,7 @@ async function addClaims(
   }
 }
 
-async function removeClaims(
+export async function removeClaims(
   ctx: MutationCtx,
   bookingId: Id<"bookings">,
 ) {
@@ -1350,6 +1351,7 @@ export const finalizeJotformSubmission = internalMutation({
       );
     }
     const now = Date.now();
+    if (booking.requesterOperationId) bookingError("REQUEST_IN_PROGRESS", "A requester operation is in progress. Review it in Edit Requests.");
     if (bookingDeletionInProgress(booking, now)) {
       await ctx.db.patch(receipt._id, {
         state: "processed",
@@ -1886,7 +1888,7 @@ export const saveTableEdits = mutation({
   },
 });
 
-async function deleteBookingRecord(
+export async function deleteBookingRecord(
   ctx: MutationCtx,
   booking: Doc<"bookings">,
   actorId: string,
@@ -1999,6 +2001,7 @@ export const beginBookingDeletion = internalMutation({
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return null;
     const now = Date.now();
+    if (booking.requesterOperationId) bookingError("REQUEST_IN_PROGRESS", "A requester operation is in progress. Review it in Edit Requests.");
     if (bookingDeletionInProgress(booking, now)) {
       bookingError(
         "BOOKING_DELETION_IN_PROGRESS",
@@ -3346,7 +3349,7 @@ export const recoverCalendarSyncLease = internalMutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking || booking.calendarSyncToken !== args.syncToken) {
+    if (!booking || booking.requesterOperationId || booking.calendarSyncToken !== args.syncToken) {
       return;
     }
     const now = Date.now();
@@ -3745,7 +3748,7 @@ type AdminEditInput = {
   occurrenceSequence?: number;
 };
 
-function adminReservationProposal(
+export function adminReservationProposal(
   booking: Doc<"bookings">,
   args: AdminEditInput,
 ): {
@@ -3780,7 +3783,7 @@ function adminReservationProposal(
     let occurrences: BookingOccurrence[];
     try {
       occurrences = editScopedOccurrences(
-        (booking.occurrences ?? []) as BookingOccurrence[],
+        (booking.occurrences ?? [{ sequence: 0, startAt: booking.startAt, endAt: booking.endAt }]) as BookingOccurrence[],
         args.editScope,
         args.occurrenceSequence ?? -1,
         {

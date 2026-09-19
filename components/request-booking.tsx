@@ -1,70 +1,129 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { DateTime } from "luxon";
+import { CalendarDays, Clock3, MapPin, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
-import { formatDateTime } from "@/lib/ui";
+import { formatDateTime, messageFromError } from "@/lib/ui";
+import { Brand } from "@/components/brand";
+import { BookingChangeComparison, requestStatusLabel, type ProposedEdit } from "@/components/booking-change-comparison";
 
+type Step = "summary" | "edit" | "review" | "cancel";
 export function RequestBooking() {
   const [token, setToken] = useState<string | null>(null);
   const [sequence, setSequence] = useState("");
   const [scope, setScope] = useState<"occurrence" | "following">("occurrence");
-  const [kind, setKind] = useState<"change" | "cancel">("change");
+  const [step, setStep] = useState<Step>("summary");
+  const [draft, setDraft] = useState({ room: "", eventName: "", purpose: "", ministry: "", start: "", end: "" });
+  const [responses, setResponses] = useState<Array<{ qid: string; value: string }>>([]);
+  const [editVersion, setEditVersion] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  const operationKey = useRef("");
+  const sending = useRef(false);
+  const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
-    const read = () => setToken(new URLSearchParams(window.location.hash.slice(1)).get("token") ?? "");
+    const read = () => {
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      setToken(params.get("token") ?? ""); setStep("summary"); setSequence("");
+    };
     read(); window.addEventListener("hashchange", read);
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => { clearInterval(timer); window.removeEventListener("hashchange", read); };
   }, []);
   const data = useQuery(api.bookingRequests.view, token ? { token } : "skip");
   const submit = useMutation(api.bookingRequests.submit);
-  const selected = data?.meetings.find(row => String(row.sequence) === sequence);
+  const selected = data?.meetings.find(row => String(row.sequence) === sequence)
+    ?? data?.meetings.find(row => row.deadline >= now) ?? data?.meetings[0];
   const affected = selected ? data!.meetings.filter(row => scope === "occurrence" ? row.sequence === selected.sequence : row.startAt >= selected.startAt) : [];
   const pending = data?.requests.some(row => row.status === "pending");
-  async function send(event: React.FormEvent) {
-    event.preventDefault(); if (!data || !token || !selected || busy) return;
-    setBusy(true); setError(""); setNotice("");
-    try {
-      await submit({ token, sequence: selected.sequence, scope, kind, message, version: data.version });
-      setNotice("Your request has been sent. Your booking stays unchanged until an administrator processes it.");
-      setMessage("");
-    } catch (err) { setError(err instanceof Error ? err.message : "Unable to submit. Please try again."); }
-    finally { setBusy(false); }
+  const processing = data?.busy || data?.requests.some(row => ["checking", "applying", "failed"].includes(row.status));
+  const closed = !selected || now > selected.deadline;
+  const stale = step !== "summary" && editVersion !== data?.version;
+  function go(next: Step) { setStep(next); setError(""); requestAnimationFrame(() => heading.current?.focus()); }
+  function begin(next: "edit" | "cancel") {
+    if (!selected || !data) return;
+    setSequence(String(selected.sequence));
+    setResponses(selected.fields.map(field => ({ qid: field.qid, value: field.value })));
+    setDraft({ room: selected.room, eventName: selected.title, purpose: selected.purpose, ministry: selected.ministry,
+      start: DateTime.fromMillis(selected.startAt, { zone: data.timezone }).toFormat("yyyy-MM-dd'T'HH:mm"),
+      end: DateTime.fromMillis(selected.endAt, { zone: data.timezone }).toFormat("yyyy-MM-dd'T'HH:mm") });
+    setEditVersion(data.version); setScope("occurrence"); setMessage(""); setNotice(""); operationKey.current = crypto.randomUUID(); go(next);
   }
-  return <main className="page requester-page"><h1>Manage your booking</h1>
-    {token === null || (token && data === undefined) ? <p role="status">Loading your booking…</p> : !token || !data ?
-      <p>This link is unavailable. The booking may have been cancelled or its contact details changed. Please contact the booking administrator.</p> : <>
-      <p>Request changes or cancellation at least two hours before the selected meeting starts. Times are shown in {data.timezone}.</p>
-      <form className="panel requester-form" onSubmit={send}>
-        <label>Meeting<select required value={sequence} onChange={e => { setSequence(e.target.value); setNotice(""); }}>
-          <option value="">Choose a meeting</option>
-          {data.meetings.map(row => <option key={row.sequence} value={row.sequence} disabled={now > row.deadline}>
-            {formatDateTime(row.startAt, data.timezone)} · {row.title}{now > row.deadline ? " — requests closed" : ""}
-          </option>)}
-        </select></label>
-        {selected && <p>{selected.title}<br/>{selected.room}<br/>{formatDateTime(selected.startAt,data.timezone)} – {formatDateTime(selected.endAt,data.timezone)}<br/>Request by {formatDateTime(selected.deadline,data.timezone)}</p>}
-        <label>Apply to<select value={scope} onChange={e => setScope(e.target.value as typeof scope)}>
-          <option value="occurrence">This event only</option>
-          {data.meetings.length > 1 && <option value="following">This event and following events</option>}
-        </select></label>
-        {affected.length > 1 && <details><summary>{affected.length} meetings included</summary><ul>{affected.map(row => <li key={row.sequence}>{formatDateTime(row.startAt,data.timezone)} · {row.title} · {row.room}</li>)}</ul></details>}
-        <label>Request<select value={kind} onChange={e => setKind(e.target.value as typeof kind)}>
-          <option value="change">Change booking</option><option value="cancel">Cancel booking</option>
-        </select></label>
-        <label>{kind === "change" ? "What would you like to change?" : "Reason (optional)"}
-          <textarea rows={5} maxLength={4000} minLength={kind === "change" ? 5 : undefined} required={kind === "change"} value={message} onChange={e => setMessage(e.target.value)} placeholder={kind === "change" ? "Describe the new date, start/end time, room or other changes." : ""}/>
-        </label>
-        {pending && <p role="status">A request for this booking is awaiting review.</p>}
-        {selected && now > selected.deadline && <p role="alert">The two-hour deadline has passed. Contact the booking administrator.</p>}
-        {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-        <button className="button" disabled={busy || pending || !selected || now > selected.deadline}>{busy ? "Sending…" : kind === "cancel" ? "Request cancellation" : "Request changes"}</button>
-      </form>
-      {data.requests.length > 0 && <section aria-label="Your requests"><h2>Your requests</h2>{data.requests.map((row,i) => <article className="panel" key={i}>
-        <strong>{row.kind === "cancel" ? "Cancellation" : "Change request"} · {row.status}</strong><p>{row.message}</p>{row.response && <p>{row.response}</p>}
+  function proposal(at = now): ProposedEdit {
+    const startAt = DateTime.fromISO(draft.start, { zone: data!.timezone }).toMillis();
+    const endAt = DateTime.fromISO(draft.end, { zone: data!.timezone }).toMillis();
+    if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) throw Error("Choose an end time after the start time.");
+    if (startAt - at < 2 * 60 * 60_000) throw Error("Choose a start time at least two hours from now.");
+    return { room: draft.room, eventName: draft.eventName.trim(), purpose: draft.purpose.trim(), ministry: draft.ministry.trim(), startAt, endAt, responses };
+  }
+  function review(event: React.FormEvent) { event.preventDefault(); try { proposal(); go("review"); } catch (err) { setError(messageFromError(err)); } }
+  async function send(kind: "change" | "cancel") {
+    if (!data || !token || !selected || sending.current || stale) return;
+    sending.current = true; setBusy(true); setError("");
+    try {
+      await submit({ token, sequence: selected.sequence, scope, kind, message, version: editVersion,
+        edit: kind === "change" ? proposal(Date.now()) : undefined, confirmed: kind === "cancel", operationKey: operationKey.current });
+      setNotice(kind === "cancel" ? "Cancellation is being processed. This page will confirm when it is complete." : "Checking your requested changes. Your original booking remains active until approval.");
+      go("summary");
+    } catch (err) { setError(messageFromError(err)); }
+    finally { sending.current = false; setBusy(false); }
+  }
+  let proposed: ProposedEdit | null = null;
+  if (step === "review" && data) { try { proposed = proposal(); } catch { /* Expiring drafts disable submission below. */ } }
+  const scopeControl = data && data.meetings.length > 1 && <fieldset className="request-scope"><legend>Apply to</legend>
+    {(["occurrence", "following"] as const).map(value => <label key={value}><input type="radio" name="scope" value={value} checked={scope === value} onChange={() => setScope(value)} disabled={busy}/>{value === "occurrence" ? "This event only" : "This event and following events"}</label>)}
+    {affected.length > 1 && <details><summary>{affected.length} meetings</summary><ul>{affected.map(row => <li key={row.sequence}>{formatDateTime(row.startAt, data.timezone)} · {row.title}</li>)}</ul></details>}
+  </fieldset>;
+  return <main className="page requester-page"><div className="request-brand"><Brand/></div>
+    <header className="request-page-header"><h1 ref={heading} tabIndex={-1}>{step === "edit" ? "Request changes" : step === "review" ? "Review your changes" : step === "cancel" ? "Cancel this booking?" : "Manage your booking"}</h1>
+      <p>{data ? `Times shown in ${data.timezone}.` : "View and manage your approved meetings."}</p></header>
+    {token === null || (token && data === undefined) ? <div className="panel requester-form" role="status">Loading your booking…</div> : !token || !data ?
+      <div className="panel requester-form"><p>This link is unavailable. Contact the booking administrator for help.</p></div> : <>
+      {notice && processing && <p className="request-notice" role="status">{notice}</p>}
+      {error && <p className="request-error" role="alert">{error}</p>}
+      {stale && <p className="request-error" role="alert">This booking has changed. <button type="button" className="text-link" onClick={() => go("summary")}>Review the latest booking</button> before continuing.</p>}
+      {step === "summary" ? <>
+        {selected ? <section className="panel requester-form" aria-label="Approved booking">
+          {data.meetings.length > 1 && <label>Meeting<select value={selected.sequence} onChange={e => { setSequence(e.target.value); setNotice(""); }}>
+            {data.meetings.map(row => <option key={row.sequence} value={row.sequence}>{formatDateTime(row.startAt, data.timezone)} · {row.title}</option>)}
+          </select></label>}
+          <div><span className="request-status">Approved booking</span><h2 className="request-title">{selected.title}</h2></div>
+          <div className="request-summary"><p><MapPin size={18} aria-hidden="true"/>{selected.room}</p><p><CalendarDays size={18} aria-hidden="true"/>{formatDateTime(selected.startAt, data.timezone)}</p><p><Clock3 size={18} aria-hidden="true"/>Ends {formatDateTime(selected.endAt, data.timezone)}</p></div>
+          {(selected.ministry || selected.purpose) && <p className="request-description">{[selected.ministry, selected.purpose].filter(Boolean).join(" · ")}</p>}
+          <p className="request-muted">{closed ? "Changes and cancellations are only available up to 2 hours before the booking starts." : `Changes and cancellations close ${formatDateTime(selected.deadline, data.timezone)}.`}</p>
+          {pending && <p className="request-notice">An edit request is awaiting approval. You can still cancel the booking.</p>}
+          {processing && <p className="request-notice" role="status">An operation is being processed. Check its status below.</p>}
+          <div className="request-actions"><button className="button" disabled={closed || processing || pending} onClick={() => begin("edit")}>Request changes</button><button className="button button-secondary request-danger-text" disabled={closed || processing} onClick={() => begin("cancel")}>Cancel booking</button></div>
+        </section> : <section className="panel requester-form"><CheckCircle2 aria-hidden="true"/><h2>Booking cancelled</h2><p>Your cancellation receipt is below.</p></section>}
+      </> : step === "edit" ? <form className="panel requester-form" onSubmit={review}>
+        {scopeControl}
+        <label>Event title<input required maxLength={300} value={draft.eventName} onChange={e => setDraft({ ...draft, eventName: e.target.value })}/></label>
+        <label>Room<select value={draft.room} onChange={e => setDraft({ ...draft, room: e.target.value })}>{data.rooms.map(room => <option key={room}>{room}</option>)}</select></label>
+        <div className="request-field-grid"><label>Starts<input type="datetime-local" required value={draft.start} onChange={e => setDraft({ ...draft, start: e.target.value })}/></label><label>Ends<input type="datetime-local" required value={draft.end} onChange={e => setDraft({ ...draft, end: e.target.value })}/></label></div>
+        <label>Ministry<input maxLength={160} value={draft.ministry} onChange={e => setDraft({ ...draft, ministry: e.target.value })}/></label>
+        <label>Purpose<textarea rows={3} maxLength={2000} value={draft.purpose} onChange={e => setDraft({ ...draft, purpose: e.target.value })}/></label>
+        {selected?.fields.map(field => <label key={field.qid}>{field.label}<input type={field.type === "control_number" ? "number" : field.type === "control_email" ? "email" : field.type === "control_phone" ? "tel" : "text"} step={field.type === "control_number" ? "any" : undefined} maxLength={4000} value={responses.find(row => row.qid === field.qid)?.value ?? ""} onChange={e => setResponses(responses.map(row => row.qid === field.qid ? { ...row, value: e.target.value } : row))}/></label>)}
+        <label>Note to the approver (optional)<textarea rows={2} maxLength={4000} value={message} onChange={e => setMessage(e.target.value)}/></label>
+        {scope === "following" && <p className="request-muted">Later meetings shift by the same amount as this meeting. The selected duration, room, title, ministry and purpose apply to each affected meeting.</p>}
+        <div className="request-actions"><button type="button" className="button button-secondary" onClick={() => go("summary")}><ArrowLeft size={16}/>Back</button><button className="button" disabled={stale || closed}>Review changes</button></div>
+      </form> : step === "review" ? <section className="panel requester-form" aria-label="Review changes">
+        {selected && proposed ? <BookingChangeComparison before={selected} after={proposed} timezone={data.timezone}/> : <p role="alert">The proposed start is now within two hours. Go back and choose a later time.</p>}
+        <p>{affected.length} meeting{affected.length === 1 ? "" : "s"} affected. Your original booking stays active while these changes await approval.</p>
+        <div className="request-actions"><button className="button button-secondary" disabled={busy} onClick={() => go("edit")}>Back</button><button className="button" disabled={busy || stale || closed || !proposed} onClick={() => void send("change")}>{busy ? "Submitting…" : "Submit changes"}</button></div>
+      </section> : <section className="panel requester-form request-cancel" aria-label="Confirm cancellation">
+        {selected && <div><h2>{selected.title}</h2><p>{selected.room}</p><p>{formatDateTime(selected.startAt, data.timezone)} – {formatDateTime(selected.endAt, data.timezone)}</p></div>}
+        {scopeControl}<p>This will cancel {affected.length === 1 ? "this meeting" : `these ${affected.length} meetings`} and release the room. No administrator approval is needed.</p>
+        <label>Reason (optional)<textarea rows={3} maxLength={4000} value={message} disabled={busy} onChange={e => setMessage(e.target.value)}/></label>
+        <div className="request-actions"><button className="button button-secondary" disabled={busy} onClick={() => go("summary")}>Keep booking</button><button className="button request-danger" disabled={busy || stale || closed} onClick={() => void send("cancel")}>{busy ? "Cancelling…" : "Confirm cancellation"}</button></div>
+      </section>}
+      {data.requests.length > 0 && <section className="request-history" aria-label="Request history"><h2>Activity</h2>{data.requests.map((row, i) => <article className="panel requester-form" key={row.createdAt + ":" + i}>
+        <div className="request-history-heading"><strong>{requestStatusLabel(row.status, row.kind)}</strong><time dateTime={new Date(row.createdAt).toISOString()}>{formatDateTime(row.createdAt, data.timezone)}</time></div>
+        {row.message && <p>{row.message}</p>}{row.response && <p role={row.status === "failed" ? "alert" : "status"}>{row.response}</p>}
+        {row.status === "completed" && row.kind === "cancel" && <details><summary>Cancelled meetings</summary><ul>{(JSON.parse(row.before) as Array<{title:string;room:string;startAt:number;endAt:number}>).map((meeting, j) => <li key={j}>{meeting.title} · {meeting.room}<br/>{formatDateTime(meeting.startAt, data.timezone)} – {formatDateTime(meeting.endAt, data.timezone)}</li>)}</ul></details>}
       </article>)}</section>}
     </>}
   </main>;

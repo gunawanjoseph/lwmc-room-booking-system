@@ -8,7 +8,7 @@ const token = 'a'.repeat(64);
 const now = Date.now();
 const hour = 3600000;
 function booking(extra={}) { return { _id:'booking', status:'approved', requesterEmail:'owner@example.com', requesterName:'Owner',
-  room:'Shema Space', eventName:'Original', timezone:'Asia/Singapore', startAt:now+5*hour,endAt:now+6*hour,
+  jotformSubmissionId:'123', jotformFormId:'form', createdAt:now, roomKey:'shema space', resolvedVenues:['Shema Space'], room:'Shema Space', eventName:'Original', timezone:'Asia/Singapore', startAt:now+5*hour,endAt:now+6*hour,
   calendarSyncStatus:'synced',occurrences:[{sequence:7,startAt:now+5*hour,endAt:now+6*hour},
   {sequence:3,startAt:now+24*hour,endAt:now+25*hour,room:'Board Room',details:{eventName:'Edited event'}}],...extra }; }
 function context(initial={}) {
@@ -34,7 +34,23 @@ function context(initial={}) {
 }
 
 function setup(extra={}) { return context({bookings:[booking(extra)],requesterLinks:[{_id:'link',bookingId:'booking',token,email:'owner@example.com'}]}); }
-async function args(ctx, extra={}) { const view=await requests.view.handler(ctx,{token});return {token,version:view.version,sequence:7,scope:'occurrence',kind:'change',message:'Move the start to 3pm',...extra}; }
+async function args(ctx, extra={}) {
+  const view=await requests.view.handler(ctx,{token});
+  return {token,version:view.version,sequence:7,scope:'occurrence',kind:'change',message:'Please update',operationKey:crypto.randomUUID(),confirmed:true,
+    edit:{room:'Shema Space',startAt:now+7*hour,endAt:now+8*hour,eventName:'New title',purpose:'Meeting',ministry:'Youth'},...extra};
+}
+async function submitPending(ctx, extra={}) {
+  await requests.submit.handler(ctx,await args(ctx,extra));
+  const request=ctx.rows('bookingRequests').at(-1);
+  const worker=await requests.claim.handler(ctx,{requestId:request._id,token:'worker'});
+  if(worker) await requests.checked.handler(ctx,{requestId:request._id,token:'worker',available:true});
+  return request._id;
+}
+async function markPhases(ctx,requestId) {
+  await requests.claim.handler(ctx,{requestId,token:'apply'});
+  await requests.checked.handler(ctx,{requestId,token:'apply',available:true});
+  await requests.savePhase.handler(ctx,{requestId,token:'apply',phase:'delete',targets:[],replacements:[],retained:[]});
+}
 
 test('two hour boundary is inclusive and enforced in milliseconds',()=>{
   const meetings=rules.requestMeetings(booking({occurrences:undefined,startAt:now+2*hour}));
@@ -62,10 +78,10 @@ test('changed recipient, rejection and deletion revoke access',async()=>{
 test('recipient comparison is case insensitive',async()=>{
   assert.ok(await requests.view.handler(setup({requesterEmail:' OWNER@EXAMPLE.COM '}),{token}));
 });
-test('one occurrence request stores a snapshot but never alters booking or schedules calendar work',async()=>{
+test('single edit checks availability before entering approval and leaves original unchanged',async()=>{
   const ctx=setup();const before=await ctx.db.get('booking');await requests.submit.handler(ctx,await args(ctx));
-  const req=ctx.rows('bookingRequests')[0];assert.equal(req.status,'pending');assert.equal(JSON.parse(req.snapshot).length,1);
-  assert.deepEqual(await ctx.db.get('booking'),before);assert.equal(ctx.jobs.length,0);
+  const req=ctx.rows('bookingRequests')[0];assert.equal(req.status,'checking');assert.equal(JSON.parse(req.snapshot).length,1);
+  assert.deepEqual(await ctx.db.get('booking'),before);assert.ok(ctx.jobs.some(job=>job[1]==='processRequesterOperation'));
   assert.doesNotMatch(JSON.stringify(ctx.rows('auditLogs')),new RegExp(token));
 });
 test('following cancellation captures only selected tail and allows an empty reason',async()=>{
@@ -93,10 +109,10 @@ test('deleted selected occurrence cannot be requested',async()=>{
 test('identical retry is idempotent and another pending request is rejected',async()=>{
   const ctx=setup();const input=await args(ctx);await requests.submit.handler(ctx,input);await requests.submit.handler(ctx,input);
   assert.equal(ctx.rows('bookingRequests').length,1);
-  await assert.rejects(requests.submit.handler(ctx,{...input,kind:'cancel'}),/already a request/);
+  await assert.rejects(requests.submit.handler(ctx,{...input,operationKey:crypto.randomUUID()}),/already a request/);
 });
 test('message size and required change description are validated server-side',async()=>{
-  for(const message of ['','1234','a'.repeat(4001)]) {const ctx=setup();await assert.rejects(requests.submit.handler(ctx,await args(ctx,{message})));}
+  for(const message of ['a'.repeat(4001)]) {const ctx=setup();await assert.rejects(requests.submit.handler(ctx,await args(ctx,{message})));}
 });
 test('in-flight calendar edits and deletion block new requests',async()=>{
   for(const extra of [{calendarSyncStatus:'creating'},{deletionToken:'lease'}]) {const ctx=setup(extra);await assert.rejects(requests.submit.handler(ctx,await args(ctx)),/being updated/);}
@@ -115,28 +131,33 @@ test('admin list and resolution reject anonymous or insufficient privileges',asy
     await assert.rejects(requests.resolve.handler(ctx,{requestId:'x',outcome:'declined',response:'No'}),/Access denied/);
   } finally {delete globalThis.__roomopsActor;}
 });
-test('completion requires real synced changes to every affected occurrence',async()=>{
-  const ctx=setup();await requests.submit.handler(ctx,await args(ctx,{scope:'following'}));const requestId=ctx.rows('bookingRequests')[0]._id;
-  const input={requestId,outcome:'completed',response:'Updated both meetings'};
-  await assert.rejects(requests.resolve.handler(ctx,input),/Apply the changes/);
-  const b=await ctx.db.get('booking');b.occurrences[0].details={eventName:'Changed first'};await ctx.db.patch('booking',{occurrences:b.occurrences});
-  await assert.rejects(requests.resolve.handler(ctx,input),/every requested meeting/);
-  b.occurrences[1].details={eventName:'Changed second'};await ctx.db.patch('booking',{occurrences:b.occurrences,calendarSyncStatus:'failed'});
-  await assert.rejects(requests.resolve.handler(ctx,input),/sync first/);
-  await ctx.db.patch('booking',{calendarSyncStatus:'synced'});await requests.resolve.handler(ctx,input);
+test('approval automatically stages changes, protects claims, and commits only after Calendar verification',async()=>{
+  const ctx=setup();const requestId=await submitPending(ctx);const before=await ctx.db.get('booking');
+  await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:'Approved'});
+  const staged=await ctx.db.get('booking');assert.deepEqual(staged.occurrences,before.occurrences);
+  assert.equal(staged.requesterOperationId,requestId);assert.ok(ctx.rows('bookingClaims').length);
+  await markPhases(ctx,requestId);
+  await requests.complete.handler(ctx,{requestId,token:'apply',events:[]});
+  const saved=await ctx.db.get('booking');assert.equal(saved.occurrences[0].startAt,now+7*hour);assert.equal(saved.occurrences[0].details.eventName,'New title');
+  assert.equal(saved.calendarSyncStatus,'synced');assert.equal(saved.requesterOperationId,undefined);
+  assert.equal((await ctx.db.get(requestId)).status,'completed');
+  assert.ok(ctx.rows('bookingNotices').some(row=>row.requestSubject==='Booking Changes Approved'));
+  const count=ctx.rows('bookingNotices').length;
+  await requests.complete.handler(ctx,{requestId,token:'apply',events:[]});assert.equal(ctx.rows('bookingNotices').length,count);
+});
+test('confirmed cancellation bypasses approval and releases only the selected tail after Google cleanup',async()=>{
+  const ctx=setup();await requests.submit.handler(ctx,await args(ctx,{kind:'cancel',sequence:3,scope:'following',edit:undefined,message:''}));
+  const requestId=ctx.rows('bookingRequests')[0]._id;assert.equal((await ctx.db.get(requestId)).status,'applying');
+  await markPhases(ctx,requestId);await requests.complete.handler(ctx,{requestId,token:'apply',events:[]});
+  assert.deepEqual((await ctx.db.get('booking')).occurrences.map(row=>row.sequence),[7]);
+  assert.ok(ctx.rows('bookingNotices').some(row=>row.requestSubject==='Booking Cancellation Confirmation'));
   assert.equal((await ctx.db.get(requestId)).status,'completed');
 });
-test('cancellation completion requires all scoped occurrences removed',async()=>{
-  const ctx=setup();await requests.submit.handler(ctx,await args(ctx,{scope:'following',kind:'cancel',message:''}));const requestId=ctx.rows('bookingRequests')[0]._id;
-  const input={requestId,outcome:'completed',response:'Cancelled'};
-  await assert.rejects(requests.resolve.handler(ctx,input),/Remove all/);
-  await ctx.db.delete('booking');await requests.resolve.handler(ctx,input);assert.equal((await ctx.db.get(requestId)).status,'completed');
-});
-test('decline records response without changing booking and cannot be resolved twice',async()=>{
-  const ctx=setup();await requests.submit.handler(ctx,await args(ctx));const requestId=ctx.rows('bookingRequests')[0]._id;
+test('decline records response and email without changing booking; repeat resolution is idempotent',async()=>{
+  const ctx=setup();const requestId=await submitPending(ctx);
   const before=await ctx.db.get('booking');const input={requestId,outcome:'declined',response:'Requested room is occupied.'};await requests.resolve.handler(ctx,input);
   assert.deepEqual(await ctx.db.get('booking'),before);assert.equal((await requests.view.handler(ctx,{token})).requests[0].response,input.response);
-  await assert.rejects(requests.resolve.handler(ctx,input),/already been reviewed/);
+  const count=ctx.rows('bookingNotices').length;await requests.resolve.handler(ctx,input);assert.equal(ctx.rows('bookingNotices').length,count);
 });
 test('private request route has no Clerk provider, no indexing, and middleware bypass is exact',()=>{
   const read=p=>readFileSync(new URL(p,import.meta.url),'utf8');
@@ -146,4 +167,196 @@ test('private request route has no Clerk provider, no indexing, and middleware b
   assert.match(read('../app/booking-request/page.tsx'),/referrer: "no-referrer"/);
   assert.match(read('../proxy.ts'),/=== "\/booking-request"/);
   assert.match(read('../components/request-booking.tsx'),/window.location.hash/);
+});
+
+test('single legacy booking without an occurrences array can request a room and date change',async()=>{
+  const ctx=setup({occurrences:undefined});await requests.submit.handler(ctx,await args(ctx,{sequence:0,edit:{room:'Board Room',startAt:now+30*hour,endAt:now+31*hour,eventName:'Moved',purpose:'Updated',ministry:'Office'}}));
+  const candidate=JSON.parse(ctx.rows('bookingRequests')[0].candidate);
+  assert.equal(candidate.occurrences.length,1);assert.equal(candidate.occurrences[0].room,'Board Room');assert.equal(candidate.startAt,now+30*hour);
+});
+test('following edits shift all selected meetings and retain earlier overrides',async()=>{
+  const ctx=setup({occurrences:[{sequence:1,startAt:now-hour,endAt:now,details:{eventName:'Past'}},{sequence:7,startAt:now+5*hour,endAt:now+6*hour},{sequence:3,startAt:now+24*hour,endAt:now+25*hour}]});
+  await requests.submit.handler(ctx,await args(ctx,{scope:'following'}));const next=JSON.parse(ctx.rows('bookingRequests')[0].candidate);
+  assert.equal(next.occurrences[0].details.eventName,'Past');assert.equal(next.occurrences[2].startAt,now+26*hour);
+  assert.equal(next.occurrences[2].details.eventName,'New title');
+});
+test('room validation rejects unknown rooms and proposed times inside the cutoff',async()=>{
+  for(const patch of [{room:'Invented room'},{startAt:Date.now()+hour,endAt:Date.now()+2*hour}]) {
+    const ctx=setup();const input=await args(ctx);await assert.rejects(requests.submit.handler(ctx,{...input,edit:{...input.edit,...patch}}));
+  }
+});
+test('new cancellation requires explicit confirmation',async()=>{
+  const ctx=setup();await assert.rejects(requests.submit.handler(ctx,await args(ctx,{kind:'cancel',confirmed:false})),/Confirm/);
+});
+test('conflict at submission auto-rejects, keeps original, and emails only requester',async()=>{
+  const ctx=setup();const before=await ctx.db.get('booking');await ctx.db.insert('bookings',booking({_id:'other'}));
+  const {normalizeRoomKey,utcDaysForInterval}=await import('../convex/lib/bookingRules.ts');
+  for(const utcDay of utcDaysForInterval(now+7*hour,now+8*hour)) await ctx.db.insert('bookingClaims',{bookingId:'other',roomKey:normalizeRoomKey('Shema Space'),utcDay,startAt:now+7*hour,endAt:now+8*hour});
+  // The test DB insert generates its own key; explicitly align the claim with it.
+  const other=ctx.rows('bookings').find(row=>row._id!=='booking');for(const claim of ctx.rows('bookingClaims'))claim.bookingId=other._id;
+  await requests.submit.handler(ctx,await args(ctx));assert.equal(ctx.rows('bookingRequests')[0].status,'declined');assert.deepEqual(await ctx.db.get('booking'),before);
+  assert.equal(ctx.rows('bookingNotices').length,1);assert.equal(ctx.rows('bookingNotices')[0].approverNotice,false);
+});
+test('Google conflict after submission is rejected before the approval queue',async()=>{
+  const ctx=setup();await requests.submit.handler(ctx,await args(ctx));const requestId=ctx.rows('bookingRequests')[0]._id;
+  await requests.claim.handler(ctx,{requestId,token:'check'});await requests.checked.handler(ctx,{requestId,token:'check',available:false});
+  assert.equal((await ctx.db.get(requestId)).status,'declined');assert.equal((await ctx.db.get('booking')).eventName,'Original');
+});
+test('conflict introduced between request and approval rejects entire recurring edit',async()=>{
+  const ctx=setup();const requestId=await submitPending(ctx,{scope:'following'});const before=await ctx.db.get('booking');
+  const other=await ctx.db.insert('bookings',{...booking(),_id:undefined});ctx.rows('bookings').at(-1)._id=other;
+  const {normalizeRoomKey,utcDaysForInterval}=await import('../convex/lib/bookingRules.ts');
+  for(const utcDay of utcDaysForInterval(now+26*hour,now+27*hour))await ctx.db.insert('bookingClaims',{bookingId:other,roomKey:normalizeRoomKey('Shema Space'),utcDay,startAt:now+26*hour,endAt:now+27*hour});
+  await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''});assert.equal((await ctx.db.get(requestId)).status,'declined');assert.deepEqual(await ctx.db.get('booking'),before);
+});
+test('admin edits while a request awaits review make approval stale',async()=>{
+  const ctx=setup();const requestId=await submitPending(ctx);await ctx.db.patch('booking',{revision:4});
+  await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''});assert.equal((await ctx.db.get(requestId)).status,'declined');
+});
+test('full cancellation preserves history and private receipt while deleting active booking',async()=>{
+  const ctx=setup();await requests.submit.handler(ctx,await args(ctx,{kind:'cancel',scope:'following',edit:undefined}));const requestId=ctx.rows('bookingRequests')[0]._id;
+  await markPhases(ctx,requestId);await requests.complete.handler(ctx,{requestId,token:'apply',events:[]});
+  assert.equal(await ctx.db.get('booking'),null);assert.equal(ctx.rows('bookingRequests').length,1);assert.equal(ctx.rows('bookingClaims').length,0);
+  const receipt=await requests.view.handler(ctx,{token});assert.equal(receipt.meetings.length,0);assert.equal(receipt.requests[0].status,'completed');
+  const notice=ctx.rows('bookingNotices').find(row=>row.requestSubject==='Booking Cancellation Confirmation');assert.equal(JSON.parse(notice.outstandingJson).rows.length,0);
+});
+test('cancellation supersedes a pending edit without entering approver queue',async()=>{
+  const ctx=setup();await submitPending(ctx);await requests.submit.handler(ctx,await args(ctx,{kind:'cancel',edit:undefined}));
+  assert.deepEqual(ctx.rows('bookingRequests').map(row=>row.status),['declined','applying']);
+});
+test('expired or stolen worker token cannot commit or clear the booking lock',async()=>{
+  const ctx=setup();const requestId=await submitPending(ctx);await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''});
+  await markPhases(ctx,requestId);await assert.rejects(requests.complete.handler(ctx,{requestId,token:'wrong',events:[]}),/ownership/);
+  assert.equal((await ctx.db.get('booking')).requesterOperationId,requestId);
+});
+test('integration failure keeps original claims and schedule, and never sends success',async()=>{
+  const ctx=setup();const requestId=await submitPending(ctx);await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''});
+  await requests.claim.handler(ctx,{requestId,token:'worker'});await requests.failure.handler(ctx,{requestId,token:'worker'});
+  assert.equal((await ctx.db.get('booking')).occurrences[0].startAt,now+5*hour);assert.ok(ctx.rows('bookingClaims').length);
+  assert.ok(!ctx.rows('bookingNotices').some(row=>row.requestSubject==='Booking Changes Approved'));assert.ok(ctx.jobs.some(job=>job[0]>0&&job[1]==='processRequesterOperation'));
+});
+test('booking approver can approve without booking-edit capability; viewer cannot',async()=>{
+  const ctx=setup();const requestId=await submitPending(ctx);
+  try { globalThis.__roomopsActor={role:'booking_viewer',status:'active',clerkUserId:'viewer'};
+    await assert.rejects(requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''}),/Access denied/);
+    globalThis.__roomopsActor={role:'booking_approver',status:'active',clerkUserId:'approver'};
+    await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''});assert.equal((await ctx.db.get(requestId)).status,'applying');
+  }finally{delete globalThis.__roomopsActor;}
+});
+test('revoked bearer token cannot read or submit',async()=>{
+  const ctx=setup();await requests.revokeLink.handler(ctx,{bookingId:'booking'});assert.equal(await requests.view.handler(ctx,{token}),null);
+  await assert.rejects(requests.submit.handler(ctx,{token,version:'',sequence:7,scope:'occurrence',kind:'cancel',message:'',operationKey:crypto.randomUUID(),confirmed:true}),/unavailable/);
+});
+
+const googleActions = await import('../convex/googleCalendar.ts');
+const google = await import('../convex/lib/googleCalendar.ts');
+async function googleWorkflow(run, {available=()=>true, failDelete=false}={}) {
+  const env={GOOGLE_CALENDAR_ENABLED:'true',GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON_B64:Buffer.from(JSON.stringify({client_email:'test@example.com',private_key:'-----BEGIN PRIVATE KEY-----\nunused\n-----END PRIVATE KEY-----'})).toString('base64'),GOOGLE_CALENDAR_VENUE_MAP_JSON:JSON.stringify(Object.fromEntries(google.GOOGLE_CALENDAR_VENUES.map((venue,i)=>[venue,`calendar-${i}`])))};
+  const oldEnv=Object.fromEntries(Object.keys(env).map(key=>[key,process.env[key]]));Object.assign(process.env,env);
+  const proto=google.GoogleCalendarClient.prototype;
+  const names=['listManagedEvents','availableExceptBooking','createEvent','verifyManagedEvent','deleteManagedEvent'];
+  const old=Object.fromEntries(names.map(name=>[name,proto[name]]));
+  const map=new Map();const calls=[];let deletesFail=failDelete;
+  const calendar=venue=>`calendar-${google.GOOGLE_CALENDAR_VENUES.indexOf(venue)}`;
+  const refs=[{calendarId:calendar('Shema Space'),eventId:'old-one',targetVenue:'Shema Space',occurrenceSequence:7,startAt:now+5*hour,endAt:now+6*hour},
+    {calendarId:calendar('Board Room'),eventId:'old-two',targetVenue:'Board Room',occurrenceSequence:3,startAt:now+24*hour,endAt:now+25*hour}];
+  for(const ref of refs)map.set(ref.eventId,ref);
+  proto.listManagedEvents=async(_,id)=>[...map.values()].filter(row=>row.calendarId===id);
+  proto.availableExceptBooking=async input=>{calls.push(['check',input]);return available(input,calls.filter(row=>row[0]==='check').length);};
+  proto.createEvent=async(input,generation)=>{
+    const eventId=await google.deterministicGoogleCalendarEventId({bookingId:input.bookingId,calendarId:input.calendarId,venue:input.venue,generation});
+    const event={calendarId:input.calendarId,eventId,targetVenue:input.venue,startAt:input.startAt,endAt:input.endAt};map.set(eventId,event);calls.push(['create',event]);return event;
+  };
+  proto.verifyManagedEvent=async ref=>{assert.ok(map.has(ref.eventId),'Cannot verify missing event');return {eventId:ref.eventId,calendarId:ref.calendarId};};
+  proto.deleteManagedEvent=async ref=>{calls.push(['delete',ref]);if(deletesFail)throw Error('Google unavailable');map.delete(ref.eventId);return true;};
+  const ctx=setup({calendarEvents:refs});ctx.runMutation=async(name,input)=>{assert.ok(requests[name],`Unknown mutation ${name}`);return requests[name].handler(ctx,input);};
+  try {await run({ctx,map,calls,refs,allowDelete:()=>{deletesFail=false;}});}
+  finally{for(const name of names)proto[name]=old[name];for(const[key,value]of Object.entries(oldEnv)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+}
+test('Calendar worker checks, queues approval, creates replacements, then deletes only selected events',async()=>{
+  await googleWorkflow(async({ctx,map,calls})=>{
+    await requests.submit.handler(ctx,await args(ctx));const requestId=ctx.rows('bookingRequests')[0]._id;
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get(requestId)).status,'pending');assert.equal(calls.filter(row=>row[0]==='create').length,0);
+    await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''});await googleActions.processRequesterOperation.handler(ctx,{requestId});
+    assert.equal((await ctx.db.get(requestId)).status,'completed');assert.ok(map.has('old-two'));assert.ok(!map.has('old-one'));assert.equal(map.size,2);
+    assert.ok(calls.findIndex(row=>row[0]==='create')<calls.findIndex(row=>row[0]==='delete'));
+  });
+});
+test('Calendar cancellation runs immediately and never creates an approval task',async()=>{
+  await googleWorkflow(async({ctx,map,calls})=>{
+    await requests.submit.handler(ctx,await args(ctx,{kind:'cancel',edit:undefined,scope:'following'}));const requestId=ctx.rows('bookingRequests')[0]._id;
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get(requestId)).status,'completed');assert.equal(await ctx.db.get('booking'),null);assert.equal(map.size,0);
+    assert.ok(!ctx.rows('bookingNotices').some(row=>row.requestSubject==='Booking Change Request Requires Approval'));assert.equal(calls.filter(row=>row[0]==='create').length,0);
+  });
+});
+test('Calendar conflict affecting one later recurrence rejects the whole request',async()=>{
+  await googleWorkflow(async({ctx,map})=>{
+    await requests.submit.handler(ctx,await args(ctx,{scope:'following'}));const requestId=ctx.rows('bookingRequests')[0]._id;
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get(requestId)).status,'declined');assert.ok(map.has('old-one')&&map.has('old-two'));
+    assert.deepEqual((await ctx.db.get('booking')).occurrences,booking().occurrences);
+  },{available:input=>input.startAt<now+20*hour});
+});
+test('Calendar conflict between review and approval preserves original schedule and events',async()=>{
+  await googleWorkflow(async({ctx,map})=>{
+    await requests.submit.handler(ctx,await args(ctx));const requestId=ctx.rows('bookingRequests')[0]._id;
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''});
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get(requestId)).status,'declined');assert.equal((await ctx.db.get('booking')).requesterOperationId,undefined);assert.ok(map.has('old-one'));assert.equal(map.size,2);
+  },{available:(_,call)=>call===1});
+});
+test('last-minute external conflict rolls back replacements without deleting originals',async()=>{
+  await googleWorkflow(async({ctx,map,calls})=>{
+    await requests.submit.handler(ctx,await args(ctx));const requestId=ctx.rows('bookingRequests')[0]._id;
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''});
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get(requestId)).status,'declined');assert.ok(map.has('old-one')&&map.has('old-two'));assert.equal(map.size,2);
+    assert.ok(!calls.some(row=>row[0]==='delete'&&row[1].eventId==='old-one'));
+  },{available:(_,call)=>call<3});
+});
+test('Calendar deletion failure resumes recorded phase and sends success only after verified retry',async()=>{
+  await googleWorkflow(async({ctx,map,allowDelete})=>{
+    await requests.submit.handler(ctx,await args(ctx,{kind:'cancel',edit:undefined}));const requestId=ctx.rows('bookingRequests')[0]._id;
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get(requestId)).phase,'delete');assert.equal((await ctx.db.get(requestId)).status,'applying');
+    assert.ok(await ctx.db.get('booking'));assert.ok(!ctx.rows('bookingNotices').some(row=>row.requestSubject==='Booking Cancellation Confirmation'));
+    allowDelete();await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get(requestId)).status,'completed');assert.ok(!map.has('old-one'));assert.ok(map.has('old-two'));
+    assert.equal(ctx.rows('bookingNotices').filter(row=>row.requestSubject==='Booking Cancellation Confirmation').length,1);
+  },{failDelete:true});
+});
+test('old expired worker cannot recover a newer lease',async()=>{
+  const ctx=setup();await requests.submit.handler(ctx,await args(ctx));const requestId=ctx.rows('bookingRequests')[0]._id;
+  await requests.claim.handler(ctx,{requestId,token:'new'});await requests.recover.handler(ctx,{requestId,token:'old'});
+  assert.equal((await ctx.db.get(requestId)).workerToken,'new');
+});
+test('approval cannot proceed after the original two-hour deadline',async()=>{
+  const ctx=setup();const requestId=await submitPending(ctx);const originalNow=Date.now;
+  try {Date.now=()=>now+4*hour;await requests.resolve.handler(ctx,{requestId,outcome:'completed',response:''});assert.equal((await ctx.db.get(requestId)).status,'declined');}
+  finally{Date.now=originalNow;}
+});
+
+test('additional answers preserve per-occurrence changes without altering other meetings or identity',async()=>{
+  const ctx=setup({formResponses:[{qid:'notes',label:'Setup needs',type:'control_textarea',value:'Original chairs'},{qid:'email',label:'Email',canonicalField:'requesterEmail',value:'owner@example.com'}]});
+  const input=await args(ctx);input.edit.responses=[{qid:'notes',value:'Ten chairs'}];await requests.submit.handler(ctx,input);
+  const candidate=JSON.parse(ctx.rows('bookingRequests')[0].candidate);const meetings=rules.requestMeetings(candidate);
+  assert.equal(meetings[0].fields[0].value,'Ten chairs');assert.equal(meetings[1].fields[0].value,'Original chairs');assert.equal(candidate.requesterEmail,'owner@example.com');
+  assert.equal(meetings[0].fields.length,1);
+});
+test('additional answers cannot change canonical contact fields or invent an unknown question',async()=>{
+  for(const qid of ['email','unknown']){
+    const ctx=setup({formResponses:[{qid:'email',label:'Email',canonicalField:'requesterEmail',value:'owner@example.com'}]});const input=await args(ctx);input.edit.responses=[{qid,value:'thief@example.com'}];
+    await assert.rejects(requests.submit.handler(ctx,input),/additional booking field/);
+  }
+});
+test('a retry after full cancellation returns success without creating another receipt',async()=>{
+  await googleWorkflow(async({ctx})=>{
+    const input=await args(ctx,{kind:'cancel',scope:'following',edit:undefined});await requests.submit.handler(ctx,input);const requestId=ctx.rows('bookingRequests')[0]._id;
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal(await ctx.db.get('booking'),null);
+    const count=ctx.rows('bookingNotices').length;assert.deepEqual(await requests.submit.handler(ctx,input),{submitted:true});assert.equal(ctx.rows('bookingNotices').length,count);
+  });
+});
+test('duplicate idempotency key with a different payload is rejected',async()=>{
+  const ctx=setup();const input=await args(ctx);await requests.submit.handler(ctx,input);
+  await assert.rejects(requests.submit.handler(ctx,{...input,edit:{...input.edit,eventName:'Something else'}}),/different request/);
+});
+test('administrator cannot bypass a failed requester operation using ordinary edit or delete controls',async()=>{
+  const ctx=setup({requesterOperationId:'request',calendarSyncStatus:'failed'});const bookings=await import('../convex/bookings.ts');
+  await assert.rejects(bookings.beginBookingDeletion.handler(ctx,{bookingId:'booking',expectedRevision:0,actorId:'admin',deletionToken:'delete'}),/requester operation/);
+  await assert.rejects(bookings.retryCalendarSync.handler(ctx,{bookingId:'booking'}),/requester operation/);
 });

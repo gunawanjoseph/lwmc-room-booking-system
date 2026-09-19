@@ -3100,10 +3100,59 @@ textarea:focus-visible {
 .google-schedule-status { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; color:var(--muted); font-size:.8rem; }
 .google-schedule-status button { min-height:44px; }
 
-.requester-page { max-width: 780px; margin: 0 auto; }
-.requester-form { display: grid; gap: 16px; margin: 20px 0; overflow-wrap: anywhere; }
+/* Requester management and the approver review share the same card language. */
+.requester-page { max-width: 860px; margin: 0 auto; padding-block: 32px 64px; }
+.request-brand { margin-bottom: 32px; }
+.request-page-header { margin-bottom: 24px; }
+.request-page-header h1 { margin-bottom: 10px; outline: none; }
+.request-page-header p, .request-muted { color: var(--muted); font-size: .9rem; line-height: 1.6; }
+.requester-form { display: grid; gap: 22px; padding: 28px; margin: 20px 0; overflow-wrap: anywhere; min-width: 0; }
 .requester-form h2, .requester-form p { margin: 0; }
-.requester-form label { display: grid; gap: 8px; min-width: 0; }
-.requester-form select, .requester-form textarea { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 12px; border: 1px solid #bac9c2; border-radius: 8px; }
-.requester-form button { min-height: 44px; }
-@media(max-width:640px) { .requester-page { padding: 20px 12px; } .requester-form { padding: 16px; } }
+.requester-form h2.request-title { margin-top: 12px; font-size: 1.5rem; line-height: 1.35; }
+.requester-form label { display: grid; gap: 8px; min-width: 0; font-weight: 600; font-size: .9rem; }
+.requester-form input:not([type=radio]), .requester-form select, .requester-form textarea { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 12px; border: 1px solid #bac9c2; border-radius: 10px; background: #fff; color: inherit; }
+.requester-form textarea { resize: vertical; }
+.requester-form button, .requester-form select { min-height: 46px; }
+.request-summary { display: grid; gap: 12px; }
+.request-summary p { display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; }
+.request-summary svg { flex-shrink: 0; margin-top: 2px; color: var(--muted); }
+.request-description { white-space: pre-wrap; line-height: 1.6; }
+.request-actions { display: flex; flex-wrap: wrap; gap: 12px; border-top: 1px solid #e2e8e5; padding-top: 20px; }
+.request-actions .button { justify-content: center; }
+.request-danger-text { color: #a52d28; }
+.request-danger { background: #a52d28; color: #fff; border-color: #a52d28; }
+.request-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.request-scope { border: 1px solid #dce5e0; border-radius: 12px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.request-scope legend { padding: 0 6px; font-weight: 600; }
+.request-scope label { display: flex; gap: 10px; align-items: center; min-height: 44px; font-weight: 400; }
+.request-scope input { width: 20px; height: 20px; flex-shrink: 0; accent-color: #286357; }
+.requester-form details summary { padding-block: 10px; cursor: pointer; }
+.requester-form details ul { max-height: 260px; overflow-y: auto; padding-left: 22px; }
+.requester-form details li { margin-block: 12px; line-height: 1.5; }
+.request-status { display: inline-block; width: fit-content; padding: 6px 10px; background: #e5f0e9; color: #22594d; border-radius: 8px; font-size: .8rem; font-weight: 650; }
+.request-notice, .request-error { padding: 16px; border-radius: 10px; background: #edf4f0; line-height: 1.6; overflow-wrap: anywhere; }
+.request-error { color: #922c24; background: #fff0ed; }
+.request-history { margin-top: 36px; }
+.request-history > h2 { font-size: 1.15rem; }
+.request-history-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.request-history-heading time { font-size: .8rem; color: var(--muted); }
+.request-comparison { margin: 0; display: grid; gap: 4px; }
+.request-comparison > div { padding: 12px; border-radius: 8px; display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 14px; }
+.request-comparison .is-changed { background: #eef5f0; }
+.request-comparison dt { font-size: .85rem; font-weight: 600; }
+.request-comparison dd { margin: 0; display: grid; gap: 8px; white-space: pre-wrap; line-height: 1.5; }
+.request-before { color: #64736e; text-decoration: line-through; }
+.request-changed-label { display: block; margin-top: 6px; font-size: .7rem; color: #286357; }
+.edit-requests-page { max-width: 1000px; }
+@media(max-width:640px) {
+  .requester-page { padding: 24px 12px 40px; }
+  .request-brand { margin-bottom: 24px; }
+  .request-page-header h1 { font-size: 1.75rem; }
+  .requester-form { padding: 20px 16px; gap: 20px; border-radius: 16px; }
+  .request-field-grid { grid-template-columns: minmax(0, 1fr); }
+  .request-actions .button { width: 100%; }
+  .request-comparison > div { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; padding: 10px; }
+  .request-history-heading { align-items: flex-start; flex-direction: column; }
+}
+
+.request-comparison .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

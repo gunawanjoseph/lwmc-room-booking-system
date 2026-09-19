@@ -46,7 +46,7 @@ const navigation: Array<{
   capability?: Capability;
 }> = [
   { href: "/home", label: "Overview", icon: Home, capability: "bookings.view" },
-  { href: "/booking-requests", label: "Booking requests", icon: BookOpenCheck, capability: "bookings.edit" },
+  { href: "/booking-requests", label: "Edit Requests", icon: BookOpenCheck, capability: "bookings.approve" },
   { href: "/support", label: "Support", icon: MessagesSquare, capability: "support.view" },
   {
     href: "/bookings",

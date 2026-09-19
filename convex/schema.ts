@@ -42,6 +42,7 @@ export const recurrenceFrequencyValidator = v.union(
 );
 
 export const occurrenceDetailsValidator = v.object({
+  responses: v.optional(v.array(v.object({ qid: v.string(), value: v.string() }))),
   eventName: v.optional(v.string()),
   purpose: v.optional(v.string()),
   ministry: v.optional(v.string()),
@@ -106,19 +107,26 @@ export const jotformResponseValidator = v.object({
 
 export default defineSchema({
   requesterLinks: defineTable({
-    bookingId: v.id("bookings"), token: v.string(), email: v.string(), createdAt: v.number(),
+    bookingId: v.id("bookings"), token: v.string(), email: v.string(), createdAt: v.number(), revokedAt: v.optional(v.number()),
   }).index("by_token", ["token"]).index("by_booking", ["bookingId"]),
   bookingRequests: defineTable({
     bookingId: v.id("bookings"), requesterEmail: v.string(), requesterName: v.string(),
     kind: v.union(v.literal("change"), v.literal("cancel")),
     scope: v.union(v.literal("occurrence"), v.literal("following")),
     sequence: v.number(), snapshot: v.string(), message: v.string(), timezone: v.string(),
-    status: v.union(v.literal("pending"), v.literal("completed"), v.literal("declined")),
+    status: v.union(v.literal("pending"), v.literal("completed"), v.literal("declined"), v.literal("checking"), v.literal("applying"), v.literal("failed")),
+    proposal: v.optional(v.string()), version: v.optional(v.string()), operationKey: v.optional(v.string()),
+    original: v.optional(v.string()), candidate: v.optional(v.string()),
+    phase: v.optional(v.union(v.literal("validate"), v.literal("create"), v.literal("delete"), v.literal("rollback"))),
+    retained: v.optional(v.array(calendarEventRefValidator)), targets: v.optional(v.array(calendarEventRefValidator)), replacements: v.optional(v.array(calendarEventRefValidator)),
+    workerToken: v.optional(v.string()), leaseUntil: v.optional(v.number()), attempts: v.optional(v.number()),
+    outstandingJson: v.optional(v.string()),
     createdAt: v.number(), resolvedAt: v.optional(v.number()), resolvedBy: v.optional(v.string()),
     response: v.optional(v.string()),
   }).index("by_booking", ["bookingId"]).index("by_status", ["status"]),
   publicCalendarCache:defineTable({key:v.string(),json:v.optional(v.string()),fetchedAt:v.optional(v.number()),retryAt:v.number(),token:v.optional(v.string()),leaseUntil:v.optional(v.number()),error:v.optional(v.string())}).index("by_key",["key"]).index("by_retry",["retryAt"]),
   bookingNotices: defineTable({
+    requestSubject:v.optional(v.string()), requestText:v.optional(v.string()), approverNotice:v.optional(v.boolean()),
     bookingReference:v.string(),recipientEmail:v.string(),kind:v.union(v.literal("edited"),v.literal("deleted")),
     outstandingJson:v.optional(v.string()),
     scope:v.string(),detailChanges:v.string(),beforeJson:v.string(),afterJson:v.string(),calendarPending:v.boolean(),
@@ -186,6 +194,7 @@ export default defineSchema({
     .index("by_email", ["email"]),
 
   bookings: defineTable({
+    requesterOperationId: v.optional(v.id("bookingRequests")),
     source: v.literal("jotform"),
     jotformFormId: v.string(),
     jotformSubmissionId: v.string(),

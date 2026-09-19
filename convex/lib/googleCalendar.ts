@@ -432,6 +432,7 @@ export function buildGoogleCalendarEventText(input: {
       "",
       "<b>Event Name or Purpose of Booking:</b>",
       escapeHtml(eventNameOrPurpose),
+      ...(input.eventName?.trim() && input.purpose?.trim() && input.eventName.trim() !== input.purpose.trim() ? ["", "<b>Purpose:</b>", escapeHtml(cleanSingleLine(input.purpose, 2_000))] : []),
       "",
       "<b>Name:</b>",
       escapeHtml(requesterName),
@@ -1351,6 +1352,34 @@ export class GoogleCalendarClient {
       status:
         typeof event.status === "string" ? event.status : undefined,
     };
+  }
+
+  /** Free/busy cannot exclude the booking itself. Expand events and exclude
+   * only verified RoomOps ownership, retaining manual/private/recurring conflicts. */
+  async availableExceptBooking(input: { calendarId: string; bookingId: string; startAt: number; endAt: number; timeZone: string }): Promise<boolean> {
+    const owned = new Set((await this.listManagedEvents(input.bookingId, input.calendarId)).map(event => event.eventId));
+    let pageToken: string | undefined;
+    const seen = new Set<string>();
+    do {
+      const query = new URLSearchParams({ timeMin: new Date(input.startAt).toISOString(), timeMax: new Date(input.endAt).toISOString(),
+        timeZone: input.timeZone, singleEvents: "true", showDeleted: "false", maxResults: "2500",
+        fields: "accessRole,nextPageToken,items(id,recurringEventId,status,transparency,extendedProperties/private)" });
+      if (pageToken) query.set("pageToken", pageToken);
+      const response = await this.request(`/calendars/${encodeURIComponent(input.calendarId)}/events?${query}`, { method: "GET" });
+      if (!response.ok) throw Error("Google Calendar availability could not be checked.");
+      const result = await response.json() as { accessRole?: string; nextPageToken?: string; items?: Array<{ id?: string; recurringEventId?: string; status?: string; transparency?: string; extendedProperties?: { private?: Record<string, string> } }> };
+      if (!["writer", "owner"].includes(result.accessRole ?? "")) throw Error("Full Calendar read/write permission is required.");
+      for (const event of result.items ?? []) {
+        if (event.status === "cancelled" || event.transparency === "transparent") continue;
+        const properties = event.extendedProperties?.private;
+        const own = properties?.roomopsManaged === "true" && properties.roomopsBookingId === input.bookingId;
+        if (!own && !owned.has(event.recurringEventId ?? event.id ?? "")) return false;
+      }
+      pageToken = result.nextPageToken;
+      if (pageToken && (seen.has(pageToken) || seen.size >= 100)) throw Error("Calendar pagination exceeded safe limits.");
+      if (pageToken) seen.add(pageToken);
+    } while (pageToken);
+    return true;
   }
 
   /** Read the actual schedule, including externally-created and expanded recurring events. */

@@ -1327,7 +1327,7 @@ export const dispatchDelivery = internalMutation({
     }
     const now = Date.now();
     const booking = await ctx.db.get(delivery.bookingId);
-    if (!booking || bookingDeletionInProgress(booking, now)) {
+    if (!booking || booking.requesterOperationId || bookingDeletionInProgress(booking, now)) {
       await cancelDeliveryRecord(
         ctx,
         delivery,
@@ -1512,7 +1512,7 @@ export const getDeliveryContext = internalQuery({
     }
     const now = Date.now();
     const booking = await ctx.db.get(delivery.bookingId);
-    if (!booking || bookingDeletionInProgress(booking, now)) {
+    if (!booking || booking.requesterOperationId || bookingDeletionInProgress(booking, now)) {
       return {
         state: "cancel",
         reason: booking
@@ -1646,7 +1646,7 @@ ${details}`;
         text,
         html: renderEmailTemplate({
           detailRows,
-          extraHtml: renderApprovedBookingAccessNotice(),
+          extraHtml: renderApprovedBookingAccessNotice() + "<!--booking-management-->",
           introLines: [
             `Hi, ${booking.requesterName}`,
             "Your booking request has been approved.",
@@ -1788,11 +1788,11 @@ export const sendDelivery = internalAction({
         if (!token) throw new CancelDeliveryError("BOOKING_CHANGED:Approval recipient or status changed.");
         // Fragment tokens are not sent in HTTP requests or Referer headers.
         const link = `${gmailConfiguration().appBaseUrl}/booking-request#token=${token}`;
-        const label = "Request changes / booking cancellation";
-        const explanation = "Submit your request at least two hours before the selected meeting starts. Requests require administrator review; your booking remains unchanged until processed. Keep this private link to yourself.";
-        const section = `<section style="max-width:640px;margin:24px auto;padding:24px;font-family:Arial,sans-serif"><p><a href="${escapeBookingHtml(link)}">${label}</a></p><p>${explanation}</p></section>`;
-        composed = { ...composed, text: `${composed.text}\n\n${label}: ${link}\n${explanation}`,
-          html: composed.html.replace("</body>", `${section}</body>`) };
+        const explanation = "Request changes or cancel at least two hours before the selected meeting starts. Changes require approval. Cancellation takes effect after you confirm and Calendar cleanup succeeds. Keep these private links to yourself.";
+        const cancelLink = `${link}&action=cancel`;
+        const section = `<div style="margin-top:24px;padding-top:20px;border-top:1px solid #eef0f4">${renderActionButton("Request Changes", link)}${renderActionButton("Cancel Booking", cancelLink)}<p style="font-size:13px;line-height:1.6;color:#667085">${explanation}</p></div>`;
+        composed = { ...composed, text: `${composed.text}\n\nRequest Changes: ${link}\nCancel Booking: ${cancelLink}\n${explanation}`,
+          html: composed.html.replace("<!--booking-management-->", section) };
       }
       const message = context.delivery.kind.startsWith("requester_")
         ? await withSubmitterBookings(ctx,context.delivery.recipientEmail,composed)
@@ -1854,7 +1854,7 @@ export const completeDelivery = internalMutation({
     }
     const now = Date.now();
     const booking = await ctx.db.get(delivery.bookingId);
-    if (!booking || bookingDeletionInProgress(booking, now)) {
+    if (!booking || booking.requesterOperationId || bookingDeletionInProgress(booking, now)) {
       await cancelDeliveryRecord(
         ctx,
         delivery,
@@ -2276,6 +2276,20 @@ export const sendBookingNotice=internalAction({args:{noticeId:v.id("bookingNotic
   if(!notice)return;
   let error:string|undefined;
   try {
+    if (notice.requestSubject) {
+      const before = meetingTable(JSON.parse(notice.beforeJson) as SubmitterMeeting[]);
+      const after = meetingTable(JSON.parse(notice.afterJson) as SubmitterMeeting[]);
+      const reviewLink = `${gmailConfiguration().appBaseUrl}/booking-requests`;
+      const details = notice.detailChanges;
+      let message = { subject: notice.requestSubject,
+        text: `${notice.requestText}\n${details}\n\nOriginal booking\n${before.text}\n\nRequested / updated booking\n${after.text}${notice.approverNotice ? `\nReview in RoomOps: ${reviewLink}` : ""}`,
+        html: renderEmailTemplate({ title: notice.requestSubject, introLines: [notice.requestText ?? ""], detailRows: [],
+          extraHtml: `<p style="white-space:pre-wrap;background:#eef5f0;padding:14px;border-radius:8px">${escapeBookingHtml(details)}</p><h2 style="font-size:16px">Original booking</h2>${before.html}${notice.kind === "edited" ? `<h2 style="font-size:16px">Requested / updated booking</h2>${after.html}` : ""}`,
+          ...(notice.approverNotice ? { actionHref: reviewLink, actionLabel: "View Edit Requests" } : {}) }),
+      };
+      if (!notice.approverNotice) message = await withSubmitterBookings(ctx, notice.recipientEmail, message, notice.outstandingJson);
+      await sendGmail({ ...message, to: notice.recipientEmail, messageKey: `booking-request-${args.noticeId}` });
+    } else {
     const before=meetingTable(JSON.parse(notice.beforeJson) as SubmitterMeeting[]);
     const after=meetingTable(JSON.parse(notice.afterJson) as SubmitterMeeting[]);
     const scope=notice.scope==="occurrence"?"This event":notice.scope==="following"?"This and following events":"All events";
@@ -2289,6 +2303,7 @@ export const sendBookingNotice=internalAction({args:{noticeId:v.id("bookingNotic
       html:`<html><body><main style="max-width:640px;margin:auto;padding:24px;font-family:Arial,sans-serif"><h1 style="font-size:22px">${escapeBookingHtml(summary)}</h1><p>${escapeBookingHtml(calendar)}</p>${notice.detailChanges?`<p style="white-space:pre-wrap">${escapeBookingHtml(notice.detailChanges)}</p>`:""}<h2>${notice.kind==="deleted"?"Removed meetings":"Previous details"}</h2>${before.html}${notice.kind==="edited"?`<h2>Updated details</h2>${after.html}`:""}</main></body></html>`,
     },notice.outstandingJson);
     await sendGmail({...message,to:notice.recipientEmail,messageKey:`booking-change-${args.noticeId}`});
+    }
   }catch(caught){error=caught instanceof Error?caught.message:"Booking change email failed.";}
   await ctx.runMutation(internal.bookingNotices.finish,{...args,token,error});
 }});

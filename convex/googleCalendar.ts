@@ -1255,3 +1255,93 @@ export const reconcileApprovedBooking = internalAction({
     }
   },
 });
+
+/** Durable requester saga. The original database schedule and claims survive
+ * until verified Google success. Replacement IDs are stable across retries. */
+export const processRequesterOperation = internalAction({
+  args: { requestId: v.id("bookingRequests") },
+  handler: async (ctx, args): Promise<void> => {
+    const token = crypto.randomUUID();
+    const request = await ctx.runMutation(internal.bookingRequests.claim, { ...args, token });
+    if (!request) return;
+    try {
+      const runtime = requiredRuntime();
+      const before = JSON.parse(request.original!) as Booking;
+      const candidate = JSON.parse(request.candidate!) as Booking;
+      const selected = new Set((JSON.parse(request.snapshot) as Array<{ sequence: number }>).map(row => row.sequence));
+      if (request.phase === "validate") {
+        let available = true;
+        if (request.kind === "change") {
+          for (const occurrence of occurrencesForBooking(candidate).filter(row => selected.has(row.sequence))) {
+            for (const target of calendarTargetsForVenue(occurrence.room ?? candidate.room, runtime.venueMap)) {
+              if (!await runtime.client.availableExceptBooking({ calendarId: target.calendarId, bookingId: String(before._id),
+                startAt: occurrence.startAt, endAt: occurrence.endAt, timeZone: before.timezone })) available = false;
+            }
+          }
+        }
+        if (!await ctx.runMutation(internal.bookingRequests.checked, { ...args, token, available })) return;
+      }
+      let targets = request.targets ?? [];
+      let replacements = request.replacements ?? [];
+      let retained = request.retained ?? [];
+      const generation = `request-${request._id}`;
+      if (request.phase === "rollback") {
+        await cleanupManagedEvents(runtime, String(before._id), replacements);
+        await ctx.runMutation(internal.bookingRequests.abort, { ...args, token });
+        return;
+      }
+      if (request.phase === "validate") {
+        const calendarIds = [...new Set([...Object.values(runtime.venueMap).flat(), ...(before.calendarEvents ?? []).map(row => row.calendarId), ...(before.calendarAttemptedEvents ?? []).map(row => row.calendarId)])];
+        const discovered: ManagedCalendarEventReference[] = [];
+        for (const calendarId of calendarIds) discovered.push(...await runtime.client.listManagedEvents(String(before._id), calendarId));
+        const old = mergeManagedCalendarEvents(discovered, before.calendarEvents, before.calendarAttemptedEvents);
+        // Legacy recurring parents cannot be retained with their former recurrence
+        // rule. Rebuild those schedules; ordinary occurrences keep their IDs.
+        const legacy = old.some(row => row.occurrenceSequence === undefined);
+        retained = legacy ? [] : old.filter(row => !selected.has(row.occurrenceSequence!));
+        targets = managedCalendarEventsExcluding(old, retained);
+        const occurrences = occurrencesForBooking(candidate).filter(row => legacy || selected.has(row.sequence));
+        replacements = await Promise.all(calendarEventPlans(candidate, runtime, occurrences, generation).map(async plan => ({
+          calendarId: plan.target.calendarId,
+          eventId: await deterministicGoogleCalendarEventId({ bookingId: String(before._id), calendarId: plan.target.calendarId, venue: plan.target.venue, generation: plan.generation }),
+          targetVenue: plan.target.venue, occurrenceSequence: plan.occurrence.sequence, startAt: plan.occurrence.startAt, endAt: plan.occurrence.endAt,
+        })));
+        // Persist all external targets before the first write, including ambiguous
+        // network failures where Google commits but its response never arrives.
+        await ctx.runMutation(internal.bookingRequests.savePhase, { ...args, token, phase: "create", targets, replacements, retained });
+      }
+      if (request.phase !== "delete") {
+        // Resume the persisted destinations, not a possibly changed venue map.
+        for (const replacement of replacements) {
+          const occurrence = occurrencesForBooking(candidate).find(row => row.sequence === replacement.occurrenceSequence);
+          if (!occurrence || !isGoogleCalendarVenue(replacement.targetVenue)) throw Error("Invalid persisted Calendar replacement.");
+          const target: VenueCalendarTarget = { calendarId: replacement.calendarId, venue: replacement.targetVenue, requestedVenue: occurrence.room ?? candidate.room };
+          await runtime.client.createEvent(eventInput(candidate, target, occurrence), `occurrence-${occurrence.sequence}-${occurrence.startAt}:${generation}`);
+        }
+        await verifyManagedEvents(runtime, String(before._id), replacements);
+        // A manual Calendar change may have arrived while replacements were
+        // created. Before touching originals, recheck and roll back if needed.
+        let stillAvailable = true;
+        if (request.kind === "change") {
+          for (const replacement of replacements.filter(row => selected.has(row.occurrenceSequence!))) {
+            if (!await runtime.client.availableExceptBooking({ calendarId: replacement.calendarId, bookingId: String(before._id), startAt: replacement.startAt!, endAt: replacement.endAt!, timeZone: before.timezone })) stillAvailable = false;
+          }
+        }
+        if (!stillAvailable) {
+          await ctx.runMutation(internal.bookingRequests.savePhase, { ...args, token, phase: "rollback", targets, replacements, retained });
+          await cleanupManagedEvents(runtime, String(before._id), replacements);
+          await ctx.runMutation(internal.bookingRequests.abort, { ...args, token });
+          return;
+        }
+        await ctx.runMutation(internal.bookingRequests.savePhase, { ...args, token, phase: "delete", targets, replacements, retained });
+      }
+      await cleanupManagedEvents(runtime, String(before._id), targets);
+      const events = await verifyManagedEvents(runtime, String(before._id), [...retained, ...replacements]);
+      await ctx.runMutation(internal.bookingRequests.complete, { ...args, token, events });
+    } catch (error) {
+      // Never claim a cancellation/approval succeeded after a partial Calendar
+      // failure. Recovery resumes the recorded phase without deleting history.
+      await ctx.runMutation(internal.bookingRequests.failure, { ...args, token, errorMessage: errorMessage(error) });
+    }
+  },
+});
