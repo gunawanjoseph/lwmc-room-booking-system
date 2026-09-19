@@ -68,7 +68,7 @@ import { calendarEventRefValidator } from "./schema";
 import { JOTFORM_LEGACY_COMBINED_VENUE_ALIASES } from "../shared/jotformConstants";
 const ROOM_OPTIONS = [...new Set([...BOOKABLE_GOOGLE_CALENDAR_VENUES, ...Object.values(JOTFORM_LEGACY_COMBINED_VENUE_ALIASES).flat().map(room => resolveBookableVenueSelection(room).displayName)])];
 const LEASE = 31 * 60_000;
-const editValidator = v.object({ room: v.string(), startAt: v.number(), endAt: v.number(), eventName: v.string(), purpose: v.string(), ministry: v.string(), responses: v.optional(v.array(v.object({ qid: v.string(), value: v.string() }))) });
+const editValidator = v.object({ room: v.string(), startAt: v.number(), endAt: v.number(), eventName: v.string(), purpose: v.string(), ministry: v.string(), otherMinistry: v.optional(v.string()), responses: v.optional(v.array(v.object({ qid: v.string(), value: v.string() }))) });
 const statusValidator = v.union(v.literal("pending"), v.literal("completed"), v.literal("declined"), v.literal("checking"), v.literal("applying"), v.literal("failed"));
 const active = (request: Doc<"bookingRequests">) => ["checking", "pending", "applying", "failed"].includes(request.status);
 async function audit(ctx: MutationCtx, request: Doc<"bookingRequests">, message: string, error = false) {

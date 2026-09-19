@@ -28,3 +28,15 @@ export function recurrenceDescription(startAt: number, frequency: string | undef
   if (frequency === "biweekly_same_day") return `Every two weeks on ${weekday}`;
   return recurrenceLabel(frequency);
 }
+
+export const OTHER_MINISTRY = "Others (Please Specify)";
+export function ministryDisplay(ministry: string, otherMinistry?: string): string {
+  return ministry === OTHER_MINISTRY && otherMinistry?.trim()
+    ? `${OTHER_MINISTRY}: ${otherMinistry.trim()}` : ministry;
+}
+export function ministrySelection(value: string): {ministry:string;otherMinistry:string} {
+  const prefix = `${OTHER_MINISTRY}: `;
+  return value.startsWith(prefix)
+    ? {ministry:OTHER_MINISTRY,otherMinistry:value.slice(prefix.length)}
+    : {ministry:value,otherMinistry:""};
+}

@@ -10,7 +10,7 @@ import { requestMeetings, requestScope, checkRequestWindow, editableRequestField
 import { normalizeRoomKey } from "./bookingRules";
 import { filterMeetings, sortMeetings, submitterMeetings } from "./submitterBookings";
 
-export type RequestEdit = { room: string; startAt: number; endAt: number; eventName: string; purpose: string; ministry: string; responses?: Array<{ qid: string; value: string }> };
+export type RequestEdit = { room: string; startAt: number; endAt: number; eventName: string; purpose: string; ministry: string; otherMinistry?: string; responses?: Array<{ qid: string; value: string }> };
 export const requestVersion = (booking: Doc<"bookings">) => JSON.stringify({ revision: booking.revision ?? 0, meetings: requestMeetings(booking) });
 export function requestCandidate(booking: Doc<"bookings">, sequence: number, scope: "occurrence" | "following", edit?: RequestEdit) {
   const selected = requestScope(booking, sequence, scope);
@@ -24,7 +24,7 @@ export function requestCandidate(booking: Doc<"bookings">, sequence: number, sco
       startAt: occurrences[0]?.startAt ?? booking.startAt, endAt: occurrences[0]?.endAt ?? booking.endAt });
   }
   if (!edit.eventName.trim() || edit.eventName.length > 300 || edit.purpose.length > 2000 || edit.ministry.length > 160) throw Error("Enter a title and keep the details within the field limits.");
-  validateRequestMinistry(edit.ministry);
+  const ministry = validateRequestMinistry(edit.ministry, edit.otherMinistry);
   // Prepare the recurrence before the shared reservation validator checks claims
   // and overlaps. It must validate actual monthly dates, not a millisecond shift.
   const reanchor = scope === "following" && edit.startAt !== selected[0].startAt && booking.recurrenceFrequency && booking.recurrenceFrequency !== "none";
@@ -39,7 +39,7 @@ export function requestCandidate(booking: Doc<"bookings">, sequence: number, sco
     }) };
   }
   const proposal = adminReservationProposal(reservationBase, {
-    ...edit, requesterName: booking.requesterName, requesterEmail: booking.requesterEmail,
+    ...edit, ministry, requesterName: booking.requesterName, requesterEmail: booking.requesterEmail,
     editScope: scope, occurrenceSequence: sequence,
     recurrenceFrequency: booking.recurrenceFrequency ?? "none", recurrenceHasEndDate: booking.recurrenceHasEndDate ?? false,
     recurrenceUntilAt: booking.recurrenceUntilAt,

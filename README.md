@@ -458,9 +458,17 @@ outstanding bookings captured in the lifecycle transaction; approver messages do
 
 Deploy Convex schema/functions and the frontend together, then refresh old tabs.
 Set `BOOKING_MINISTRIES_JSON` in the **Convex deployment environment variables**
-to a JSON array containing the exact ministries offered by your booking form, for
-example `["Church Office","Worship & Music","Young Adults Ministry"]` (replace
-this example with your complete list). This is the authoritative dropdown and server
+to this JSON array of ministries:
+
+```json
+["Children's Ministry","Church Archivist","Church Governance","Church Office","Communications","Discipleship & Nurture","Finance","Hospitality","LCEC","Mandarin Ministry","Missions","Others (Please Specify)","Outreach & Social Concerns","Pastor's Office","PPRSC","Prayer","Property Management","Seniors Ministry","Springs-WSCS","Witness & Evangelism + ACSI Ministry","Worship & Music","Young Adults Ministry","Youth Ministry"]
+```
+
+Selecting **Others (Please Specify)** reveals a required ministry name field
+(1–120 characters). The server validates it and stores `Others (Please Specify): <name>` in the affected meetings. Reviews, emails and Calendar descriptions include
+the specified name, and reopening the editor restores both fields.
+
+This is the authoritative dropdown and server
 allowlist; it is not inferred from historical free-text submissions. Configure it
 separately in dev and production. Missing or invalid configuration disables edit
 submission with a helpful message; cancellations remain available. Legacy bookings

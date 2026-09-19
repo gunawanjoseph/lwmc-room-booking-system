@@ -477,3 +477,37 @@ test('admin cancellation after completed requester cancellation fails gracefully
  const ctx=setup();await requests.submit.handler(ctx,await args(ctx,{kind:'cancel',scope:'following',edit:undefined}));const id=ctx.rows('bookingRequests')[0]._id;await markPhases(ctx,id);await requests.complete.handler(ctx,{requestId:id,token:'apply',events:[]});
  const count=ctx.rows('bookingNotices').length;await assert.rejects(adminBookings.beginBookingDeletion.handler(ctx,{bookingId:'booking',expectedRevision:0,actorId:'admin',deletionToken:'second'}),/already been cancelled/);assert.equal(ctx.rows('bookingNotices').length,count);
 });
+
+test('other ministry requires a bounded name and cannot bypass configured choices',async()=>{
+ const previous=process.env.BOOKING_MINISTRIES_JSON;
+ try {
+  process.env.BOOKING_MINISTRIES_JSON=JSON.stringify(['Youth','Others (Please Specify)']);
+  for(const otherMinistry of [undefined,'','   ','x'.repeat(121),'Line\nbreak']){
+   const ctx=setup();const input=await args(ctx);await assert.rejects(requests.submit.handler(ctx,{...input,edit:{...input.edit,ministry:'Others (Please Specify)',otherMinistry}}),/Specify your ministry/);
+   assert.equal(ctx.rows('bookingRequests').length,0);
+  }
+  process.env.BOOKING_MINISTRIES_JSON='["Youth"]';const ctx=setup();const input=await args(ctx);
+  await assert.rejects(requests.submit.handler(ctx,{...input,edit:{...input.edit,ministry:'Others (Please Specify)',otherMinistry:'Test ministry'}}),/Select a ministry/);
+ } finally {process.env.BOOKING_MINISTRIES_JSON=previous;}
+});
+test('specified ministry survives review, pending update, approval and email snapshots',async()=>{
+ const previous=process.env.BOOKING_MINISTRIES_JSON;
+ try {
+  process.env.BOOKING_MINISTRIES_JSON=JSON.stringify(['Youth','Others (Please Specify)']);
+  const ctx=setup();const input=await args(ctx);input.edit={...input.edit,ministry:'Others (Please Specify)',otherMinistry:'  Special Ministry  '};
+  await requests.submit.handler(ctx,input);const id=ctx.rows('bookingRequests')[0]._id;await checkLatest(ctx,id);
+  let row=await ctx.db.get(id);assert.equal(JSON.parse(row.candidate).occurrences[0].details.ministry,'Others (Please Specify): Special Ministry');
+  assert.match(ctx.rows('bookingNotices')[0].detailChanges,/Special Ministry/);
+  const next=await updateInput(ctx);next.edit={...next.edit,ministry:'Others (Please Specify)',otherMinistry:'Updated Ministry'};
+  await requests.submit.handler(ctx,next);await checkLatest(ctx,id);
+  await requests.resolve.handler(ctx,{requestId:id,expectedRequestRevision:2,outcome:'completed',response:''});await markPhases(ctx,id);await requests.complete.handler(ctx,{requestId:id,token:'apply',events:[]});
+  const meeting=(await requests.view.handler(ctx,{token})).meetings[0];assert.equal(meeting.ministry,'Others (Please Specify): Updated Ministry');
+  assert.deepEqual(fields.ministrySelection(meeting.ministry),{ministry:'Others (Please Specify)',otherMinistry:'Updated Ministry'});
+  assert.ok(ctx.rows('bookingNotices').some(notice=>notice.requestSubject==='Booking Changes Approved' && notice.detailChanges.includes('Updated Ministry')));
+ } finally {process.env.BOOKING_MINISTRIES_JSON=previous;}
+});
+test('standard ministry choices ignore stale other text',()=>{
+ assert.equal(fields.ministryDisplay('Youth','Old custom ministry'),'Youth');
+ assert.deepEqual(fields.ministrySelection('Youth'),{ministry:'Youth',otherMinistry:''});
+ assert.equal(fields.ministryDisplay('Others (Please Specify)',' New ministry '),'Others (Please Specify): New ministry');
+});
