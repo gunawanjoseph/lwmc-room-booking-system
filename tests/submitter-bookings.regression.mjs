@@ -123,10 +123,12 @@ for(const kind of ['requester_submission_received','requester_approved','request
     if(name==='getDeliveryContext')return {state:'ready',context:{booking:b,delivery:{_id:'delivery',kind,recipientEmail:'person@example.com'},decisionToken:null,relatedBookings:[]}};
     if(name==='emailPage'){assert.equal(args.email,'person@example.com');pages++;return {page:pages===1?outstanding:[],isDone:pages===2,continueCursor:'page2',timezone:'Asia/Singapore'};}
     throw Error(name);
-  },runMutation:async(name,args)=>mutations.push({name,args})};
+  },runMutation:async(name,args)=>{mutations.push({name,args});return name==='issueLink'?'a'.repeat(64):undefined;}};
   await emails.sendDelivery.handler(ctx,{deliveryId:'delivery',leaseToken:'lease'});assert.equal(sent.length,1,JSON.stringify(mutations));
   if(kind.startsWith('requester_')){assert.match(sent[0],/OUTSTANDING-ROW/);assert.match(sent[0],/\/booking-calendar/);assert.match(sent[0],/Your outstanding bookings/);assert.equal(pages,2);}else{assert.doesNotMatch(sent[0],/OUTSTANDING-ROW|Your outstanding bookings|\/booking-calendar/);assert.equal(pages,0);}
   assert.equal(mutations.at(-1).name,'completeDelivery');
+  if(kind==='requester_approved') {assert.match(sent[0],/booking-request#token=a{64}/);assert.match(sent[0],/Request changes \/ booking cancellation/);assert.doesNotMatch(sent[0],/booking-request[^\s"<]*bookingId/);}
+  else assert.doesNotMatch(sent[0],/booking-request#token=/);
 }));
 test('deletion notification sends snapshot and saved remaining-bookings footer without needing the deleted row',async()=>gmail(async sent=>{
   const ctx=context();await queueBookingNotice(ctx,booking(),null,'deleted');const noticeId=ctx.rows('bookingNotices')[0]._id;let pages=0;

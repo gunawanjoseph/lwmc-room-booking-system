@@ -1782,7 +1782,18 @@ export const sendDelivery = internalAction({
     }
     const context = lookup.context;
     try {
-      const composed = composeDelivery(context);
+      let composed = composeDelivery(context);
+      if (context.delivery.kind === "requester_approved") {
+        const token = await ctx.runMutation(internal.bookingRequests.issueLink, args);
+        if (!token) throw new CancelDeliveryError("BOOKING_CHANGED:Approval recipient or status changed.");
+        // Fragment tokens are not sent in HTTP requests or Referer headers.
+        const link = `${gmailConfiguration().appBaseUrl}/booking-request#token=${token}`;
+        const label = "Request changes / booking cancellation";
+        const explanation = "Submit your request at least two hours before the selected meeting starts. Requests require administrator review; your booking remains unchanged until processed. Keep this private link to yourself.";
+        const section = `<section style="max-width:640px;margin:24px auto;padding:24px;font-family:Arial,sans-serif"><p><a href="${escapeBookingHtml(link)}">${label}</a></p><p>${explanation}</p></section>`;
+        composed = { ...composed, text: `${composed.text}\n\n${label}: ${link}\n${explanation}`,
+          html: composed.html.replace("</body>", `${section}</body>`) };
+      }
       const message = context.delivery.kind.startsWith("requester_")
         ? await withSubmitterBookings(ctx,context.delivery.recipientEmail,composed)
         : composed;

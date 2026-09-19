@@ -352,3 +352,45 @@ troubleshooting and refresh old browser tabs after deployment.
 - `shared/roles.ts`: role labels and capability matrix.
 - `tests/`: regression coverage.
 - `docs/`: integration setup and operational guides.
+
+## Requestor changes and cancellations
+
+New approval emails include a private **Request changes / booking cancellation** link.
+No account is needed. The link contains a random bearer token rather than a booking
+or user ID. Keep it private: anyone holding it can view that booking and submit a request.
+The token is carried in the URL fragment so it is not sent in the page request or
+Referer header. The public request page does not load Clerk and is marked noindex.
+
+Requestors select a current meeting and either **This event only** or **This event
+and following events**, then describe their changes or request cancellation.
+The server accepts requests up to and including exactly two hours before the
+selected start time; requests inside the two-hour window are rejected. Earlier
+past occurrences do not prevent a request for a later eligible meeting. Dates,
+rooms, titles and deadlines reflect edits already saved in RoomOps. Direct Google
+Calendar edits are not imported into the admin booking record by this feature;
+manage booking changes in RoomOps to keep these details authoritative.
+
+One request can await review per booking. Repeated identical submissions do not
+create duplicates. A changed booking requires refreshing the request before submission.
+Requests do not immediately edit the database booking, Google events, or building controls.
+
+Admins with booking-edit permission and the developer review **Booking requests**.
+Open the associated booking, apply the requested occurrence scope with the existing
+edit/delete controls, and wait for Google Calendar to sync. Then mark the request
+completed with a response, or decline it with a reason. Completion checks that all
+requested cancellations were removed or all requested meetings changed, and rejects
+unfinished Calendar sync. Admins must still verify that their changes match the
+requestor's free-text instructions. Review can happen after the submission deadline.
+Use the existing email-submitter option while editing/deleting to send the final
+booking notification. Request receipt/review emails are not sent separately; request
+status and the administrator's response are visible at the private link while the
+booking still exists and the recipient remains the same. After full cancellation,
+the link becomes unavailable. Changing the requester email invalidates access for
+links issued to a different email address.
+
+Deploy the Convex schema/functions and frontend together. Set Convex `APP_BASE_URL`
+to the frontend origin used by email recipients. No new environment variable is needed.
+Existing approval emails are unchanged; newly sent approval emails include the link.
+The `(roomops)` route group preserves existing URLs while keeping authentication off
+`/booking-request`. If this app already uses a different route-group structure,
+place the public request route outside its Clerk layout when integrating these files.

@@ -105,6 +105,18 @@ export const jotformResponseValidator = v.object({
 });
 
 export default defineSchema({
+  requesterLinks: defineTable({
+    bookingId: v.id("bookings"), token: v.string(), email: v.string(), createdAt: v.number(),
+  }).index("by_token", ["token"]).index("by_booking", ["bookingId"]),
+  bookingRequests: defineTable({
+    bookingId: v.id("bookings"), requesterEmail: v.string(), requesterName: v.string(),
+    kind: v.union(v.literal("change"), v.literal("cancel")),
+    scope: v.union(v.literal("occurrence"), v.literal("following")),
+    sequence: v.number(), snapshot: v.string(), message: v.string(), timezone: v.string(),
+    status: v.union(v.literal("pending"), v.literal("completed"), v.literal("declined")),
+    createdAt: v.number(), resolvedAt: v.optional(v.number()), resolvedBy: v.optional(v.string()),
+    response: v.optional(v.string()),
+  }).index("by_booking", ["bookingId"]).index("by_status", ["status"]),
   publicCalendarCache:defineTable({key:v.string(),json:v.optional(v.string()),fetchedAt:v.optional(v.number()),retryAt:v.number(),token:v.optional(v.string()),leaseUntil:v.optional(v.number()),error:v.optional(v.string())}).index("by_key",["key"]).index("by_retry",["retryAt"]),
   bookingNotices: defineTable({
     bookingReference:v.string(),recipientEmail:v.string(),kind:v.union(v.literal("edited"),v.literal("deleted")),

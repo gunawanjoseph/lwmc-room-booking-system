@@ -871,6 +871,8 @@ export default function BookingsPage() {
     | Booking[]
     | undefined;
   const [query, setQuery] = useState("");
+  const [requestedBooking, setRequestedBooking] = useState<string | null>(null);
+  useEffect(() => { setRequestedBooking(new URLSearchParams(window.location.search).get("booking")); }, []);
   const [status, setStatus] = useState("all");
   const [decision, setDecision] = useState<{
     booking: Booking;
@@ -944,6 +946,7 @@ export default function BookingsPage() {
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("en");
     return (bookings ?? []).filter((booking) => {
+      if (requestedBooking && String(booking._id) !== requestedBooking) return false;
       const matchesStatus =
         status === "all" || booking.status === status;
       const matchesQuery =
@@ -961,7 +964,7 @@ export default function BookingsPage() {
         );
       return matchesStatus && matchesQuery;
     });
-  }, [bookings, query, status]);
+  }, [bookings, query, status, requestedBooking]);
 
   return (
     <div className="page">
@@ -988,6 +991,7 @@ export default function BookingsPage() {
       )}
 
       <section className="toolbar panel">
+        {requestedBooking && <button className="button button-secondary" onClick={() => setRequestedBooking(null)}>Show all bookings</button>}
         <label className="search-field">
           <Search size={17} aria-hidden="true" />
           <input
