@@ -1,3 +1,4 @@
+import { planReminders } from "./bookingReminders";
 import { ConvexError, v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { internalMutation, internalQuery, mutation, query, type QueryCtx, type MutationCtx } from "./_generated/server";
@@ -44,10 +45,12 @@ export const view = query({
     const booking = await authorizedBooking(ctx, token);
     // A cancelled booking retains a receipt behind the same bearer link.
     const link = /^[a-f0-9]{64}$/.test(token) ? await ctx.db.query("requesterLinks").withIndex("by_token", q => q.eq("token", token)).unique() : null;
-    if (!booking && (!link || link.revokedAt || await ctx.db.get(link.bookingId))) return null;
+    const retained = link ? await ctx.db.get(link.bookingId) : null;
+    if (!booking && (!link || link.revokedAt || (retained && (retained.status !== "cancelled" || emailKey(retained.requesterEmail)!==link.email)))) return null;
     const history = await ctx.db.query("bookingRequests").withIndex("by_booking", q => q.eq("bookingId", booking?._id ?? link!.bookingId)).order("desc").take(100);
-    if (!booking && !history.some(item => item.kind === "cancel" && item.status === "completed" && emailKey(item.requesterEmail) === link!.email)) return null;
-    return { timezone: booking?.timezone ?? history[0].timezone, version: booking ? requestVersion(booking) : "",
+    if (!booking && retained?.status !== "cancelled" && !history.some(item => item.kind === "cancel" && item.status === "completed" && emailKey(item.requesterEmail) === link!.email)) return null;
+    return { timezone: booking?.timezone ?? retained?.timezone ?? history[0].timezone, version: booking ? requestVersion(booking) : "",
+      cancelled: retained?.status === "cancelled", cancellationReason: retained?.cancellationReason,
       ministries: requestMinistries(), recurrenceFrequency: booking?.recurrenceFrequency,
       editCount: booking?.requesterEditCount ?? history.filter(row => row.kind === "change").reduce((total,row) => total + (row.requestRevision ?? 1), 0),
       rooms: ROOM_OPTIONS, busy: !!booking?.requesterOperationId,
@@ -62,7 +65,7 @@ export const view = query({
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { BOOKABLE_GOOGLE_CALENDAR_VENUES, resolveBookableVenueSelection } from "./lib/googleCalendar";
-import { findConflicts, addClaims, removeClaims, deleteBookingRecord, clearReciprocalConflictWarnings, clearBlockingConflictReferences } from "./bookings";
+import { findConflicts, addClaims, removeClaims, deleteBookingRecord, archiveCancelledOccurrences, finalizeCancelledParts, clearReciprocalConflictWarnings, clearBlockingConflictReferences } from "./bookings";
 import { requestCandidate, requestVersion, requestNotices } from "./lib/requesterWorkflow";
 import { calendarEventRefValidator } from "./schema";
 import { JOTFORM_LEGACY_COMBINED_VENUE_ALIASES } from "../shared/jotformConstants";
@@ -86,6 +89,7 @@ async function reject(ctx: MutationCtx, request: Doc<"bookingRequests">, respons
   await audit(ctx, updated, response);
 }
 async function reserve(ctx: MutationCtx, request: Doc<"bookingRequests">, booking: Doc<"bookings">, candidate: Doc<"bookings">) {
+  if ((booking.reminderLeaseExpiresAt??0)>Date.now()) throw new ConvexError("A booking reminder is being sent. Please try again shortly.");
   const deliveries = await ctx.db.query("emailDeliveries").withIndex("by_booking", q => q.eq("bookingId", booking._id)).collect();
   if (deliveries.some(row => row.status === "sending" && (row.leaseExpiresAt ?? 0) > Date.now())) throw new ConvexError("A booking email is being sent. Please try again shortly.");
   await ctx.db.patch(booking._id, { requesterOperationId: request._id, calendarSyncStatus: "creating", calendarSyncToken: `request:${request._id}`, calendarSyncLeaseExpiresAt: Date.now() + LEASE });
@@ -108,7 +112,7 @@ export const submit = mutation({
     const booking = await authorizedBooking(ctx, args.token);
     if (!booking) {
       const link = /^[a-f0-9]{64}$/.test(args.token) ? await ctx.db.query("requesterLinks").withIndex("by_token", q => q.eq("token", args.token)).unique() : null;
-      if (link && !link.revokedAt && !await ctx.db.get(link.bookingId) && args.kind === "cancel" && args.operationKey) {
+      if (link && !link.revokedAt && (!await ctx.db.get(link.bookingId) || (await ctx.db.get(link.bookingId))?.status === "cancelled") && args.kind === "cancel" && args.operationKey) {
         const receipts = await ctx.db.query("bookingRequests").withIndex("by_booking", q => q.eq("bookingId", link.bookingId)).take(100);
         if (receipts.some(row => row.operationKey === args.operationKey && row.kind === "cancel" && row.status === "completed" && emailKey(row.requesterEmail) === link.email)) return { submitted: true };
       }
@@ -126,6 +130,7 @@ export const submit = mutation({
       if (args.kind !== "change" || previous.sequence !== args.sequence || previous.scope !== args.scope || previous.message !== args.message.trim() || previous.proposal !== JSON.stringify(args.edit)) throw stale();
       return { submitted: true };
     }
+    if ((booking.reminderLeaseExpiresAt??0)>Date.now()) throw new ConvexError("A booking reminder is being sent. Please try again shortly.");
     if (booking.deletionToken || booking.calendarSyncToken || booking.calendarSyncStatus === "creating") throw new ConvexError("This booking is being updated. Please try again shortly.");
     if (args.version !== requestVersion(booking)) throw new ConvexError("The booking has changed. Review the latest details before submitting.");
     if (args.kind === "change" && !args.edit) throw new ConvexError("Refresh this page to use the booking editor.");
@@ -272,8 +277,15 @@ export const complete = internalMutation({ args: { requestId: v.id("bookingReque
   if (!booking || booking.requesterOperationId !== request._id) throw new ConvexError("Booking ownership changed.");
   const candidate = JSON.parse(request.candidate!) as Doc<"bookings">;
   const now = Date.now();
-  if (!candidate.occurrences!.length) await deleteBookingRecord(ctx, booking, request.resolvedBy ?? "requester");
+  if (!candidate.occurrences!.length) {
+    await ctx.db.patch(booking._id,{cancellationReason:request.message || undefined});
+    await deleteBookingRecord(ctx, booking, request.resolvedBy ?? "requester");
+  }
   else {
+    if(request.kind === "cancel") {
+      const remaining=new Set(candidate.occurrences!.map(row=>row.sequence));
+      await archiveCancelledOccurrences(ctx,booking,(booking.occurrences??[{sequence:0,startAt:booking.startAt,endAt:booking.endAt}]).filter(row=>!remaining.has(row.sequence)),request.resolvedBy??"requester",request.message);
+    }
     await clearReciprocalConflictWarnings(ctx, booking, now);
     await clearBlockingConflictReferences(ctx, booking._id, now);
     await removeClaims(ctx, booking._id);
@@ -292,6 +304,9 @@ export const complete = internalMutation({ args: { requestId: v.id("bookingReque
     const deliveries = await ctx.db.query("emailDeliveries").withIndex("by_booking", q => q.eq("bookingId", booking._id)).collect();
     for (const delivery of deliveries) if (!["sent", "cancelled"].includes(delivery.status)) await ctx.db.patch(delivery._id, { status: "cancelled", leaseToken: undefined, leaseExpiresAt: undefined, updatedAt: now });
   }
+  await finalizeCancelledParts(ctx,booking._id);
+  const current=await ctx.db.get(booking._id);
+  if(current)await planReminders(ctx,current,now);
   await ctx.db.patch(request._id, { status: "completed", resolvedAt: now, workerToken: undefined, leaseUntil: undefined, response: request.kind === "cancel" ? "The selected meetings have been cancelled." : "Your changes have been approved and synchronized." });
   const updated = (await ctx.db.get(request._id))!;
   await requestNotices(ctx, updated, "completed");

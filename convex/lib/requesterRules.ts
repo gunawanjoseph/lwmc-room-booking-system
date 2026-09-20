@@ -26,7 +26,7 @@ export function requestScope(booking: Booking, sequence: number, scope: "occurre
   return meetings.filter(item => scope === "occurrence" ? item.sequence === sequence : item.startAt >= selected.startAt);
 }
 export function checkRequestWindow(meetings: ReturnType<typeof requestMeetings>, now: number) {
-  if (!meetings.length || meetings.some(item => item.startAt - now < REQUEST_NOTICE_MS)) {
+  if (!meetings.length || meetings.some(item => item.startAt - now <= REQUEST_NOTICE_MS)) {
     throw new Error("Requests must be submitted at least two hours before the selected meeting starts.");
   }
 }

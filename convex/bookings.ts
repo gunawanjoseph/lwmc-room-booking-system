@@ -1,3 +1,4 @@
+import { planReminders } from "./bookingReminders";
 import { queueBookingNotice } from "./lib/bookingNotice";
 import { writeAuditLog } from "./lib/auditLog";
 import { editScopedOccurrences, scopedSequences, type ScopedOccurrence } from "./lib/recurrenceScope";
@@ -172,6 +173,9 @@ function requireBookingDeletionIdle(
   booking: Doc<"bookings">,
   now = Date.now(),
 ) {
+  if (booking.status === "cancelled") bookingError("BOOKING_CANCELLED", "This booking is cancelled. You can only erase its record.");
+  if ((booking.reminderLeaseExpiresAt ?? 0) > now) bookingError("REMINDER_SENDING", "A booking reminder is being sent. Please try again shortly.");
+
   if (booking.requesterOperationId) bookingError("REQUEST_IN_PROGRESS", "A requester operation is in progress. Review it in Edit Requests.");
   if (bookingDeletionInProgress(booking, now)) {
     bookingError(
@@ -247,7 +251,7 @@ async function requireTerminalDecisionActor(
 function publicBooking(booking: Doc<"bookings">) {
   return {
     _id: booking._id,
-    jotformSubmissionId: booking.jotformSubmissionId,
+    jotformSubmissionId: booking.sourceSubmissionId ?? booking.jotformSubmissionId,
     requesterName: booking.requesterName,
     requesterEmail: booking.requesterEmail,
     room: booking.room,
@@ -279,6 +283,7 @@ function publicBooking(booking: Doc<"bookings">) {
     formResponseCapturedCount: booking.formResponseCapturedCount,
     formResponseFieldCount: booking.formResponseFieldCount,
     status: booking.status,
+    cancellationPending: booking.cancellationPending, cancelledAt:booking.cancelledAt, cancellationReason:booking.cancellationReason,
     conflictBookingId: booking.conflictBookingId,
     conflictWarningBookingIds:
       booking.conflictWarningBookingIds ?? [],
@@ -1351,6 +1356,7 @@ export const finalizeJotformSubmission = internalMutation({
       );
     }
     const now = Date.now();
+    requireBookingDeletionIdle(booking,now);
     if (booking.requesterOperationId) bookingError("REQUEST_IN_PROGRESS", "A requester operation is in progress. Review it in Edit Requests.");
     if (bookingDeletionInProgress(booking, now)) {
       await ctx.db.patch(receipt._id, {
@@ -1895,6 +1901,7 @@ export async function deleteBookingRecord(
   ctx: MutationCtx,
   booking: Doc<"bookings">,
   actorId: string,
+  erase = false,
 ) {
   const decisionTokens = await ctx.db
     .query("emailDecisionTokens")
@@ -1942,7 +1949,7 @@ export async function deleteBookingRecord(
   for (const token of decisionTokens) {
     await ctx.db.delete(token._id);
   }
-  if (receipt?.bookingId === booking._id) {
+  if (erase && receipt?.bookingId === booking._id) {
     await ctx.db.patch(receipt._id, {
       bookingId: undefined,
       state: "processed",
@@ -1960,13 +1967,13 @@ export async function deleteBookingRecord(
   await writeAuditLog(ctx, {
     level: "warning",
     category: "booking",
-    action: "booking_deleted",
+    action: erase ? "booking_erased" : "booking_cancelled",
     actorType: "user",
     actorId,
     entityType: "booking",
     entityId: String(booking._id),
     message:
-      "A booking and all of its RoomOps-managed Google Calendar events were deleted.",
+      erase ? "A cancelled booking record was permanently erased." : "Booking cancelled after Calendar cleanup; its read-only record was retained.",
     detailsJson: JSON.stringify({
       submissionId: booking.jotformSubmissionId,
       status: booking.status,
@@ -1986,11 +1993,27 @@ export async function deleteBookingRecord(
       cancelledEmailDeliveryCount: cancelledDeliveryCount,
       clearedBlockingConflictReferenceCount,
       externalSubmissionDetached:
-        receipt?.bookingId === booking._id,
+        erase && receipt?.bookingId === booking._id,
     }),
     createdAt: now,
   });
-  await ctx.db.delete(booking._id);
+  const reminders = await ctx.db.query("bookingReminders").withIndex("by_booking", q => q.eq("bookingId", booking._id)).collect();
+  for (const reminder of reminders) {
+    if (erase) await ctx.db.delete(reminder._id);
+    else if (reminder.status === "pending") await ctx.db.patch(reminder._id, {status:"skipped"});
+  }
+  if (erase) {
+    const links = await ctx.db.query("requesterLinks").withIndex("by_booking", q => q.eq("bookingId", booking._id)).collect();
+    for (const link of links) await ctx.db.patch(link._id, {revokedAt:now});
+    await ctx.db.delete(booking._id);
+  }
+  else {
+    await ctx.db.patch(booking._id, {status:"cancelled",cancelledAt:now,cancelledBy:actorId,revision:(booking.revision??0)+1,updatedAt:now,
+      cancellationPending:false,requesterOperationId:undefined,calendarEvents:[],calendarAttemptedEvents:undefined,calendarSyncStatus:"not_created",
+      calendarSyncToken:undefined,calendarSyncLeaseExpiresAt:undefined,calendarSyncError:undefined,deletionToken:undefined,deletionLeaseExpiresAt:undefined,deletionError:undefined,
+      availabilityCheckPending:false,conflictBookingId:undefined,conflictWarningBookingIds:undefined});
+    await finalizeCancelledParts(ctx,booking._id);
+  }
 }
 
 export const beginBookingDeletion = internalMutation({
@@ -2004,6 +2027,7 @@ export const beginBookingDeletion = internalMutation({
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) bookingError("BOOKING_NOT_FOUND", "This booking has already been cancelled or is no longer available. Review the latest booking list.");
     const now = Date.now();
+    requireBookingDeletionIdle(booking,now);
     if (booking.requesterOperationId) bookingError("REQUEST_IN_PROGRESS", "A requester operation is in progress. Review it in Edit Requests.");
     if (bookingDeletionInProgress(booking, now)) {
       bookingError(
@@ -2126,6 +2150,7 @@ export const completeBookingDeletion = internalMutation({
     if ((args.reason?.length ?? 0) > 2000) throw new ConvexError("Keep the comment within 2000 characters.");
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return { deleted: false };
+    if (booking.status === "cancelled") return { deleted: true };
     if (booking.deletionToken !== args.deletionToken) {
       bookingError(
         "BOOKING_DELETE_LEASE_LOST",
@@ -2140,6 +2165,7 @@ export const completeBookingDeletion = internalMutation({
     }
     if (args.notifySubmitter) await queueBookingNotice(ctx,booking,null,"deleted","series",undefined,args.reason);
     await recordAdminComment(ctx,booking._id,args.actorId,args.reason);
+    await ctx.db.patch(booking._id,{cancellationReason:args.reason?.trim() || undefined});
     await deleteBookingRecord(ctx, booking, args.actorId);
     return { deleted: true };
   },
@@ -2270,6 +2296,7 @@ export const removeOccurrences = mutation({
     const selected = scopedSequences(original, args.scope, args.occurrenceSequence);
     const occurrences = original.filter((item) => !selected.has(item.sequence));
     if (!occurrences.length) return { deleteAllRequired: true, calendarQueued: false };
+    await archiveCancelledOccurrences(ctx,booking,original.filter(row=>selected.has(row.sequence)),user.clerkUserId,args.reason,booking.status === "approved");
     if (booking.status !== "approved" && (booking.calendarAttemptedEvents?.length ?? 0) > 0) {
       bookingError("CALENDAR_CLEANUP_REQUIRED", "Resolve the failed Calendar approval before removing part of this booking.");
     }
@@ -3188,6 +3215,7 @@ export const completeCalendarApproval = internalMutation({
       updatedAt: now,
       revision: (booking.revision ?? 0) + 1,
     });
+    await planReminders(ctx,(await ctx.db.get(booking._id))!,now);
     await writeAuditLog(ctx, {
       level: "info",
       category: "booking",
@@ -3612,6 +3640,7 @@ export const recordCalendarReconcileResult = internalMutation({
         : {}),
       updatedAt: now,
     });
+    if(success){await finalizeCancelledParts(ctx,booking._id);await planReminders(ctx,(await ctx.db.get(booking._id))!,now);}
     await writeAuditLog(ctx, {
       level: success ? "info" : "error",
       category: "google_calendar",
@@ -4316,3 +4345,32 @@ async function recordAdminComment(ctx: MutationCtx, bookingId: Id<"bookings">, a
   if (!reason?.trim()) return;
   await writeAuditLog(ctx,{level:"info",category:"booking",action:"booking_admin_comment",actorType:"user",actorId,entityType:"booking",entityId:bookingId,message:"Administrator provided a reason for the booking change.",detailsJson:JSON.stringify({reason:reason.trim()}),createdAt:Date.now()});
 }
+
+/** A separate read-only row preserves cancelled occurrences without reserving rooms. */
+export async function archiveCancelledOccurrences(ctx: MutationCtx, booking: Doc<"bookings">, occurrences: NonNullable<Doc<"bookings">["occurrences"]>, actorId: string, reason?:string, pending=false) {
+  if (!occurrences.length) return;
+  const first = [...occurrences].sort((a,b)=>a.startAt-b.startAt)[0];
+  const {_id, _creationTime, ...data} = booking;
+  void _creationTime;
+  await ctx.db.insert("bookings",{...data, jotformSubmissionId:`cancelled:${crypto.randomUUID()}`, sourceSubmissionId:booking.sourceSubmissionId??booking.jotformSubmissionId,
+    cancelledFromBookingId:_id, status:"cancelled",cancelledAt:Date.now(),cancelledBy:actorId,cancellationReason:reason?.trim()||undefined,cancellationPending:pending,
+    occurrences:occurrences.map(item=>({...item,room:item.room??booking.room,resolvedVenues:item.resolvedVenues??booking.resolvedVenues,
+      details:{...item.details,eventName:item.details?.eventName??booking.eventName,purpose:item.details?.purpose??booking.purpose,ministry:item.details?.ministry??booking.ministry}})),
+    recurrenceCount:occurrences.length,startAt:first.startAt,endAt:first.endAt,
+    room:first.room??booking.room,roomKey:(first.room??booking.room).trim().toLowerCase(),resolvedVenues:first.resolvedVenues??booking.resolvedVenues,
+    eventName:first.details?.eventName??booking.eventName,purpose:first.details?.purpose??booking.purpose,ministry:first.details?.ministry??booking.ministry,
+    calendarEvents:[],calendarAttemptedEvents:undefined,calendarSyncToken:undefined,calendarSyncLeaseExpiresAt:undefined,calendarSyncStatus:"not_created",calendarSyncError:undefined,
+    requesterOperationId:undefined,reminderLeaseToken:undefined,reminderLeaseExpiresAt:undefined,deletionToken:undefined,deletionLeaseExpiresAt:undefined,
+    availabilityCheckPending:false,conflictBookingId:undefined,conflictWarningBookingIds:undefined,revision:0,createdAt:Date.now(),updatedAt:Date.now()});
+}
+export async function finalizeCancelledParts(ctx: MutationCtx, bookingId: Id<"bookings">) {
+  const rows=await ctx.db.query("bookings").withIndex("by_cancelled_from",q=>q.eq("cancelledFromBookingId",bookingId)).collect();
+  for(const row of rows)if(row.cancellationPending)await ctx.db.patch(row._id,{cancellationPending:false,updatedAt:Date.now()});
+}
+export const eraseCancelled = mutation({args:{bookingId:v.id("bookings"),expectedRevision:v.number()},handler:async(ctx,args)=>{
+  const actor=await requireCapability(ctx,"table.edit");
+  const booking=await ctx.db.get(args.bookingId);
+  if(!booking || (booking.revision??0)!==args.expectedRevision)throw new ConvexError("This booking has changed. Refresh the list and try again.");
+  if(booking.status!=="cancelled" || booking.cancellationPending)throw new ConvexError("Cancel the booking and wait for Calendar cleanup before erasing its record.");
+  await deleteBookingRecord(ctx,booking,actor.clerkUserId,true);
+}});

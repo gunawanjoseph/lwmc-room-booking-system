@@ -62,7 +62,7 @@ test('running meetings are reconciled, completed events retained',()=>{
 });
 function dbContext(booking) {
   const scheduled=[];const logs=[];
-  return {scheduled,logs, db:{query:()=>({withIndex:()=>({take:async()=>[]})}),get:async()=>booking,patch:async(_,patch)=>Object.assign(booking,patch),insert:async(_,row)=>logs.push(row)},scheduler:{runAfter:async(...args)=>scheduled.push(args)}};
+  return {scheduled,logs, db:{query:()=>({withIndex:()=>({take:async()=>[],collect:async()=>[]})}),get:async()=>booking,patch:async(_,patch)=>Object.assign(booking,patch),insert:async(_,row)=>logs.push(row)},scheduler:{runAfter:async(...args)=>scheduled.push(args)}};
 }
 test('metadata-only series edit preserves all occurrence time/venue exceptions',async()=>{
   const savedEnv=process.env.GOOGLE_CALENDAR_ENABLED;

@@ -26,6 +26,7 @@ export const userStatusValidator = v.union(
 );
 
 export const bookingStatusValidator = v.union(
+  v.literal("cancelled"),
   v.literal("pending"),
   v.literal("approved"),
   v.literal("rejected"),
@@ -195,7 +196,14 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_email", ["email"]),
 
+  bookingReminders: defineTable({
+    bookingId:v.id("bookings"),key:v.string(),kind:v.union(v.literal("two_days"),v.literal("two_hours")),sequence:v.number(),startAt:v.number(),dueAt:v.number(),addedAt:v.number(),
+    status:v.union(v.literal("pending"),v.literal("sending"),v.literal("sent"),v.literal("skipped"),v.literal("failed")),attempts:v.number(),token:v.optional(v.string()),leaseUntil:v.optional(v.number()),sentAt:v.optional(v.number()),
+  }).index("by_booking",["bookingId"]),
   bookings: defineTable({
+    cancelledAt: v.optional(v.number()), cancelledBy: v.optional(v.string()), cancellationReason: v.optional(v.string()),
+    cancelledFromBookingId: v.optional(v.id("bookings")), sourceSubmissionId: v.optional(v.string()), cancellationPending: v.optional(v.boolean()),
+    reminderLeaseToken: v.optional(v.string()), reminderLeaseExpiresAt: v.optional(v.number()),
     requesterEditCount: v.optional(v.number()),
     requesterOperationId: v.optional(v.id("bookingRequests")),
     source: v.literal("jotform"),
@@ -284,6 +292,7 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_cancelled_from", ["cancelledFromBookingId"])
     .index("by_submission_id", ["jotformSubmissionId"])
     .index("by_requester_email", ["requesterEmail"])
     .index("by_room_start", ["roomKey", "startAt"])

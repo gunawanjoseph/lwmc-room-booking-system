@@ -40,7 +40,7 @@ export type EmailDecisionBooking = {
   }>;
   conflictWarningBookingIds?: Id<"bookings">[];
   availabilityCheckPending?: boolean;
-  status: "pending" | "approved" | "rejected" | "unavailable";
+  status: "pending" | "approved" | "rejected" | "unavailable" | "cancelled";
 };
 
 export type PublicEmailDecisionView =

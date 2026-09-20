@@ -78,7 +78,7 @@ export type BookingExportRow = {
   formResponsesTruncated?: boolean;
   formResponseCapturedCount?: number;
   formResponseFieldCount?: number;
-  status: "pending" | "approved" | "rejected" | "unavailable";
+  status: "pending" | "approved" | "rejected" | "unavailable" | "cancelled";
   reviewNote?: string;
   reviewedAt?: number;
   createdAt: number;

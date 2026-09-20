@@ -186,7 +186,7 @@ export function urgentConflictDeliveryRecoveryMode(
 
 export type ConflictAlertBookingState = {
   id: string;
-  status: "pending" | "approved" | "rejected" | "unavailable";
+  status: "pending" | "approved" | "rejected" | "unavailable" | "cancelled";
   availabilityCheckPending?: boolean;
   calendarAvailabilityStatus?: "unchecked" | "available" | "conflict";
   calendarSyncAttempts?: number;
@@ -292,7 +292,7 @@ export function isCurrentStandaloneCalendarConflict(
 
 export function availabilityFollowupKind(input: {
   availabilityCheckPending?: boolean;
-  status: "pending" | "approved" | "rejected" | "unavailable";
+  status: "pending" | "approved" | "rejected" | "unavailable" | "cancelled";
 }): "approver_request" | "requester_unavailable" | null {
   if (input.availabilityCheckPending === true) return null;
   if (input.status === "pending") return "approver_request";

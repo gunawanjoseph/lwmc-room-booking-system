@@ -727,7 +727,7 @@ export const deleteBooking = action({
             internal.bookings.getInternal,
             { bookingId: args.bookingId },
           )) as Booking | null;
-          if (!current) return { deleted: true };
+          if (!current || current.status === "cancelled") return { deleted: true };
           await ctx.runMutation(
             internal.bookings.failBookingDeletion,
             {

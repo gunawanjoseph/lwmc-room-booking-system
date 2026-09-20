@@ -30,7 +30,7 @@ export function RequestBooking() {
   useEffect(() => {
     const read = () => {
       const params = new URLSearchParams(window.location.hash.slice(1));
-      setToken(params.get("token") ?? ""); setStep("summary"); setSequence("");
+      setToken(params.get("token") ?? ""); setStep("summary"); setSequence(params.get("meeting") ?? "");
     };
     read(); window.addEventListener("hashchange", read);
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -43,7 +43,7 @@ export function RequestBooking() {
   const affected = selected ? data!.meetings.filter(row => scope === "occurrence" ? row.sequence === selected.sequence : row.startAt >= selected.startAt) : [];
   const pending = data?.requests.find(row => row.status === "pending");
   const processing = data?.busy || data?.requests.some(row => ["checking", "applying", "failed"].includes(row.status));
-  const closed = !selected || now > selected.deadline;
+  const closed = !selected || now >= selected.deadline;
   const stale = step !== "summary" && editVersion !== data?.version;
   function go(next: Step) { setStep(next); setError(""); requestAnimationFrame(() => heading.current?.focus()); }
   function begin(next: "edit" | "cancel") {
@@ -63,7 +63,7 @@ export function RequestBooking() {
     const startAt = DateTime.fromISO(draft.start, { zone: data!.timezone }).toMillis();
     const endAt = DateTime.fromISO(draft.end, { zone: data!.timezone }).toMillis();
     if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) throw Error("Choose an end time after the start time.");
-    if (startAt - at < 2 * 60 * 60_000) throw Error("Choose a start time at least two hours from now.");
+    if (startAt - at <= 2 * 60 * 60_000) throw Error("Choose a start time at least two hours from now.");
     if (!data!.ministries.includes(draft.ministry)) throw Error("Select a ministry from the list before continuing.");
     if (draft.ministry === OTHER_MINISTRY && (!draft.otherMinistry.trim() || draft.otherMinistry.trim().length > 120)) throw Error("Specify your ministry using 1 to 120 characters.");
     for (const field of selected?.fields ?? []) if (isPhoneField(field)) normalizePhone(responses.find(row => row.qid === field.qid)?.value ?? "");
@@ -109,7 +109,7 @@ export function RequestBooking() {
           {processing && <p className="request-notice" role="status">An operation is being processed. Check its status below.</p>}
           <p className="request-muted">Edit requests used: {data.editCount} / 3{data.editCount >= 3 ? ". The edit limit has been reached. Eligible cancellations are still available." : ". Each update to a pending request counts toward this limit."}</p>
           <div className="request-actions"><button className="button" disabled={closed || processing || data.editCount >= 3} onClick={() => begin("edit")}>{pending ? "Update pending request" : "Request changes"}</button><button className="button button-secondary request-danger-text" disabled={closed || processing} onClick={() => begin("cancel")}>Cancel booking</button></div>
-        </section> : <section className="panel requester-form"><CheckCircle2 aria-hidden="true"/><h2>Booking cancelled</h2><p>Your cancellation receipt is below.</p></section>}
+        </section> : <section className="panel requester-form"><CheckCircle2 aria-hidden="true"/><h2>Booking cancelled</h2><p>This booking is cancelled. No further changes can be made.</p>{data.cancellationReason && <p>{data.cancellationReason}</p>}</section>}
       </> : step === "edit" ? <form className="panel requester-form" onSubmit={review}>
         {scopeControl}
         <label>Event title<input required maxLength={300} value={draft.eventName} onChange={e => setDraft({ ...draft, eventName: e.target.value })}/></label>

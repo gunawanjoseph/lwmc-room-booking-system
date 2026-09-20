@@ -53,9 +53,10 @@ async function markPhases(ctx,requestId) {
   await requests.savePhase.handler(ctx,{requestId,token:'apply',phase:'delete',targets:[],replacements:[],retained:[]});
 }
 
-test('two hour boundary is inclusive and enforced in milliseconds',()=>{
+test('two hour boundary is closed and enforced in milliseconds',()=>{
   const meetings=rules.requestMeetings(booking({occurrences:undefined,startAt:now+2*hour}));
-  assert.doesNotThrow(()=>rules.checkRequestWindow(meetings,now));
+  assert.doesNotThrow(()=>rules.checkRequestWindow(meetings,now-1));
+  assert.throws(()=>rules.checkRequestWindow(meetings,now),/two hours/);
   assert.throws(()=>rules.checkRequestWindow(meetings,now+1),/two hours/);
   assert.throws(()=>rules.checkRequestWindow([],now));
 });
@@ -214,10 +215,10 @@ test('admin edits while a request awaits review make approval stale',async()=>{
   const ctx=setup();const requestId=await submitPending(ctx);await ctx.db.patch('booking',{revision:4});
   await requests.resolve.handler(ctx,{expectedRequestRevision:1,requestId,outcome:'completed',response:''});assert.equal((await ctx.db.get(requestId)).status,'declined');
 });
-test('full cancellation preserves history and private receipt while deleting active booking',async()=>{
+test('full cancellation preserves history and private receipt while retaining a read-only booking',async()=>{
   const ctx=setup();await requests.submit.handler(ctx,await args(ctx,{kind:'cancel',scope:'following',edit:undefined}));const requestId=ctx.rows('bookingRequests')[0]._id;
   await markPhases(ctx,requestId);await requests.complete.handler(ctx,{requestId,token:'apply',events:[]});
-  assert.equal(await ctx.db.get('booking'),null);assert.equal(ctx.rows('bookingRequests').length,1);assert.equal(ctx.rows('bookingClaims').length,0);
+  assert.equal((await ctx.db.get('booking')).status,'cancelled');assert.equal(ctx.rows('bookingRequests').length,1);assert.equal(ctx.rows('bookingClaims').length,0);
   const receipt=await requests.view.handler(ctx,{token});assert.equal(receipt.meetings.length,0);assert.equal(receipt.requests[0].status,'completed');
   const notice=ctx.rows('bookingNotices').find(row=>row.requestSubject==='Booking Cancellation Confirmation');assert.equal(JSON.parse(notice.outstandingJson).rows.length,0);
 });
@@ -286,7 +287,7 @@ test('Calendar worker checks, queues approval, creates replacements, then delete
 test('Calendar cancellation runs immediately and never creates an approval task',async()=>{
   await googleWorkflow(async({ctx,map,calls})=>{
     await requests.submit.handler(ctx,await args(ctx,{kind:'cancel',edit:undefined,scope:'following'}));const requestId=ctx.rows('bookingRequests')[0]._id;
-    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get(requestId)).status,'completed');assert.equal(await ctx.db.get('booking'),null);assert.equal(map.size,0);
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get(requestId)).status,'completed');assert.equal((await ctx.db.get('booking')).status,'cancelled');assert.equal(map.size,0);
     assert.ok(!ctx.rows('bookingNotices').some(row=>row.requestSubject==='Booking Change Request Requires Approval'));assert.equal(calls.filter(row=>row[0]==='create').length,0);
   });
 });
@@ -348,7 +349,7 @@ test('additional answers cannot change canonical contact fields or invent an unk
 test('a retry after full cancellation returns success without creating another receipt',async()=>{
   await googleWorkflow(async({ctx})=>{
     const input=await args(ctx,{kind:'cancel',scope:'following',edit:undefined});await requests.submit.handler(ctx,input);const requestId=ctx.rows('bookingRequests')[0]._id;
-    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal(await ctx.db.get('booking'),null);
+    await googleActions.processRequesterOperation.handler(ctx,{requestId});assert.equal((await ctx.db.get('booking')).status,'cancelled');
     const count=ctx.rows('bookingNotices').length;assert.deepEqual(await requests.submit.handler(ctx,input),{submitted:true});assert.equal(ctx.rows('bookingNotices').length,count);
   });
 });
@@ -460,10 +461,10 @@ test('admin edit comment reaches audit and email',async()=>{
  const ctx=setup();const b=await ctx.db.get('booking');await adminBookings.edit.handler(ctx,{...adminInput(b),notifySubmitter:true,reason:'Meeting moved by office'});
  assert.match(ctx.rows('bookingNotices')[0].detailChanges,/Meeting moved by office/);assert.ok(ctx.rows('auditLogs').some(row=>row.detailsJson?.includes('Meeting moved by office')));
 });
-test('full deletion comment is retained after the booking is deleted',async()=>{
+test('full deletion comment is retained on the cancelled booking',async()=>{
  const ctx=setup();await adminBookings.beginBookingDeletion.handler(ctx,{bookingId:'booking',expectedRevision:0,actorId:'admin',deletionToken:'delete'});
  await adminBookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'delete',notifySubmitter:true,reason:'Venue closed'});
- assert.equal(await ctx.db.get('booking'),null);assert.match(ctx.rows('bookingNotices')[0].detailChanges,/Venue closed/);assert.ok(ctx.rows('auditLogs').some(row=>row.detailsJson?.includes('Venue closed')));
+ assert.equal((await ctx.db.get('booking')).status,'cancelled');assert.match(ctx.rows('bookingNotices')[0].detailChanges,/Venue closed/);assert.ok(ctx.rows('auditLogs').some(row=>row.detailsJson?.includes('Venue closed')));
 });
 test('international phone numbers are accepted and stored as entered',async()=>{
  const ctx=setup({formResponses:[{qid:'phone',label:'Phone Number',type:'control_phone',value:'full: (65) 8123 4567'}]});const input=await args(ctx);
@@ -488,7 +489,7 @@ test('rejection comment is included in the durable requester email',async()=>{
 });
 test('admin cancellation after completed requester cancellation fails gracefully without double deletion',async()=>{
  const ctx=setup();await requests.submit.handler(ctx,await args(ctx,{kind:'cancel',scope:'following',edit:undefined}));const id=ctx.rows('bookingRequests')[0]._id;await markPhases(ctx,id);await requests.complete.handler(ctx,{requestId:id,token:'apply',events:[]});
- const count=ctx.rows('bookingNotices').length;await assert.rejects(adminBookings.beginBookingDeletion.handler(ctx,{bookingId:'booking',expectedRevision:0,actorId:'admin',deletionToken:'second'}),/already been cancelled/);assert.equal(ctx.rows('bookingNotices').length,count);
+ const count=ctx.rows('bookingNotices').length;await assert.rejects(adminBookings.beginBookingDeletion.handler(ctx,{bookingId:'booking',expectedRevision:0,actorId:'admin',deletionToken:'second'}),/is cancelled/);assert.equal(ctx.rows('bookingNotices').length,count);
 });
 
 test('other ministry requires a bounded name and cannot bypass configured choices',async()=>{

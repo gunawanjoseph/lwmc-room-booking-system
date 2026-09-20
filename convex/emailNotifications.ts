@@ -655,7 +655,7 @@ function renderActionButtonRow(
   const cells = buttons
     .map(
       (button, index) =>
-        `<td style="padding:0 ${index < buttons.length - 1 ? 12 : 0}px 0 0">${actionButtonLink(button.label, button.href)}</td>`,
+        `<td class="email-action" style="padding:0 ${index < buttons.length - 1 ? 12 : 0}px 0 0">${actionButtonLink(button.label, button.href)}</td>`,
     )
     .join("");
   return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr>${cells}</tr></table>`;
@@ -682,18 +682,19 @@ function renderEmailTemplate(input: EmailTemplateInput): string {
 
   return `<!doctype html>
 <html>
+  <head><meta name="viewport" content="width=device-width, initial-scale=1"><style>@media(max-width:640px){.email-action{display:block!important;padding:0 0 12px!important}.email-action a{display:block!important;text-align:center}.email-content{padding-left:18px!important;padding-right:18px!important}}</style></head>
   <body style="margin:0;padding:0;background:#f3f1ff;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f1ff;border-collapse:collapse;">
       <tr>
         <td align="center" style="padding:16px 12px 28px;">
-          <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="width:620px;max-width:620px;background:#ffffff;border-collapse:collapse;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;max-width:620px;background:#ffffff;border-collapse:collapse;">
             <tr>
               <td align="center" style="padding:16px 28px 8px;">
                 <img src="${escapeHtml(LWMC_LOGO_URL)}" alt="Living Waters Methodist Church" style="display:block;width:360px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;">
               </td>
             </tr>
             <tr>
-              <td style="padding:0 40px 12px;">
+              <td class="email-content" style="padding:0 40px 12px;">
                 <h1 style="margin:0;font-family:Arial,sans-serif;font-size:22px;line-height:1.25;color:#1d2e67;font-weight:700;text-align:left;">${escapeHtml(
                   input.title,
                 )}</h1>
@@ -701,17 +702,17 @@ function renderEmailTemplate(input: EmailTemplateInput): string {
               </td>
             </tr>
             <tr>
-              <td style="padding:0 40px 6px;">
+              <td class="email-content" style="padding:0 40px 6px;">
                 ${renderIntroParagraphs(input.introLines)}
               </td>
             </tr>
             <tr>
-              <td style="padding:8px 40px 0;">
+              <td class="email-content" style="padding:8px 40px 0;">
                 <div style="border-top:1px solid #eef0f4;font-size:0;line-height:0;height:1px">&nbsp;</div>
               </td>
             </tr>
             <tr>
-              <td style="padding:12px 40px 40px;">
+              <td class="email-content" style="padding:12px 40px 40px;">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
                   ${rowsHtml}
                 </table>
@@ -2311,16 +2312,37 @@ export const sendBookingNotice=internalAction({args:{noticeId:v.id("bookingNotic
     const after=meetingTable(JSON.parse(notice.afterJson) as SubmitterMeeting[]);
     const scope=notice.scope==="occurrence"?"This event":notice.scope==="following"?"This and following events":"All events";
     const summary=notice.kind==="deleted"&&notice.scope!=="series"
-      ? `Selected meetings in booking ${notice.bookingReference} were removed. Scope: ${scope}.`
-      : `Your booking ${notice.bookingReference} was ${notice.kind}. Scope: ${scope}.`;
+      ? `Selected meetings in booking ${notice.bookingReference} were cancelled. Scope: ${scope}.`
+      : `Your booking ${notice.bookingReference} was ${notice.kind==="deleted"?"cancelled":"updated"}. Scope: ${scope}.`;
     const calendar=notice.calendarPending?"The change is saved in RoomOps. Google Calendar synchronization may still be pending; this email does not confirm room-control changes.":"Please check the latest booking status in the booking calendar.";
     const message=await withSubmitterBookings(ctx,notice.recipientEmail,{
-      subject:`Room booking ${notice.kind}: ${notice.bookingReference}`,
-      text:`${summary}\n${calendar}\n${notice.detailChanges}\n\n${notice.kind==="deleted"?"Removed meetings":"Previous details"}\n${before.text}${notice.kind==="edited"?`\n\nUpdated details\n${after.text}`:""}`,
-      html:`<html><body><main style="max-width:640px;margin:auto;padding:24px;font-family:Arial,sans-serif"><h1 style="font-size:22px">${escapeBookingHtml(summary)}</h1><p>${escapeBookingHtml(calendar)}</p>${notice.detailChanges?`<p style="white-space:pre-wrap">${escapeBookingHtml(notice.detailChanges)}</p>`:""}<h2>${notice.kind==="deleted"?"Removed meetings":"Previous details"}</h2>${before.html}${notice.kind==="edited"?`<h2>Updated details</h2>${after.html}`:""}</main></body></html>`,
+      subject:`Room booking ${notice.kind==="deleted"?"cancelled":"updated"}: ${notice.bookingReference}`,
+      text:`${summary}\n${calendar}\n${notice.detailChanges}\n\n${notice.kind==="deleted"?"Cancelled meetings":"Previous details"}\n${before.text}${notice.kind==="edited"?`\n\nUpdated details\n${after.text}`:""}`,
+      html:`<html><body><main style="max-width:640px;margin:auto;padding:24px;font-family:Arial,sans-serif"><h1 style="font-size:22px">${escapeBookingHtml(summary)}</h1><p>${escapeBookingHtml(calendar)}</p>${notice.detailChanges?`<p style="white-space:pre-wrap">${escapeBookingHtml(notice.detailChanges)}</p>`:""}<h2>${notice.kind==="deleted"?"Cancelled meetings":"Previous details"}</h2>${before.html}${notice.kind==="edited"?`<h2>Updated details</h2>${after.html}`:""}</main></body></html>`,
     },notice.outstandingJson);
     await sendGmail({...message,to:notice.recipientEmail,messageKey:`booking-change-${args.noticeId}`});
     }
   }catch(caught){error=caught instanceof Error?caught.message:"Booking change email failed.";}
   await ctx.runMutation(internal.bookingNotices.finish,{...args,token,error});
+}});
+
+export const sendBookingReminder=internalAction({args:{reminderId:v.id("bookingReminders")},handler:async(ctx,args):Promise<void>=>{
+  const token=crypto.randomUUID();
+  const context=await ctx.runMutation(internal.bookingReminders.claim,{...args,token});
+  if(!context)return;
+  let error:string|undefined;
+  try {
+    const {booking,meeting,kind,linkToken}=context;
+    const early=kind==="two_days";
+    const subject=early?"Booking reminder: in 2 days":"Booking reminder: in 2 hours";
+    const intro=early?"Your booking starts in two days. Need to make a change? Use the buttons below before the two-hour deadline.":"Your booking starts in two hours. Online changes and cancellations are now closed. Contact the booking administrator if you need help.";
+    const href=linkToken?`${gmailConfiguration().appBaseUrl}/booking-request#token=${linkToken}&meeting=${meeting.sequence}`:undefined;
+    const details=[{label:"Event",value:meeting.title},{label:"Room",value:meeting.room},{label:"Starts",value:formatLocalDateTime(meeting.startAt,booking.timezone)},{label:"Ends",value:formatLocalDateTime(meeting.endAt,booking.timezone)},{label:"Ministry",value:meeting.ministry}];
+    const message=await withSubmitterBookings(ctx,booking.requesterEmail,{
+      subject,text:`${intro}\n\n${details.map(row=>`${row.label}: ${row.value}`).join("\n")}${href?`\n\nRequest changes: ${href}\nCancel booking: ${href}&action=cancel\nKeep this private link to yourself.`:""}`,
+      html:renderEmailTemplate({title:subject,introLines:[intro],detailRows:details,extraHtml:href?`${renderActionButtonRow([{label:"Request changes",href},{label:"Cancel booking",href:`${href}&action=cancel`}])}<p style="font-size:13px;color:#667085">Keep these private links to yourself.</p>`:"",footerNote:`Times shown in ${booking.timezone}.`}),
+    });
+    await sendGmail({...message,to:booking.requesterEmail,messageKey:`booking-reminder-${args.reminderId}`});
+  } catch(caught) {error=caught instanceof Error?caught.message:"Reminder delivery failed.";}
+  await ctx.runMutation(internal.bookingReminders.finish,{...args,token,error});
 }});

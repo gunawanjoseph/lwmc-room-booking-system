@@ -73,9 +73,9 @@ test('partial cancellation queues a snapshot only when opted in and never for a 
 test('full-series fallback queues no premature cancellation message',async()=>{
   const ctx=context({bookings:[booking()]});const result=await bookings.removeOccurrences.handler(ctx,{bookingId:'booking',expectedRevision:1,scope:'following',occurrenceSequence:0,notifySubmitter:true});assert.equal(result.deleteAllRequired,true);assert.equal(ctx.rows('bookingNotices').length,0);
 });
-test('full deletion queues email at commit and preserves its snapshot after the booking is gone',async()=>{
+test('full cancellation queues one email at commit and preserves its snapshot',async()=>{
   const ctx=context({bookings:[booking({deletionToken:'lease',deletionLeaseExpiresAt:Date.now()+60000})]});
-  await bookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'lease',notifySubmitter:true});assert.equal(await ctx.db.get('booking'),null);assert.equal(ctx.rows('bookingNotices').length,1);assert.equal(JSON.parse(ctx.rows('bookingNotices')[0].beforeJson).length,3);
+  await bookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'lease',notifySubmitter:true});assert.equal((await ctx.db.get('booking')).status,'cancelled');assert.equal(ctx.rows('bookingNotices').length,1);assert.equal(JSON.parse(ctx.rows('bookingNotices')[0].beforeJson).length,3);
   await bookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'lease',notifySubmitter:true});assert.equal(ctx.rows('bookingNotices').length,1);
 });
 test('lost deletion lease never queues a submitter notification',async()=>{
@@ -134,7 +134,7 @@ test('deletion notification sends snapshot and saved remaining-bookings footer w
   const ctx=context();await queueBookingNotice(ctx,booking(),null,'deleted');const noticeId=ctx.rows('bookingNotices')[0]._id;let pages=0;
   ctx.runMutation=async(name,args)=>{if(name==='claim')return notices.claim.handler(ctx,args);if(name==='finish')return notices.finish.handler(ctx,args);throw Error(name);};
   ctx.runQuery=async name=>{assert.equal(name,'emailPage');pages++;return {page:[],isDone:true,continueCursor:'',timezone:'Asia/Singapore'};};
-  await emails.sendBookingNotice.handler(ctx,{noticeId});assert.equal(sent.length,1);assert.match(sent[0],/was deleted/);assert.match(sent[0],/Removed meetings/);assert.match(sent[0],/Your outstanding bookings/);assert.match(sent[0],/No bookings in this view/);assert.equal((await ctx.db.get(noticeId)).status,'sent');assert.equal(pages,0);
+  await emails.sendBookingNotice.handler(ctx,{noticeId});assert.equal(sent.length,1);assert.match(sent[0],/was cancelled/);assert.match(sent[0],/Cancelled meetings/);assert.match(sent[0],/Your outstanding bookings/);assert.match(sent[0],/No bookings in this view/);assert.equal((await ctx.db.get(noticeId)).status,'sent');assert.equal(pages,0);
 }));
 
 test('repeated single and following edits keep the latest persisted occurrences in lookup and frozen emails',async()=>{
@@ -162,7 +162,7 @@ test('repeated single and following edits keep the latest persisted occurrences 
   const current=await ctx.db.get(b._id);
   await bookings.removeOccurrences.handler(ctx,{bookingId:b._id,expectedRevision:current.revision,scope:'following',occurrenceSequence:2,notifySubmitter:true});
   const remaining=await own.list.handler(ctx,{email:b.requesterEmail,paginationOpts:{numItems:20,cursor:null}});
-  assert.equal(remaining.page[0].meetings.length,2);
+  assert.equal(remaining.page.find(row=>row.id===b._id).meetings.length,2);
   assert.equal(JSON.parse(ctx.rows('bookingNotices').at(-1).outstandingJson).rows.length,2);
 });
 test('bulk edits snapshot every changed booking after the whole batch, including dates beyond one year',async()=>{

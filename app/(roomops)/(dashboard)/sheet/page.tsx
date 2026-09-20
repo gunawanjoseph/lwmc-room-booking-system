@@ -399,7 +399,7 @@ export default function BookingDataPage() {
     booking: BookingRow,
     update: (values: EditableValues) => EditableValues,
   ) {
-    if (isBookingCalendarProcessing(booking)) return;
+    if (booking.status === "cancelled" || isBookingCalendarProcessing(booking)) return;
     setNotice("");
     setSaveError("");
     setDrafts((current) => {
@@ -756,6 +756,7 @@ export default function BookingDataPage() {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
           <option value="unavailable">Unavailable</option>
+          <option value="cancelled">Cancelled</option>
         </select>
         <span className="sheet-row-summary">
           {filteredRows.length.toLocaleString()} shown ·{" "}
@@ -814,6 +815,7 @@ export default function BookingDataPage() {
               ) : (
                 filteredRows.map((booking) => {
                   const key = String(booking._id);
+                  const rowEditable = editMode && booking.status !== "cancelled";
                   const rowProcessing =
                     isBookingCalendarProcessing(booking);
                   const draft = drafts[key];
@@ -859,7 +861,7 @@ export default function BookingDataPage() {
                             : undefined
                         }
                       >
-                        {editMode ? (
+                        {rowEditable ? (
                           <input
                             className="sheet-cell-input"
                             value={values.requesterName}
@@ -886,7 +888,7 @@ export default function BookingDataPage() {
                             : undefined
                         }
                       >
-                        {editMode ? (
+                        {rowEditable ? (
                           <input
                             className="sheet-cell-input sheet-email-input"
                             type="email"
@@ -935,7 +937,7 @@ export default function BookingDataPage() {
                             : undefined
                         }
                       >
-                        {editMode ? (
+                        {rowEditable ? (
                           <input
                             className="sheet-cell-input"
                             value={values.eventName}
@@ -963,7 +965,7 @@ export default function BookingDataPage() {
                             : undefined
                         }
                       >
-                        {editMode ? (
+                        {rowEditable ? (
                           <textarea
                             className="sheet-cell-input sheet-cell-textarea"
                             rows={2}
@@ -992,7 +994,7 @@ export default function BookingDataPage() {
                             : undefined
                         }
                       >
-                        {editMode ? (
+                        {rowEditable ? (
                           <input
                             className="sheet-cell-input"
                             value={values.ministry}
@@ -1089,7 +1091,7 @@ export default function BookingDataPage() {
                                 : undefined
                             }
                           >
-                            {editMode && !responseProtected ? (
+                            {rowEditable && !responseProtected ? (
                               <textarea
                                 className="sheet-cell-input sheet-cell-textarea"
                                 rows={2}
@@ -1116,7 +1118,7 @@ export default function BookingDataPage() {
                                     : "No submitted value"
                                 }
                               />
-                            ) : editMode ? (
+                            ) : rowEditable ? (
                               <span
                                 className="view-only-label"
                                 title="This question was a core booking field for this submission. Edit it through the Bookings page."
@@ -1149,24 +1151,24 @@ export default function BookingDataPage() {
                               editMode ||
                               rowProcessing ||
                               booking.deletionInProgress === true ||
-                              removing?._id === booking._id
+                              removing?._id === booking._id || booking.cancellationPending
                             }
                             title={
                               editMode
-                                ? "Finish table editing before deleting rows."
+                                ? "Finish table editing first."
                                 : rowProcessing
                                   ? "Wait for the background Calendar operation to finish."
                                   : booking.deletionInProgress === true
                                     ? "Safe Calendar and booking deletion is already in progress."
                                     : booking.deletionError
                                       ? "Retry safe Calendar and booking deletion."
-                                      : "Delete this booking and its managed Calendar events."
+                                      : "Cancel this booking, or erase its data if already cancelled."
                             }
                           >
                             <Trash2 size={14} />
-                            {removing?._id === booking._id
-                              ? "Deleting"
-                              : "Delete"}
+                            {removing?._id === booking._id || booking.cancellationPending
+                              ? "Saving…"
+                              : booking.status === "cancelled" ? "Erase data" : "Cancel"}
                           </button>
                         </td>
                       )}

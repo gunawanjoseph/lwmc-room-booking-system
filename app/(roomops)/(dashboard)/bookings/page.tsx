@@ -10,6 +10,7 @@ import {
 import { DateTime } from "luxon";
 import {
   Check,
+  CircleSlash2,
   Pencil,
   RotateCcw,
   Search,
@@ -65,6 +66,8 @@ type Booking = {
     | "available"
     | "conflict";
   calendarConflictSummary?: string;
+  cancellationPending?: boolean;
+  cancellationReason?: string;
   conflictWarningBookingIds?: Id<"bookings">[];
   calendarSyncStatus:
     | "disabled"
@@ -76,7 +79,7 @@ type Booking = {
   calendarSyncError?: string;
   deletionInProgress: boolean;
   deletionError?: string;
-  status: "pending" | "approved" | "rejected" | "unavailable";
+  status: "pending" | "approved" | "rejected" | "unavailable" | "cancelled";
   createdAt: number;
   revision: number;
 };
@@ -1015,6 +1018,7 @@ export default function BookingsPage() {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
           <option value="unavailable">Unavailable</option>
+            <option value="cancelled">Cancelled</option>
         </select>
       </section>
 
@@ -1172,6 +1176,7 @@ export default function BookingsPage() {
                             " ",
                           )}
                         </small>
+                        {booking.status === "cancelled" && <small>{booking.cancellationPending ? "Calendar cleanup pending" : "Read-only · cancelled"}{booking.cancellationReason ? ` · ${booking.cancellationReason}` : ""}</small>}
                         {booking.calendarSyncError && (
                           <small title={booking.calendarSyncError}>
                             Calendar action needs attention
@@ -1186,7 +1191,7 @@ export default function BookingsPage() {
                     </td>
                     <td>
                       <div className="row-actions">
-                        {canEdit && (
+                        {canEdit && booking.status !== "cancelled" && (
                           <button
                             className="icon-button"
                             aria-label={`Edit ${booking.room} booking`}
@@ -1236,22 +1241,22 @@ export default function BookingsPage() {
                         {canEdit && (
                           <button
                             className="icon-button action-reject"
-                            aria-label={`Delete ${booking.room} booking`}
+                            aria-label={`${booking.status === "cancelled" ? "Erase data for" : "Cancel"} ${booking.room} booking`}
                             title={
                               isBookingCalendarProcessing(booking)
                                 ? "Wait for the background Calendar operation to finish."
                                 : booking.deletionInProgress
                                   ? "Safe Calendar and booking deletion is already in progress."
-                                  : "Delete booking and managed Calendar events"
+                                  : booking.status === "cancelled" ? "Erase cancelled booking data" : "Cancel booking"
                             }
                             disabled={
                               isBookingCalendarProcessing(booking) ||
                               booking.deletionInProgress ||
-                              removing?._id === booking._id
+                              removing?._id === booking._id || booking.cancellationPending
                             }
                             onClick={() => void removeBooking(booking)}
                           >
-                            <Trash2 size={16} />
+                            {booking.status === "cancelled" ? <Trash2 size={16} /> : <CircleSlash2 size={16} />}
                           </button>
                         )}
                         {canApprove &&

@@ -3170,3 +3170,13 @@ textarea:focus-visible {
 .request-review-dialog::backdrop {background:#12282288}
 .request-review-dialog > button {margin-bottom:1rem}
 @media(max-width:640px){.edit-request-filters{flex-direction:column;align-items:stretch}.edit-request-row{grid-template-columns:1fr;gap:.8rem}.edit-request-row .button{width:100%}.request-review-dialog{padding:.75rem}.edit-request-search input{font-size:16px}}
+
+.status-cancelled { background: #eef0f2; color: #535e67; border: 1px solid #d5dade; }
+
+.booking-drawer { box-sizing: border-box; overflow-wrap: anywhere; padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+.booking-drawer .field select, .booking-drawer .field textarea { min-width: 0; max-width: 100%; font-size: 16px; }
+@media (max-width: 640px) {
+  .booking-drawer .drawer-actions { flex-direction: column-reverse; }
+  .booking-drawer .drawer-actions .button { width: 100%; min-height: 48px; justify-content: center; }
+  .booking-drawer .notification-choice { align-items: flex-start; line-height: 1.5; }
+}
