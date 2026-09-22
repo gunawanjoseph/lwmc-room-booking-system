@@ -40,6 +40,7 @@ type BookingRow = BookingExportRow & {
   formResponses?: BookingFormResponse[];
   deletionInProgress?: boolean;
   deletionError?: string;
+  cancellationPending?: boolean;
 };
 
 type EditableValues = {
