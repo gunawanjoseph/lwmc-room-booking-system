@@ -135,6 +135,7 @@ const STATUS_BACKGROUND: Record<BookingExportRow["status"], string> = {
   approved: "#D9EAD3",
   rejected: "#F4CCCC",
   unavailable: "#E6E6E6",
+  cancelled: "#EAD1DC",
 };
 
 function recurrenceLabel(
