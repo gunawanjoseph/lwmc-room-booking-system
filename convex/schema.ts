@@ -291,12 +291,17 @@ export default defineSchema({
     revision: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    // Set once planReminders (direct call or the hourly sweep) has run for
+    // this booking, so the sweep never has to re-read bookings it has
+    // already enrolled — see convex/bookingReminders.ts.
+    remindersSweptAt: v.optional(v.number()),
   })
     .index("by_cancelled_from", ["cancelledFromBookingId"])
     .index("by_submission_id", ["jotformSubmissionId"])
     .index("by_requester_email", ["requesterEmail"])
     .index("by_room_start", ["roomKey", "startAt"])
     .index("by_status", ["status"])
+    .index("by_status_reminders_swept", ["status", "remindersSweptAt"])
     .index("by_conflict_booking", ["conflictBookingId"])
     .index("by_created_at", ["createdAt"])
     .index("by_updated_at", ["updatedAt"]),
@@ -484,4 +489,19 @@ export default defineSchema({
   })
     .index("by_created_at", ["createdAt"])
     .index("by_category_created_at", ["category", "createdAt"]),
+
+  // Singleton cache for the dashboard "overview" tile. Refreshed on a cron
+  // (see convex/crons.ts) instead of being computed reactively on every
+  // booking write — see convex/bookingOverviewCache.ts for why.
+  overviewCountsCache: defineTable({
+    pending: v.number(),
+    availabilityChecking: v.number(),
+    approved: v.number(),
+    unavailable: v.number(),
+    detectedConflictRequests: v.number(),
+    pendingConflictRequests: v.number(),
+    pendingConflictPairs: v.number(),
+    unavailableConflictRequests: v.number(),
+    computedAt: v.number(),
+  }),
 });

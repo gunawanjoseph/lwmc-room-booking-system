@@ -29,10 +29,20 @@ export async function planReminders(ctx:MutationCtx, booking:Doc<"bookings">, ad
     const id=await ctx.db.insert("bookingReminders",{bookingId:booking._id,key,kind,sequence:meeting.sequence,startAt:meeting.startAt,dueAt,addedAt,status:"pending",attempts:0});
     await ctx.scheduler.runAfter(Math.max(0,dueAt-now),internal.emailNotifications.sendBookingReminder,{reminderId:id});
   }
+  // Marks this booking as enrolled so the hourly sweep below never has to
+  // re-read it again — only bookings that reach approved+synced without
+  // going through a direct planReminders call site need the sweep.
+  if(booking.remindersSweptAt===undefined)await ctx.db.patch(booking._id,{remindersSweptAt:now});
 }
-// Also enrolls pre-existing approved bookings, one bounded page at a time.
+// Catches approved bookings that reached calendarSyncStatus "synced" without
+// going through a direct planReminders call site (e.g. ones approved before
+// this feature shipped). The by_status_reminders_swept index means this only
+// ever reads bookings that haven't been enrolled yet, instead of re-scanning
+// every approved booking on every hourly tick.
 export const sweep=internalMutation({args:{cursor:v.optional(v.string())},handler:async(ctx,args):Promise<void>=>{
-  const page=await ctx.db.query("bookings").withIndex("by_status",q=>q.eq("status","approved")).paginate({numItems:1,cursor:args.cursor??null});
+  const page=await ctx.db.query("bookings")
+    .withIndex("by_status_reminders_swept",q=>q.eq("status","approved").eq("remindersSweptAt",undefined))
+    .paginate({numItems:50,cursor:args.cursor??null});
   for(const booking of page.page)await planReminders(ctx,booking,booking.calendarSyncedAt??booking.reviewedAt??booking.createdAt);
   if(!page.isDone)await ctx.scheduler.runAfter(0,internal.bookingReminders.sweep,{cursor:page.continueCursor});
 }});
