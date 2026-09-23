@@ -9,6 +9,7 @@
  */
 
 import type * as approvers from "../approvers.js";
+import type * as bookingOverviewCache from "../bookingOverviewCache.js";
 import type * as bookingNotices from "../bookingNotices.js";
 import type * as publicCalendar from "../publicCalendar.js";
 import type * as myBookings from "../myBookings.js";
@@ -51,6 +52,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   approvers: typeof approvers;
+  bookingOverviewCache: typeof bookingOverviewCache;
   bookingReminders: typeof bookingReminders;
   bookings: typeof bookings;
   bookingRequests: typeof bookingRequests;
