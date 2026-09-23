@@ -55,7 +55,6 @@ import {
   needsCalendarAttemptCleanup,
   partitionCalendarCleanupCandidates,
 } from "./lib/calendarTransition";
-import { calculateConflictOverview } from "./lib/bookingOverview";
 import {
   conflictIdsAcknowledged,
   type EditableOccurrence,
@@ -837,44 +836,20 @@ export const overviewCounts = query({
   args: {},
   handler: async (ctx) => {
     await requireCapability(ctx, "bookings.view");
-    const [pending, approved, unavailable] = await Promise.all([
-      ctx.db
-        .query("bookings")
-        .withIndex("by_status", (range) => range.eq("status", "pending"))
-        .collect(),
-      ctx.db
-        .query("bookings")
-        .withIndex("by_status", (range) => range.eq("status", "approved"))
-        .collect(),
-      ctx.db
-        .query("bookings")
-        .withIndex("by_status", (range) =>
-          range.eq("status", "unavailable"),
-        )
-        .collect(),
-    ]);
-    const conflictOverview = calculateConflictOverview(
-      [...pending, ...approved, ...unavailable].map((booking) => ({
-        _id: String(booking._id),
-        status: booking.status,
-        conflictBookingId: booking.conflictBookingId
-          ? String(booking.conflictBookingId)
-          : undefined,
-        conflictWarningBookingIds:
-          booking.conflictWarningBookingIds?.map(String),
-        calendarAvailabilityStatus:
-          booking.calendarAvailabilityStatus,
-      })),
-    );
-    const availabilityChecking = pending.filter(
-      (booking) => booking.availabilityCheckPending === true,
-    ).length;
+    // See convex/bookingOverviewCache.ts for why this reads a cron-refreshed
+    // cache instead of scanning every pending/approved/unavailable booking
+    // on every render.
+    const cached = await ctx.db.query("overviewCountsCache").first();
     return {
-      pending: pending.length - availabilityChecking,
-      availabilityChecking,
-      approved: approved.length,
-      unavailable: unavailable.length,
-      ...conflictOverview,
+      pending: cached?.pending ?? 0,
+      availabilityChecking: cached?.availabilityChecking ?? 0,
+      approved: cached?.approved ?? 0,
+      unavailable: cached?.unavailable ?? 0,
+      detectedConflictRequests: cached?.detectedConflictRequests ?? 0,
+      pendingConflictRequests: cached?.pendingConflictRequests ?? 0,
+      pendingConflictPairs: cached?.pendingConflictPairs ?? 0,
+      unavailableConflictRequests: cached?.unavailableConflictRequests ?? 0,
+      computedAt: cached?.computedAt,
     };
   },
 });
