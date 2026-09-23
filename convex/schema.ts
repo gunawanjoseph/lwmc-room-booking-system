@@ -304,7 +304,11 @@ export default defineSchema({
     .index("by_status_reminders_swept", ["status", "remindersSweptAt"])
     .index("by_conflict_booking", ["conflictBookingId"])
     .index("by_created_at", ["createdAt"])
-    .index("by_updated_at", ["updatedAt"]),
+    .index("by_updated_at", ["updatedAt"])
+    // Lets the always-mounted conflict-toast subscription read only active
+    // pending work and recent conflict outcomes, instead of its old global
+    // 300-row updated-booking scan.
+    .index("by_status_updated_at", ["status", "updatedAt"]),
 
   // Form-level metadata lets an editor add a value for a known optional
   // question even when that particular submission had no stored response.

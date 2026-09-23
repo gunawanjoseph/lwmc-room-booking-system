@@ -834,11 +834,29 @@ export const listConflictNotificationFeed = query({
   args: {},
   handler: async (ctx) => {
     await requireCapability(ctx, "bookings.view");
-    const bookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_updated_at")
-      .order("desc")
-      .take(300);
+    // This query is mounted by the application shell on every dashboard page.
+    // A conflict can only be introduced while a request is pending, or when a
+    // request has just become unavailable. Read only those two small, relevant
+    // windows rather than every recently updated historical booking.
+    const [pending, unavailable] = await Promise.all([
+      ctx.db
+        .query("bookings")
+        .withIndex("by_status_updated_at", (q) =>
+          q.eq("status", "pending"),
+        )
+        .order("desc")
+        .take(50),
+      ctx.db
+        .query("bookings")
+        .withIndex("by_status_updated_at", (q) =>
+          q.eq("status", "unavailable"),
+        )
+        .order("desc")
+        .take(50),
+    ]);
+    const bookings = [...pending, ...unavailable].sort(
+      (a, b) => b.updatedAt - a.updatedAt,
+    );
     return bookings.map((booking) => ({
       _id: booking._id,
       requesterName: booking.requesterName,
