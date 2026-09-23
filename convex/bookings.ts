@@ -807,6 +807,29 @@ export const list = query({
   },
 });
 
+// The overview only renders six rows. Do not subscribe it to the full 300-row
+// administrative dataset (which includes recurrence and Jotform snapshots).
+export const listRecent = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireCapability(ctx, "bookings.view");
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_created_at")
+      .order("desc")
+      .take(6);
+    return bookings.map((booking) => ({
+      _id: booking._id,
+      requesterName: booking.requesterName,
+      room: booking.room,
+      startAt: booking.startAt,
+      timezone: booking.timezone,
+      status: booking.status,
+      conflictWarningBookingIds: booking.conflictWarningBookingIds ?? [],
+    }));
+  },
+});
+
 export const listConflictNotificationFeed = query({
   args: {},
   handler: async (ctx) => {

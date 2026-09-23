@@ -39,7 +39,7 @@ type OverviewCounts = {
 
 export default function HomePage() {
   const profile = useQuery(api.users.me);
-  const bookingResults = useQuery(api.bookings.list);
+  const bookingResults = useQuery(api.bookings.listRecent);
   const bookings = (bookingResults ?? []) as Booking[];
   const overview = useQuery(
     api.bookings.overviewCounts,
