@@ -6,6 +6,7 @@ import type { PublicMeeting } from "@/convex/lib/publicBookings";
 import { BookingLoading } from "@/components/booking-loading";
 import { formatDateTime } from "@/lib/ui";
 import { useSwipePaging } from "@/components/use-swipe-paging";
+import { exitOverlay, fromKeyboard } from "@/lib/motion";
 
 type CalendarMeeting = SubmitterMeeting | PublicMeeting;
 
@@ -19,7 +20,7 @@ export function EventDetails({meeting,timezone,onClose}:{meeting:CalendarMeeting
     return()=>{element?.close();if(trigger?.isConnected)trigger.focus();};
   },[]);
   return <dialog ref={dialog} className="booking-event-dialog" aria-labelledby={titleId} onCancel={event=>{event.preventDefault();onClose();}}>
-    <div className="booking-event-dialog-header"><span>Event details</span><button type="button" className="button button-secondary" autoFocus onClick={onClose}>Close</button></div>
+    <div className="booking-event-dialog-header"><span>Event details</span><button type="button" className="button button-secondary" autoFocus onClick={event=>fromKeyboard(event)?onClose():exitOverlay(dialog.current,onClose)}>Close</button></div>
     <h2 id={titleId}>{meeting?.title??"Event no longer available"}</h2>
     {meeting?<dl className="booking-event-facts">
       <dt>Starts</dt><dd>{formatDateTime(meeting.startAt,timezone)}</dd>

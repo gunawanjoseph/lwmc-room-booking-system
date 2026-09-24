@@ -12,6 +12,7 @@ dist
 *.orig
 *.rej
 test.patch
+.claude
 
 # Google credentials and deployment-specific calendar maps must never be
 # committed. Store their JSON contents in Convex environment variables.

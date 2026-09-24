@@ -54,7 +54,11 @@ export function useSwipePaging(
           return;
         }
         dragging = true;
-        element.setPointerCapture(event.pointerId);
+        try {
+          element.setPointerCapture(event.pointerId);
+        } catch {
+          // The pointer already ended; tracking still works without capture.
+        }
         element.style.transition = "none";
       }
       samples.push({ x: event.clientX, t: event.timeStamp });

@@ -1,9 +1,10 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { FunctionReturnType } from "convex/server";
 import { formatDateTime, messageFromError } from "@/lib/ui";
+import { exitOverlay, fromKeyboard } from "@/lib/motion";
 import { BookingChangeComparison, requestStatusLabel, type MeetingSummary, type ProposedEdit } from "@/components/booking-change-comparison";
 import { Search } from "lucide-react";
 import { recurrenceLabel, recurrenceDescription } from "@/shared/requestFields";
@@ -69,5 +70,6 @@ export default function BookingRequestsPage() {
   </main>;
 }
 function RequestReview({request,close}:{request:Request;close:()=>void}) {
-  return <dialog open className="request-review-dialog" ref={node => { if (node && !node.matches(":modal")) { node.close(); node.showModal(); } }} onCancel={close} aria-label="Review booking request"><button className="button button-secondary" onClick={close}>Close</button><RequestCard request={request}/></dialog>;
+  const dialog = useRef<HTMLDialogElement | null>(null);
+  return <dialog open className="request-review-dialog" ref={node => { dialog.current = node; if (node && !node.matches(":modal")) { node.close(); node.showModal(); } }} onCancel={close} aria-label="Review booking request"><button className="button button-secondary" onClick={event => fromKeyboard(event) ? close() : exitOverlay(dialog.current, close)}>Close</button><RequestCard request={request}/></dialog>;
 }

@@ -1,12 +1,15 @@
 import Link from "next/link";
 import { SignUp } from "@clerk/nextjs";
-import { Brand } from "@/components/brand";
+import { ChurchLockup } from "@/components/brand";
 
 export default function SignUpPage() {
   return (
     <main className="auth-page">
       <section className="auth-intro">
-        <Brand />
+        <div className="auth-brand">
+          <ChurchLockup tone="white" width={240} />
+          <span>RoomOps · Facilities booking</span>
+        </div>
         <div>
           <span className="eyebrow">REQUEST ACCESS</span>
           <h1>Create your administrator identity.</h1>

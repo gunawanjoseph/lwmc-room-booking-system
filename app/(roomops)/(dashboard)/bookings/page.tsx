@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useAction,
   useConvex,
@@ -28,6 +28,7 @@ import {
 } from "@/lib/ui";
 import { isBookingCalendarProcessing } from "@/lib/booking-conflict-transition";
 import { BookingRemovalPanel } from "@/components/booking-removal-panel";
+import { exitOverlay, fromKeyboard } from "@/lib/motion";
 import { StatusBadge } from "@/components/status-badge";
 
 type Booking = {
@@ -122,6 +123,11 @@ function DecisionDialog({
   decision: "approve" | "reject";
   close: (notice?: string) => void;
 }) {
+  const panelRef = useRef<HTMLFormElement>(null);
+  // Exits play for pointer dismissals and completed saves; keyboard
+  // dismissals stay instant.
+  const dismiss = (notice?: string) =>
+    exitOverlay(panelRef.current, () => close(notice));
   const decide = useAction(api.googleCalendar.decide);
   const queueCalendarApproval = useMutation(
     api.bookings.queueCalendarApproval,
@@ -166,7 +172,7 @@ function DecisionDialog({
           );
           return;
         }
-        close(
+        dismiss(
           result.state === "unavailable"
             ? "The booking was marked unavailable because it conflicts with an approved reservation."
             : "The approval check is running in the background. Booking controls are locked until it finishes.",
@@ -179,7 +185,7 @@ function DecisionDialog({
           note: note || undefined,
         });
       }
-      close();
+      dismiss();
     } catch (caught) {
       setError(messageFromError(caught));
     } finally {
@@ -190,6 +196,7 @@ function DecisionDialog({
   return (
     <div className="modal-backdrop" role="presentation">
       <form
+        ref={panelRef}
         className="modal panel"
         onSubmit={submit}
         role="dialog"
@@ -207,7 +214,7 @@ function DecisionDialog({
           <button
             type="button"
             className="icon-button"
-            onClick={() => close()}
+            onClick={(event) => (fromKeyboard(event) ? close() : dismiss())}
             aria-label="Close"
           >
             <X size={18} />
@@ -275,7 +282,7 @@ function DecisionDialog({
           <button
             type="button"
             className="button button-secondary"
-            onClick={() => close()}
+            onClick={(event) => (fromKeyboard(event) ? close() : dismiss())}
           >
             Cancel
           </button>
@@ -316,6 +323,10 @@ function EditDialog({
   booking: Booking;
   close: () => void;
 }) {
+  const panelRef = useRef<HTMLFormElement>(null);
+  // Exits play for pointer dismissals and completed saves; keyboard
+  // dismissals stay instant.
+  const dismiss = () => exitOverlay(panelRef.current, () => close());
   const convex = useConvex();
   const edit = useMutation(api.bookings.edit);
   const [reason, setReason] = useState("");
@@ -490,7 +501,7 @@ function EditDialog({
           (conflict) => conflict.bookingId,
         ),
       });
-      close();
+      dismiss();
     } catch (caught) {
       setError(messageFromError(caught));
     } finally {
@@ -500,7 +511,7 @@ function EditDialog({
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <form className="modal modal-wide panel" onSubmit={submit}>
+      <form ref={panelRef} className="modal modal-wide panel" onSubmit={submit}>
         <div className="modal-heading">
           <div>
             <span className="panel-kicker">EDIT BOOKING</span>
@@ -509,7 +520,7 @@ function EditDialog({
           <button
             type="button"
             className="icon-button"
-            onClick={() => close()}
+            onClick={(event) => (fromKeyboard(event) ? close() : dismiss())}
             aria-label="Close"
           >
             <X size={18} />
@@ -845,7 +856,7 @@ function EditDialog({
           <button
             type="button"
             className="button button-secondary"
-            onClick={() => close()}
+            onClick={(event) => (fromKeyboard(event) ? close() : dismiss())}
           >
             Cancel
           </button>

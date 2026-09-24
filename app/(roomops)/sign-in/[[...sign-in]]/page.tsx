@@ -1,12 +1,15 @@
 import Link from "next/link";
 import { SignIn } from "@clerk/nextjs";
-import { Brand } from "@/components/brand";
+import { ChurchLockup } from "@/components/brand";
 
 export default function SignInPage() {
   return (
     <main className="auth-page">
       <section className="auth-intro">
-        <Brand />
+        <div className="auth-brand">
+          <ChurchLockup tone="white" width={240} />
+          <span>RoomOps · Facilities booking</span>
+        </div>
         <div>
           <span className="eyebrow">ADMIN WORKSPACE</span>
           <h1>Welcome back.</h1>

@@ -6,6 +6,7 @@ import {
   ShieldCheck,
   TableProperties,
 } from "lucide-react";
+import Image from "next/image";
 import { Brand } from "@/components/brand";
 import { JOTFORM_FORM_ID, JOTFORM_FORM_URL } from "@/shared/jotformConstants";
 
@@ -50,8 +51,16 @@ export default function LandingPage() {
 
       <section className="hero shell-width">
         <div className="hero-copy">
+          <Image
+            className="hero-wordmark"
+            src="/brand/lwmc-wordmark.png"
+            alt="Living Waters Methodist Church"
+            width={298}
+            height={48}
+            priority
+          />
           <span className="eyebrow">
-            <ShieldCheck size={15} /> Secure booking operations
+            <ShieldCheck size={15} /> Facilities booking operations
           </span>
           <h1>
             Room requests,

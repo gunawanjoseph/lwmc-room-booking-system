@@ -35,7 +35,7 @@ export function PublicBookings() {
   const today=dateKey(now,timezone);
   const focusDay=month===today.slice(0,7)?today:`${month}-01`;
   function reset(){setMinistries([]);setRooms([]);}
-  return <main className="page my-bookings-page"><header className="my-bookings-header"><Link href="/"><Brand/></Link><Link className="button button-secondary" href="/sign-in">Administrator sign in</Link></header>
+  return <main className="page my-bookings-page"><header className="my-bookings-header"><Brand/><Link className="button button-secondary" href="/sign-in">Administrator sign in</Link></header>
     <h1>Booking calendar</h1>
     <section className="panel my-bookings-panel">
       <div className="booking-filter-heading"><p>{!ministries.length&&!rooms.length?"All Bookings":"Filtered Bookings"}</p><button className="button button-secondary" onClick={reset}>Reset filters</button></div>

@@ -5,6 +5,7 @@ import { CalendarDays, CircleSlash2, Trash2, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { formatDateTime, messageFromError } from "@/lib/ui";
+import { exitOverlay, fromKeyboard } from "@/lib/motion";
 import type { RecurrenceScope } from "@/convex/lib/recurrenceScope";
 
 type RemovalBooking = {
@@ -26,6 +27,8 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const panel = useRef<HTMLElement>(null);
+  // Leaves along its entry path; Escape and keyboard activation stay instant.
+  const dismiss = (notice?: string) => exitOverlay(panel.current, () => close(notice), "drawer");
   const selected = occurrences.find(item => item.sequence === sequence)!;
   const count = scope === "series" ? occurrences.length : scope === "occurrence" ? 1 : occurrences.filter(item => item.startAt >= selected.startAt).length;
   useEffect(() => {
@@ -41,18 +44,18 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
     try {
       if (cancelled) {
         await erase({bookingId:booking._id,expectedRevision:booking.revision ?? 0});
-        close("Cancelled booking data erased.");
+        dismiss("Cancelled booking data erased.");
         return;
       }
       if (scope !== "series") {
         const result = await removeSome({bookingId:booking._id,expectedRevision:booking.revision ?? 0,scope,occurrenceSequence:sequence,notifySubmitter,reason});
         if (!result.deleteAllRequired) {
-          close(result.calendarQueued ? `${count} meeting(s) cancelled. Google Calendar is updating; the cancelled record will remain.` : `${count} meeting(s) cancelled; the other meetings were kept.`);
+          dismiss(result.calendarQueued ? `${count} meeting(s) cancelled. Google Calendar is updating; the cancelled record will remain.` : `${count} meeting(s) cancelled; the other meetings were kept.`);
           return;
         }
       }
       await removeAll({bookingId:booking._id,expectedRevision:booking.revision ?? 0,notifySubmitter,reason});
-      close("Booking cancelled and removed from Google Calendar. Its record is kept for reference.");
+      dismiss("Booking cancelled and removed from Google Calendar. Its record is kept for reference.");
     } catch (caught) { setError(messageFromError(caught)); setBusy(false); }
   }
   return <div className="drawer-backdrop">
@@ -67,7 +70,7 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
           else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first.focus();}
         }
       }}>
-      <div className="modal-heading"><span className="panel-kicker">MANAGE MEETINGS</span><button type="button" className="icon-button" disabled={busy} onClick={()=>close()} aria-label="Close cancellation panel"><X size={20}/></button></div>
+      <div className="modal-heading"><span className="panel-kicker">MANAGE MEETINGS</span><button type="button" className="icon-button" disabled={busy} onClick={event=>fromKeyboard(event)?close():dismiss()} aria-label="Close cancellation panel"><X size={20}/></button></div>
       <h2 id="remove-booking-title">{cancelled ? "Erase booking data?" : "Cancel booking"}</h2>
       <div className="removal-summary"><CalendarDays size={24}/><div><strong>{booking.eventName || booking.room}</strong><p>{booking.room} · {occurrences.length} meeting{recurring ? "s" : ""}</p><small>Booking {booking.jotformSubmissionId}</small></div></div>
       {!cancelled && recurring && <>
@@ -84,7 +87,7 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
         <label className="notification-choice"><input type="checkbox" checked={notifySubmitter} disabled={busy} onChange={event=>setNotifySubmitter(event.target.checked)}/><span>Email the requester after cancellation</span></label>
       </>}
       {error && <div className="form-error" role="alert">{error}</div>}
-      <div className="drawer-actions"><button type="button" className="button button-secondary" disabled={busy} onClick={()=>close()}>{cancelled ? "Keep record" : "Go back"}</button><button type="button" className="button button-danger" disabled={busy || booking.cancellationPending} onClick={submit}>{cancelled ? <Trash2 size={16}/> : <CircleSlash2 size={16}/>} {busy ? "Saving…" : cancelled ? "Erase data" : "Cancel booking"}</button></div>
+      <div className="drawer-actions"><button type="button" className="button button-secondary" disabled={busy} onClick={event=>fromKeyboard(event)?close():dismiss()}>{cancelled ? "Keep record" : "Go back"}</button><button type="button" className="button button-danger" disabled={busy || booking.cancellationPending} onClick={submit}>{cancelled ? <Trash2 size={16}/> : <CircleSlash2 size={16}/>} {busy ? "Saving…" : cancelled ? "Erase data" : "Cancel booking"}</button></div>
     </aside>
   </div>;
 }
