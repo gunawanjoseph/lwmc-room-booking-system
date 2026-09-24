@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@clerk/nextjs": "7.5.20",
+    "@vercel/analytics": "^2.0.1",
     "convex": "1.42.3",
     "lucide-react": "0.536.0",
     "luxon": "3.7.2",
