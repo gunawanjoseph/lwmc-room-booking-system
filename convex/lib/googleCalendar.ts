@@ -134,13 +134,23 @@ const individualVenueSelections = Object.fromEntries(
   ]),
 ) as Record<string, VenueSelection>;
 
+// Every spelling of a combined room displays under one canonical name.
+const combinedVenueDisplayNames: Record<string, string> = {
+  "Ministry Centre A|Ministry Centre B": "Ministry Centre A & B",
+  "Ministry Centre A|Ministry Centre B|Ministry Centre C":
+    "Ministry Centre A, B & C",
+};
+
 const venueAliases: Record<string, VenueSelection> = {
   ...individualVenueSelections,
   ...Object.fromEntries(
     Object.entries(JOTFORM_VENUE_ALIASES).map(([alias, venues]) => [
       venueKey(alias),
       {
-        displayName: venues.length === 1 ? venues[0] : alias,
+        displayName:
+          venues.length === 1
+            ? venues[0]
+            : combinedVenueDisplayNames[venues.join("|")] ?? alias,
         venues: venues as readonly GoogleCalendarVenue[],
       },
     ]),
@@ -438,7 +448,6 @@ export function buildGoogleCalendarEventText(input: {
       "",
       "<b>Event Name or Purpose of Booking:</b>",
       escapeHtml(eventNameOrPurpose),
-      ...(input.eventName?.trim() && input.purpose?.trim() && input.eventName.trim() !== input.purpose.trim() ? ["", "<b>Purpose:</b>", escapeHtml(cleanSingleLine(input.purpose, 2_000))] : []),
       "",
       "<b>Name:</b>",
       escapeHtml(requesterName),
