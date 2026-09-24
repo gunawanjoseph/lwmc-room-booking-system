@@ -8,17 +8,19 @@ import {
   BookOpenCheck,
   CalendarDays,
   ChevronRight,
+  FilePen,
   FileClock,
   Home,
   Menu,
   MessagesSquare,
+  MoreHorizontal,
   Settings2,
   TableProperties,
   TriangleAlert,
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/convex/_generated/api";
 import {
   claimPendingConflictEdges,
@@ -28,6 +30,7 @@ import {
 import type { Capability, Role } from "@/shared/roles";
 import { Brand } from "./brand";
 import { StatusBadge } from "./status-badge";
+import { useDrawerGesture, useMediaQuery } from "./use-drawer-gesture";
 
 type CurrentUser = {
   displayName: string;
@@ -52,7 +55,7 @@ const navigation: Array<{
     icon: BookOpenCheck,
     capability: "bookings.view",
   },
-  { href: "/booking-requests", label: "Edit Requests", icon: BookOpenCheck, capability: "bookings.approve" },
+  { href: "/booking-requests", label: "Edit Requests", icon: FilePen, capability: "bookings.approve" },
   {
     href: "/calendar",
     label: "Calendar",
@@ -85,6 +88,18 @@ const navigation: Array<{
     capability: "integrations.manage",
   },
 ];
+
+// Phones get a bottom tab bar with the most-used destinations that the
+// signed-in role can open; everything else lives behind "More".
+const tabPriority = ["/home", "/bookings", "/calendar", "/booking-requests", "/support"];
+const TAB_COUNT = 4;
+
+function isActiveRoute(pathname: string, href: string) {
+  return (
+    pathname === href ||
+    (href !== "/home" && pathname.startsWith(`${href}/`))
+  );
+}
 
 type ConflictToastBooking = {
   _id: string;
@@ -385,6 +400,31 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     | null
     | undefined;
   const [mobileOpen, setMobileOpen] = useState(false);
+  const compact = useMediaQuery("(max-width: 850px)");
+  const drawerRef = useRef<HTMLElement>(null);
+  const scrimRef = useRef<HTMLButtonElement>(null);
+  const closeDrawer = useCallback(() => setMobileOpen(false), []);
+  const drawerOpen = compact && mobileOpen;
+  useDrawerGesture({
+    drawer: drawerRef,
+    scrim: scrimRef,
+    enabled: drawerOpen,
+    onClose: closeDrawer,
+  });
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const root = document.documentElement;
+    const previous = root.style.overflow;
+    root.style.overflow = "hidden";
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      root.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [drawerOpen]);
 
   if (authLoading || !isAuthenticated || profile === undefined) {
     return <LoadingShell />;
@@ -436,26 +476,46 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return <ForbiddenRoute />;
   }
 
+  const tabs = tabPriority
+    .map((href) => allowedNavigation.find((item) => item.href === href))
+    .filter((item): item is (typeof navigation)[number] => Boolean(item))
+    .slice(0, TAB_COUNT);
+  const currentTitle =
+    allowedNavigation.find((item) => isActiveRoute(pathname, item.href))
+      ?.label ?? "RoomOps";
+  const moreActive = !tabs.some((item) => isActiveRoute(pathname, item.href));
+
   return (
-    <div className="workspace">
+    <div className={`workspace${drawerOpen ? " workspace-drawer-open" : ""}`}>
       <ConflictToastMonitor
         enabled={profile.capabilities.includes("bookings.view")}
       />
-      <button
-        className="mobile-menu-button"
-        aria-label="Open navigation"
-        onClick={() => setMobileOpen(true)}
-      >
-        <Menu size={20} />
-      </button>
-      {mobileOpen && (
+      <header className="mobile-topbar">
         <button
-          className="sidebar-scrim"
-          aria-label="Close navigation"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-      <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
+          className="mobile-menu-button"
+          aria-label="Open navigation"
+          aria-expanded={drawerOpen}
+          onClick={() => setMobileOpen(true)}
+        >
+          <Menu size={20} />
+        </button>
+        <span className="mobile-topbar-title">{currentTitle}</span>
+        <span className="mobile-topbar-spacer" aria-hidden="true" />
+      </header>
+      <button
+        ref={scrimRef}
+        className="sidebar-scrim"
+        aria-label="Close navigation"
+        tabIndex={drawerOpen ? 0 : -1}
+        aria-hidden={!drawerOpen}
+        onClick={() => setMobileOpen(false)}
+      />
+      <aside
+        ref={drawerRef}
+        className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}
+        inert={compact && !mobileOpen}
+        aria-label="Workspace navigation"
+      >
         <div className="sidebar-top">
           <Brand compact />
           <button
@@ -468,16 +528,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
         <nav className="sidebar-nav">
           {allowedNavigation.map((item) => {
-            const active =
-              pathname === item.href ||
-              (item.href !== "/home" &&
-                pathname.startsWith(`${item.href}/`));
+            const active = isActiveRoute(pathname, item.href);
             const Icon = item.icon;
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 className={active ? "nav-link nav-link-active" : "nav-link"}
+                aria-current={active ? "page" : undefined}
                 onClick={() => setMobileOpen(false)}
               >
                 <Icon size={18} />
@@ -495,6 +553,33 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
       <main className="workspace-main">{children}</main>
+      <nav className="tabbar" aria-label="Primary">
+        {tabs.map((item) => {
+          const active = isActiveRoute(pathname, item.href);
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="tabbar-link"
+              aria-current={active ? "page" : undefined}
+            >
+              <Icon size={22} strokeWidth={active ? 2.3 : 1.8} />
+              <span>{item.href === "/booking-requests" ? "Requests" : item.label}</span>
+            </Link>
+          );
+        })}
+        <button
+          type="button"
+          className="tabbar-link"
+          aria-current={moreActive ? "page" : undefined}
+          aria-expanded={drawerOpen}
+          onClick={() => setMobileOpen(true)}
+        >
+          <MoreHorizontal size={22} strokeWidth={moreActive ? 2.3 : 1.8} />
+          <span>More</span>
+        </button>
+      </nav>
     </div>
   );
 }

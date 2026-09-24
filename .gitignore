@@ -20,3 +20,6 @@ production-service-account.json
 google-calendar-map.json
 production-google-calendar-map.json
 google-calendar-map.json
+
+# clerk configuration (can include secrets)
+/.clerk/

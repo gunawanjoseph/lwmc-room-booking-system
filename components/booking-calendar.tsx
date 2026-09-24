@@ -5,6 +5,7 @@ import { calendarTimeRange, meetingsOnDay, monthDays, shiftMonth, shiftDay, week
 import type { PublicMeeting } from "@/convex/lib/publicBookings";
 import { BookingLoading } from "@/components/booking-loading";
 import { formatDateTime } from "@/lib/ui";
+import { useSwipePaging } from "@/components/use-swipe-paging";
 
 type CalendarMeeting = SubmitterMeeting | PublicMeeting;
 
@@ -59,6 +60,8 @@ export function BookingCalendar({rows,timezone,now,initialDate,onMonthChange}:{r
   const [mode,setMode]=useState<"day"|"week"|"month">("month");
   const [selected,setSelected]=useState(initialDate??today);
   const [eventKey,setEventKey]=useState<string|null>(null);
+  const [direction,setDirection]=useState<"next"|"prev">("next");
+  const pager=useRef<HTMLDivElement>(null);
   const month=selected.slice(0,7);
   useEffect(()=>{onMonthChange?.(month);},[month,onMonthChange]);
   const days=monthDays(month);
@@ -66,12 +69,15 @@ export function BookingCalendar({rows,timezone,now,initialDate,onMonthChange}:{r
   const label=(day:string,options:Intl.DateTimeFormatOptions)=>new Intl.DateTimeFormat("en-SG",{...options,timeZone:"UTC"}).format(new Date(`${day}T12:00:00Z`));
   const title=mode==="month"?label(selected,{month:"long",year:"numeric"}):mode==="day"?label(selected,{day:"numeric",month:"long",year:"numeric"}):`${label(week[0],{day:"numeric",month:"short",year:"numeric"})} – ${label(week[6],{day:"numeric",month:"short",year:"numeric"})}`;
   const selectedRows=meetingsOnDay(rows,selected,timezone);
-  function choose(day:string){startTransition(()=>{setSelected(day);setEventKey(null);});}
+  function choose(day:string){if(day!==selected)setDirection(day>selected?"next":"prev");startTransition(()=>{setSelected(day);setEventKey(null);});}
   function chooseMonthDay(day:string){
     choose(day);
     if(window.matchMedia("(max-width: 700px)").matches)startTransition(()=>setMode("week"));
   }
   function navigate(offset:number){choose(mode==="month"?`${shiftMonth(month,offset)}-01`:shiftDay(selected,offset*(mode==="week"?7:1)));}
+  useSwipePaging(pager,navigate);
+  // New periods slide in from the side the swipe/arrow points to.
+  const periodKey=mode==="month"?month:mode==="week"?week[0]:selected;
   return <div className="booking-calendar">
     <div className="booking-view-switch" aria-label="Calendar period">{(["day","week","month"] as const).map(value=><button type="button" key={value} aria-pressed={mode===value} onClick={()=>startTransition(()=>setMode(value))}>{value[0].toUpperCase()+value.slice(1)}</button>)}</div>
     <div className="booking-calendar-toolbar">
@@ -81,6 +87,7 @@ export function BookingCalendar({rows,timezone,now,initialDate,onMonthChange}:{r
     </div>
     <p className="booking-calendar-zone">Times shown in {timezone}. Tap a day to select it or an event for full details.</p>
     <BookingLoading busy={pending}>
+    <div className="booking-calendar-pager" ref={pager}><div key={`${mode}-${periodKey}`} className="booking-calendar-period" data-direction={direction}>
     {mode==="month"?<div className="booking-calendar-scroll"><div className="booking-calendar-grid" aria-label={title}>
       {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(day=><div className="booking-calendar-weekday" key={day}>{day}</div>)}
       {days.map(day=>{const meetings=meetingsOnDay(rows,day,timezone);return <div key={day} className={`booking-calendar-day${day.slice(0,7)!==month?' outside':''}`} data-selected={selected===day} data-today={day===today}>
@@ -91,6 +98,7 @@ export function BookingCalendar({rows,timezone,now,initialDate,onMonthChange}:{r
         {meetings.length>3&&<button type="button" className="booking-calendar-more" aria-label={`Show all ${meetings.length} meetings on ${day}`} onClick={()=>chooseMonthDay(day)}>+{meetings.length-3} more</button>}
       </div>;})}
     </div></div>:<><p className="booking-mobile-week-hint">{mode==="week"?'Select a day above the timeline to browse this week.':''}</p><TimeGrid rows={rows} days={mode==="week"?week:[selected]} selected={selected} timezone={timezone} onSelect={choose} onOpen={setEventKey}/></>}
+    </div></div>
     <section className="booking-calendar-agenda" aria-label="Selected day meetings">
       <h3>{label(selected,{weekday:"long",day:"numeric",month:"short"})} · {selectedRows.length} meeting{selectedRows.length===1?'':'s'}</h3>
       {!selectedRows.length&&<p>No bookings on this day in the selected filter.</p>}

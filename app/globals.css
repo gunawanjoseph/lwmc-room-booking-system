@@ -17,6 +17,19 @@
   --shadow: 0 16px 44px rgba(22, 48, 41, 0.08);
   --shadow-soft: 0 7px 22px rgba(22, 48, 41, 0.06);
   --radius: 18px;
+  /* Motion: strong ease-out for UI response, the iOS sheet curve for
+     anything that slides in from an edge. Durations stay short. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-press: 120ms;
+  --dur-fast: 200ms;
+  --dur-sheet: 420ms;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --tabbar-height: 0px;
 }
 
 * {
@@ -30,11 +43,18 @@ html {
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
-  min-height: 100vh;
+  min-height: 100svh;
   margin: 0;
+  /* Landscape notch/Dynamic Island: pad content in from the sides. Fixed
+     chrome (top bar, tab bar, drawer) pads itself against the viewport. */
+  padding-inline: var(--safe-left) var(--safe-right);
   background: var(--canvas);
 }
 
@@ -46,9 +66,36 @@ textarea {
   font: inherit;
 }
 
+/* Controls fire click immediately (no double-tap-zoom wait) and a long
+   press never selects their label. Content text stays selectable. */
 button,
-a {
-  -webkit-tap-highlight-color: transparent;
+a,
+summary,
+label,
+[role="button"],
+[role="tab"] {
+  touch-action: manipulation;
+}
+
+button,
+summary,
+[role="button"],
+[role="tab"],
+.button,
+.nav-link,
+.tabbar-link {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* iOS zooms into any input under 16px and never zooms back out. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 a {
@@ -103,14 +150,21 @@ button {
   font-weight: 710;
   line-height: 1;
   transition:
-    transform 140ms ease,
-    border-color 140ms ease,
-    background 140ms ease,
-    box-shadow 140ms ease;
+    transform var(--dur-press) var(--ease-out),
+    border-color var(--dur-press) var(--ease-out),
+    background var(--dur-press) var(--ease-out),
+    box-shadow var(--dur-press) var(--ease-out),
+    opacity var(--dur-press) var(--ease-out);
 }
 
-.button:hover:not(:disabled) {
-  transform: translateY(-1px);
+@media (hover: hover) and (pointer: fine) { .button:hover:not(:disabled) { transform: translateY(-1px); } }
+
+/* Press feedback lands on pointer-down, on every input type. Scale stays
+   subtle (0.97) so it reads as "pressed", not "shrinking". */
+.button:active:not(:disabled),
+.icon-button:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: 60ms;
 }
 
 .button:focus-visible,
@@ -135,20 +189,14 @@ textarea:focus-visible {
   box-shadow: 0 8px 20px rgba(40, 95, 83, 0.18);
 }
 
-.button-primary:hover:not(:disabled) {
-  background: var(--forest-dark);
-  box-shadow: 0 10px 24px rgba(40, 95, 83, 0.24);
-}
+@media (hover: hover) and (pointer: fine) { .button-primary:hover:not(:disabled) { background: var(--forest-dark); box-shadow: 0 10px 24px rgba(40, 95, 83, 0.24); } }
 
 .button-secondary {
   border-color: var(--line);
   background: var(--paper);
 }
 
-.button-secondary:hover:not(:disabled) {
-  border-color: #b9c9c2;
-  background: #fbfcfb;
-}
+@media (hover: hover) and (pointer: fine) { .button-secondary:hover:not(:disabled) { border-color: #b9c9c2; background: #fbfcfb; } }
 
 .button-danger {
   color: white;
@@ -188,9 +236,7 @@ textarea:focus-visible {
   font-weight: 720;
 }
 
-.text-link:hover {
-  color: var(--forest-dark);
-}
+@media (hover: hover) and (pointer: fine) { .text-link:hover { color: var(--forest-dark); } }
 
 .eyebrow,
 .panel-kicker,
@@ -213,7 +259,7 @@ textarea:focus-visible {
 }
 
 .landing {
-  min-height: 100vh;
+  min-height: 100svh;
   overflow: hidden;
   background:
     radial-gradient(circle at 83% 22%, #dcece4 0, transparent 28%),
@@ -404,7 +450,7 @@ textarea:focus-visible {
 
 .auth-page {
   display: grid;
-  min-height: 100vh;
+  min-height: 100svh;
   grid-template-columns: minmax(360px, 0.85fr) minmax(500px, 1.15fr);
 }
 
@@ -483,7 +529,7 @@ textarea:focus-visible {
 }
 
 .registration-page {
-  min-height: 100vh;
+  min-height: 100svh;
   padding: 0 max(24px, calc((100vw - 1160px) / 2));
   background:
     radial-gradient(circle at 8% 48%, #dfece5, transparent 28%),
@@ -606,7 +652,7 @@ textarea:focus-visible {
 
 .state-page {
   display: grid;
-  min-height: 100vh;
+  min-height: 100svh;
   place-items: center;
   padding: 24px;
   text-align: center;
@@ -679,7 +725,7 @@ textarea:focus-visible {
 }
 
 .workspace {
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .sidebar {
@@ -724,10 +770,7 @@ textarea:focus-visible {
     background 130ms ease;
 }
 
-.nav-link:hover {
-  color: var(--ink);
-  background: #edf1ee;
-}
+@media (hover: hover) and (pointer: fine) { .nav-link:hover { color: var(--ink); background: #edf1ee; } }
 
 .nav-link-active {
   color: var(--forest-dark);
@@ -769,7 +812,7 @@ textarea:focus-visible {
 }
 
 .workspace-main {
-  min-height: 100vh;
+  min-height: 100dvh;
   margin-left: 244px;
 }
 
@@ -1145,9 +1188,7 @@ textarea:focus-visible {
   transition: background 120ms ease;
 }
 
-.data-table tbody tr:hover {
-  background: #fcfdfc;
-}
+@media (hover: hover) and (pointer: fine) { .data-table tbody tr:hover { background: #fcfdfc; } }
 
 .booking-table {
   min-width: 850px;
@@ -1250,11 +1291,7 @@ textarea:focus-visible {
     color 120ms ease;
 }
 
-.icon-button:hover:not(:disabled) {
-  border-color: #bdcbc5;
-  color: var(--ink);
-  background: #f7f9f7;
-}
+@media (hover: hover) and (pointer: fine) { .icon-button:hover:not(:disabled) { border-color: #bdcbc5; color: var(--ink); background: #f7f9f7; } }
 
 .icon-button:disabled {
   cursor: not-allowed;
@@ -1358,7 +1395,7 @@ textarea:focus-visible {
 .modal {
   display: flex;
   width: min(510px, 100%);
-  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   flex-direction: column;
   gap: 20px;
   overflow-y: auto;
@@ -1530,7 +1567,7 @@ textarea:focus-visible {
 }
 
 .booking-data-scroll {
-  max-height: max(520px, calc(100vh - 320px));
+  max-height: max(520px, calc(100dvh - 320px));
   overflow: auto;
 }
 
@@ -1726,11 +1763,7 @@ textarea:focus-visible {
     transform 140ms ease;
 }
 
-.calendar-venue-card:hover {
-  transform: translateY(-1px);
-  border-color: #b9c9c2;
-  box-shadow: var(--shadow-soft);
-}
+@media (hover: hover) and (pointer: fine) { .calendar-venue-card:hover { transform: translateY(-1px); border-color: #b9c9c2; box-shadow: var(--shadow-soft); } }
 
 .calendar-venue-card strong {
   font-size: 0.92rem;
@@ -1776,7 +1809,7 @@ textarea:focus-visible {
 .calendar-embed {
   display: block;
   width: 100%;
-  height: min(760px, calc(100vh - 280px));
+  height: min(760px, calc(100dvh - 280px));
   min-height: 560px;
   border: 0;
   background: var(--paper);
@@ -2001,7 +2034,7 @@ textarea:focus-visible {
 
 .email-decision-page {
   display: grid;
-  min-height: 100vh;
+  min-height: 100svh;
   place-items: center;
   padding: 28px;
   background: var(--canvas);
@@ -2066,11 +2099,7 @@ textarea:focus-visible {
     transform 140ms ease;
 }
 
-.calendar-venue-card:hover {
-  transform: translateY(-1px);
-  border-color: #b9c9c2;
-  box-shadow: var(--shadow-soft);
-}
+@media (hover: hover) and (pointer: fine) { .calendar-venue-card:hover { transform: translateY(-1px); border-color: #b9c9c2; box-shadow: var(--shadow-soft); } }
 
 .calendar-venue-card strong {
   font-size: 0.92rem;
@@ -2116,7 +2145,7 @@ textarea:focus-visible {
 .calendar-embed {
   display: block;
   width: 100%;
-  height: min(760px, calc(100vh - 280px));
+  height: min(760px, calc(100dvh - 280px));
   min-height: 560px;
   border: 0;
   background: var(--paper);
@@ -2516,7 +2545,8 @@ textarea:focus-visible {
   grid-column: 1 / -1;
 }
 
-.mobile-menu-button,
+.mobile-topbar,
+.tabbar,
 .sidebar-close,
 .sidebar-scrim {
   display: none;
@@ -2541,7 +2571,7 @@ textarea:focus-visible {
   }
 
   .dashboard-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .metric-grid {
@@ -2599,14 +2629,143 @@ textarea:focus-visible {
     padding-top: 35px;
   }
 
+  /* ---- Phone/tablet shell: translucent top bar, bottom tab bar, and a
+     swipe-to-close drawer. Content scrolls under the glass chrome. ---- */
+  .workspace {
+    --topbar-height: calc(52px + var(--safe-top));
+    --tabbar-height: calc(56px + var(--safe-bottom));
+  }
+
+  .mobile-topbar {
+    position: fixed;
+    z-index: 20;
+    inset: 0 0 auto;
+    display: grid;
+    height: var(--topbar-height);
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    align-items: center;
+    gap: 8px;
+    padding: var(--safe-top) max(8px, var(--safe-right)) 0 max(8px, var(--safe-left));
+    background: rgba(244, 246, 243, 0.72);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: 0 1px 0 rgba(23, 32, 30, 0.08);
+  }
+
+  /* Scroll edge effect: the hairline appears only once content is
+     actually scrolling underneath the bar. */
+  @supports (animation-timeline: scroll()) {
+    .mobile-topbar {
+      animation: topbar-edge linear both;
+      animation-timeline: scroll(root);
+      animation-range: 0 24px;
+    }
+  }
+
+  .mobile-menu-button {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    place-items: center;
+    border-radius: 12px;
+    cursor: pointer;
+    color: var(--ink);
+    background: transparent;
+    transition:
+      background var(--dur-press) var(--ease-out),
+      transform var(--dur-press) var(--ease-out);
+  }
+
+  .mobile-menu-button:active {
+    transform: scale(0.92);
+    background: rgba(23, 32, 30, 0.07);
+    transition-duration: 60ms;
+  }
+
+  .mobile-topbar-title {
+    overflow: hidden;
+    font-size: 1.02rem;
+    font-weight: 680;
+    letter-spacing: -0.015em;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabbar {
+    position: fixed;
+    z-index: 20;
+    inset: auto 0 0;
+    display: grid;
+    height: var(--tabbar-height);
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    padding: 0 var(--safe-right) var(--safe-bottom) var(--safe-left);
+    background: rgba(249, 250, 248, 0.78);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: 0 -1px 0 rgba(23, 32, 30, 0.08);
+  }
+
+  .tabbar-link {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 2px 4px;
+    cursor: pointer;
+    color: #7a8580;
+    background: none;
+    font-size: 0.64rem;
+    font-weight: 620;
+    letter-spacing: 0.01em;
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+
+  .tabbar-link span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabbar-link svg {
+    transition: transform var(--dur-press) var(--ease-out);
+  }
+
+  .tabbar-link:active svg {
+    transform: scale(0.86);
+    transition-duration: 60ms;
+  }
+
+  .tabbar-link[aria-current="page"] {
+    color: var(--forest);
+  }
+
   .sidebar {
-    transform: translateX(-102%);
-    box-shadow: 20px 0 60px rgba(20, 42, 35, 0.14);
-    transition: transform 180ms ease;
+    z-index: 40;
+    width: min(300px, 84vw);
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    padding-left: var(--safe-left);
+    transform: translate3d(-100%, 0, 0);
+    transition:
+      transform var(--dur-sheet) var(--ease-sheet),
+      box-shadow var(--dur-sheet) var(--ease-sheet);
+    touch-action: pan-y;
+    will-change: transform;
   }
 
   .sidebar-open {
-    transform: translateX(0);
+    transform: translate3d(0, 0, 0);
+    box-shadow: 24px 0 60px rgba(20, 42, 35, 0.18);
+  }
+
+  .sidebar-nav {
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .sidebar-close {
@@ -2615,28 +2774,20 @@ textarea:focus-visible {
 
   .sidebar-scrim {
     position: fixed;
-    z-index: 25;
+    z-index: 35;
     inset: 0;
     display: block;
+    padding: 0;
     cursor: pointer;
-    background: rgba(18, 32, 28, 0.35);
+    background: rgba(18, 32, 28, 0.32);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-sheet) var(--ease-sheet);
   }
 
-  .mobile-menu-button {
-    position: fixed;
-    z-index: 20;
-    top: 15px;
-    left: 15px;
-    display: grid;
-    width: 40px;
-    height: 40px;
-    place-items: center;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    cursor: pointer;
-    background: rgba(255, 255, 255, 0.9);
-    box-shadow: var(--shadow-soft);
-    backdrop-filter: blur(8px);
+  .workspace-drawer-open .sidebar-scrim {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .workspace-main {
@@ -2644,7 +2795,15 @@ textarea:focus-visible {
   }
 
   .page {
-    padding-top: 78px;
+    padding-top: calc(var(--topbar-height) + 22px);
+    padding-bottom: calc(var(--tabbar-height) + 36px);
+  }
+
+  .conflict-toast-stack {
+    top: calc(var(--topbar-height) + 8px);
+    right: max(12px, var(--safe-right));
+    left: max(12px, var(--safe-left));
+    width: auto;
   }
 
   .metric-grid,
@@ -3014,7 +3173,7 @@ textarea:focus-visible {
 .booking-time-column { height:1440px; position:relative; border-left:1px solid var(--line); background:repeating-linear-gradient(to bottom, var(--line) 0px,var(--line) 1px,transparent 1px,transparent 60px); }
 .booking-time-event { position:absolute; display:flex; flex-direction:column; align-items:flex-start; gap:3px; border:1px solid white; border-left:3px solid #357660; border-radius:5px; padding:4px; background:#e4efe9; color:#214a3d; overflow:hidden; box-sizing:border-box; cursor:pointer; text-align:left; font:inherit; font-size:.72rem; }
 .booking-time-event strong,.booking-time-event span { width:100%; overflow-wrap:anywhere; flex-shrink:0; }
-.booking-time-event:hover { background:#cfe4d8; }
+@media (hover: hover) and (pointer: fine) { .booking-time-event:hover { background:#cfe4d8; } }
 .booking-time-event:focus-visible { z-index:2; }
 @media(max-width:700px) {
   .booking-calendar { min-width:0; }
@@ -3054,7 +3213,7 @@ textarea:focus-visible {
 .booking-list-copy>span,.booking-list-copy small { color:var(--muted); font-size:.8rem; overflow-wrap:anywhere; }
 .booking-list-times { display:flex; flex-direction:column; flex:0 0 112px; gap:7px; text-align:right; font-size:.85rem; line-height:1.4; }
 .booking-list-times time+time { color:var(--muted); }
-.booking-list-event:hover { background:#f5f9f6; }
+@media (hover: hover) and (pointer: fine) { .booking-list-event:hover { background:#f5f9f6; } }
 .booking-list-event:focus-visible,.booking-list-scroll:focus-visible { outline:2px solid #467eb0; outline-offset:-2px; }
 .booking-list-empty { color:var(--muted); font-size:.85rem; padding:4px; }
 @media(max-width:480px) { .booking-list-event { gap:10px; } .booking-list-times { flex-basis:92px; font-size:.78rem; } .booking-list-copy strong { font-size:.92rem; } .booking-list-day h3 { font-size:.85rem; } }
@@ -3179,4 +3338,461 @@ textarea:focus-visible {
   .booking-drawer .drawer-actions { flex-direction: column-reverse; }
   .booking-drawer .drawer-actions .button { width: 100%; min-height: 48px; justify-content: center; }
   .booking-drawer .notification-choice { align-items: flex-start; line-height: 1.5; }
+}
+
+/* ---- Motion ------------------------------------------------------------ */
+
+@keyframes topbar-edge {
+  from { box-shadow: 0 1px 0 rgba(23, 32, 30, 0); }
+  to { box-shadow: 0 1px 0 rgba(23, 32, 30, 0.1); }
+}
+
+/* Toasts materialise from just above where they rest. */
+.conflict-toast {
+  transition:
+    opacity 320ms var(--ease-out),
+    transform 420ms var(--ease-sheet);
+}
+
+@starting-style {
+  .conflict-toast {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+}
+
+/* Translucent chrome turns solid for people who ask for less transparency. */
+@media (prefers-reduced-transparency: reduce) {
+  .mobile-topbar,
+  .tabbar {
+    background: var(--canvas);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* ---- Overlays: modals, dialogs, drawers --------------------------------
+   Desktop: centred surfaces scale up from 0.96 (never from 0) while the
+   scrim fades. Phones: every overlay becomes a bottom sheet that rises
+   along the same path it would leave by. */
+
+html:has(dialog[open]),
+html:has(.modal-backdrop),
+html:has(.drawer-backdrop) {
+  overflow: hidden;
+}
+
+.modal,
+.booking-drawer,
+.booking-event-dialog,
+.request-review-dialog {
+  overscroll-behavior: contain;
+}
+
+.modal-backdrop,
+.drawer-backdrop {
+  transition: opacity 260ms var(--ease-out);
+}
+
+.modal,
+.booking-event-dialog,
+.request-review-dialog {
+  transition:
+    opacity 260ms var(--ease-out),
+    transform var(--dur-sheet) var(--ease-sheet);
+}
+
+.booking-event-dialog::backdrop,
+.request-review-dialog::backdrop {
+  transition: opacity 260ms var(--ease-out);
+}
+
+.booking-drawer {
+  transition: transform var(--dur-sheet) var(--ease-sheet);
+}
+
+@starting-style {
+  .modal-backdrop,
+  .drawer-backdrop,
+  .booking-event-dialog[open]::backdrop,
+  .request-review-dialog[open]::backdrop {
+    opacity: 0;
+  }
+
+  .modal,
+  .booking-event-dialog[open],
+  .request-review-dialog[open] {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  .booking-drawer {
+    transform: translateX(100%);
+  }
+}
+
+@media (max-width: 640px) {
+  .modal-backdrop {
+    place-items: end stretch;
+    padding: calc(var(--safe-top) + 24px) 0 0;
+  }
+
+  .modal,
+  .modal-wide {
+    width: 100%;
+    max-height: calc(100dvh - var(--safe-top) - 24px);
+    padding: 22px max(18px, var(--safe-right)) calc(22px + var(--safe-bottom)) max(18px, var(--safe-left));
+    border-radius: 22px 22px 0 0;
+  }
+
+  .modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .modal-actions .button {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .booking-event-dialog,
+  .request-review-dialog {
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - var(--safe-top) - 24px);
+    margin: auto 0 0;
+    padding-bottom: calc(20px + var(--safe-bottom));
+    border-radius: 22px 22px 0 0;
+  }
+
+  .drawer-backdrop {
+    align-items: flex-end;
+    padding-top: calc(var(--safe-top) + 24px);
+  }
+
+  .booking-drawer {
+    width: 100%;
+    height: auto;
+    max-height: 100%;
+    border-radius: 22px 22px 0 0;
+  }
+
+  @starting-style {
+    .modal,
+    .booking-event-dialog[open],
+    .request-review-dialog[open] {
+      opacity: 1;
+      transform: translateY(100%);
+    }
+
+    .booking-drawer {
+      transform: translateY(100%);
+    }
+  }
+}
+
+/* ---- Calendar ------------------------------------------------------------ */
+
+/* The pager owns horizontal swipes; vertical scrolling stays native. */
+.booking-calendar-pager {
+  touch-action: pan-y;
+  transition:
+    transform var(--dur-sheet) var(--ease-sheet),
+    opacity 260ms var(--ease-out);
+}
+
+.booking-calendar-period {
+  transition:
+    transform var(--dur-sheet) var(--ease-sheet),
+    opacity 260ms var(--ease-out);
+}
+
+@starting-style {
+  .booking-calendar-period[data-direction="next"] {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+
+  .booking-calendar-period[data-direction="prev"] {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+}
+
+/* Segmented controls: one thumb that slides to the chosen segment instead
+   of each button repainting its own background. */
+.booking-view-switch,
+.booking-display-switch {
+  position: relative;
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  isolation: isolate;
+}
+
+.booking-view-switch {
+  --segments: 3;
+  --segment-gap: 4px;
+  --segment-pad: 4px;
+}
+
+.booking-display-switch {
+  --segments: 2;
+  --segment-gap: 0px;
+  --segment-pad: 3px;
+  background: #edf1ee;
+  border-color: transparent;
+}
+
+.booking-view-switch::before,
+.booking-display-switch::before {
+  position: absolute;
+  z-index: -1;
+  top: var(--segment-pad);
+  bottom: var(--segment-pad);
+  left: var(--segment-pad);
+  width: calc((100% - 2 * var(--segment-pad) - (var(--segments) - 1) * var(--segment-gap)) / var(--segments));
+  border-radius: 9px;
+  background: white;
+  box-shadow: 0 1px 2px rgba(22, 59, 37, 0.1), 0 3px 8px rgba(22, 59, 37, 0.08);
+  content: "";
+  transform: translateX(calc(var(--segment-index, 0) * (100% + var(--segment-gap))));
+  transition: transform 320ms var(--ease-sheet);
+}
+
+.booking-view-switch:has(> :nth-child(2)[aria-pressed="true"]),
+.booking-display-switch:has(> :nth-child(2)[aria-pressed="true"]) {
+  --segment-index: 1;
+}
+
+.booking-view-switch:has(> :nth-child(3)[aria-pressed="true"]) {
+  --segment-index: 2;
+}
+
+.booking-view-switch [aria-pressed],
+.booking-display-switch [aria-pressed] {
+  background: transparent !important;
+  box-shadow: none !important;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
+}
+
+.booking-view-switch button[aria-pressed="true"],
+.booking-display-switch button[aria-pressed="true"] {
+  color: var(--forest-dark);
+  font-weight: 600;
+}
+
+.booking-view-switch button:active,
+.booking-display-switch button:active {
+  transform: scale(0.96);
+  transition-duration: 60ms;
+}
+
+/* Press feedback on every tappable calendar surface. */
+.booking-calendar-event,
+.booking-calendar-more,
+.booking-time-event,
+.booking-list-event,
+.booking-calendar-detail-toggle,
+.booking-time-dates button,
+.booking-day-target {
+  transition:
+    background var(--dur-press) var(--ease-out),
+    transform var(--dur-press) var(--ease-out),
+    box-shadow var(--dur-press) var(--ease-out);
+}
+
+.booking-calendar-event:active,
+.booking-time-event:active,
+.booking-calendar-detail-toggle:active {
+  transform: scale(0.98);
+  transition-duration: 60ms;
+}
+
+.booking-day-target:active,
+.booking-time-dates button:active,
+.booking-list-event:active {
+  background: rgba(37, 95, 83, 0.08);
+  transition-duration: 60ms;
+}
+
+.booking-calendar-day {
+  transition: background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.booking-calendar-detail-toggle {
+  border-radius: 12px;
+}
+
+@media (max-width: 700px) {
+  /* A phone month reads like iOS Calendar: a selection ring on the date,
+     not a heavy box around the whole cell. */
+  .booking-calendar-day[data-selected="true"] {
+    box-shadow: none;
+    background: white;
+  }
+
+  .booking-calendar-day[data-selected="true"] .booking-calendar-number {
+    background: var(--ink);
+    color: white;
+  }
+
+  .booking-calendar-day[data-today="true"][data-selected="true"] .booking-calendar-number {
+    background: #255f53;
+  }
+
+  .booking-calendar-day[data-today="true"]:not([data-selected="true"]) .booking-calendar-number {
+    background: transparent;
+    color: #255f53;
+    font-weight: 700;
+  }
+
+  .booking-calendar-number {
+    display: grid;
+    min-width: 30px;
+    height: 30px;
+    place-items: center;
+    padding: 0 !important;
+    border-radius: 999px;
+    transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  }
+}
+
+/* ---- iOS large titles ------------------------------------------------------
+   On phones the page's own h1 is the large title; the compact title in the
+   glass bar fades in only once that heading has scrolled away. Browsers
+   without scroll-driven animations simply show the bar title throughout. */
+@media (max-width: 850px) {
+  @supports (animation-timeline: scroll()) {
+    .mobile-topbar-title {
+      animation: topbar-title linear both;
+      animation-timeline: scroll(root);
+      animation-range: 40px 96px;
+    }
+  }
+
+  .page-header {
+    min-height: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+    margin-bottom: 22px;
+  }
+
+  .page-header h1 {
+    margin: 6px 0 6px;
+    font-size: 2.15rem;
+    letter-spacing: -0.035em;
+    line-height: 1.05;
+  }
+
+  .page-header-actions {
+    flex-wrap: wrap;
+  }
+}
+
+@keyframes topbar-title {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Reduced motion keeps feedback but drops travel: overlays and periods
+   cross-fade in place instead of sliding or scaling. */
+@media (prefers-reduced-motion: reduce) {
+  @starting-style {
+    .modal,
+    .booking-event-dialog[open],
+    .request-review-dialog[open],
+    .booking-drawer,
+    .booking-calendar-period[data-direction],
+    .conflict-toast {
+      transform: none;
+    }
+  }
+
+  .mobile-topbar,
+  .mobile-topbar-title {
+    animation: none;
+  }
+}
+
+/* Phone toolbar: ‹ Today › spans the row, the date picker gets its own full
+   row so a 16px (no-zoom) date never clips. */
+@media (max-width: 700px) {
+  .booking-calendar-navigation {
+    flex: 1 1 100%;
+  }
+
+  .booking-calendar-navigation .button:nth-child(2) {
+    flex: 1;
+  }
+
+  .booking-calendar-toolbar .field {
+    flex: 1 1 100%;
+  }
+}
+
+/* ---- Bookings list on phones ---------------------------------------------
+   Each row becomes a card: requester + status on top, room & time below,
+   actions last. No sideways-scrolling table inside a box. */
+@media (max-width: 640px) {
+  .booking-table {
+    min-width: 0;
+  }
+
+  .booking-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .booking-table,
+  .booking-table tbody {
+    display: block;
+  }
+
+  .booking-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .booking-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .booking-table tbody td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    font-size: 0.86rem;
+  }
+
+  .booking-table tbody td { grid-column: 1 / -1; overflow-wrap: anywhere; }
+  .booking-table tbody td:nth-child(1) { grid-row: 1; }
+  .booking-table tbody td:nth-child(3) { grid-row: 2; }
+  .booking-table tbody td:nth-child(2) { grid-row: 3; }
+  .booking-table tbody td:nth-child(4) { grid-row: 4; }
+  .booking-table tbody td.table-message { grid-column: 1 / -1; }
+  .booking-table tbody tr.booking-row-conflict { background: #fffdf8; }
+
+  .booking-table .row-actions {
+    justify-content: flex-start;
+  }
+
+  .booking-table tbody td:nth-child(3) .status-badge {
+    width: fit-content;
+  }
+
+  .booking-table .row-actions .icon-button {
+    width: 44px;
+    height: 44px;
+  }
 }

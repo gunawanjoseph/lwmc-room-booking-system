@@ -23,7 +23,7 @@
 .support-thread { display: grid; gap: 6px; text-align: left; width: 100%; padding: 14px 12px; margin: 0 0 6px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: inherit; cursor: pointer; overflow-wrap: anywhere; line-height: 1.4; }
 .support-thread strong { font-size: .88rem; font-weight: 700; }
 .support-thread span, .support-thread small { font-size: .75rem; color: var(--muted); font-weight: 400; }
-.support-thread:hover:not(:disabled) { background: var(--canvas); }
+@media (hover: hover) and (pointer: fine) { .support-thread:hover:not(:disabled) { background: var(--canvas); } }
 .support-thread.selected { border-color: #b4d3c4; background: var(--mint-soft); }
 .support-thread:disabled { cursor: default; opacity: .6; }
 .support-thread:focus-visible, .support-tabs button:focus-visible { outline: 3px solid var(--forest); outline-offset: -3px; }

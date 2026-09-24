@@ -625,10 +625,10 @@ function renderDetailRows(rows: EmailDetailRow[]): string {
     .map(
       (row) => `
         <tr>
-          <td style="padding:12px 0 12px 0;width:210px;vertical-align:top;font-size:14px;line-height:1.5;color:#6b78bb;font-weight:400">${escapeHtml(
+          <td class="email-detail-label" style="padding:12px 0 12px 0;width:190px;vertical-align:top;font-size:14px;line-height:1.5;color:#6b78bb;font-weight:400;border-bottom:1px solid #f1f2f7">${escapeHtml(
             row.label,
           )}</td>
-          <td style="padding:12px 0 12px 12px;vertical-align:top;font-size:14px;line-height:1.5">${renderDetailValue(
+          <td class="email-detail-value" style="padding:12px 0 12px 12px;vertical-align:top;font-size:14px;line-height:1.5;border-bottom:1px solid #f1f2f7">${renderDetailValue(
             row,
           )}</td>
         </tr>`,
@@ -639,13 +639,13 @@ function renderDetailRows(rows: EmailDetailRow[]): string {
 function actionButtonLink(label: string, href: string): string {
   return `<a href="${escapeHtml(
     href,
-  )}" style="display:inline-block;background:#2f6fdd;color:#fff;text-decoration:none;font-family:Arial,sans-serif;font-size:14px;font-weight:700;padding:12px 18px;border-radius:8px">${escapeHtml(
+  )}" style="display:inline-block;background:#2f6fdd;color:#fff;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;line-height:20px;padding:13px 22px;border-radius:10px;mso-padding-alt:0">${escapeHtml(
     label,
   )}</a>`;
 }
 
 function renderActionButton(label: string, href: string): string {
-  return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr><td>${actionButtonLink(label, href)}</td></tr></table>`;
+  return `<table role="presentation" class="email-actions" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr><td class="email-action">${actionButtonLink(label, href)}</td></tr></table>`;
 }
 
 // Buttons share one table row so they sit side by side in email clients.
@@ -658,11 +658,11 @@ function renderActionButtonRow(
         `<td class="email-action" style="padding:0 ${index < buttons.length - 1 ? 12 : 0}px 0 0">${actionButtonLink(button.label, button.href)}</td>`,
     )
     .join("");
-  return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr>${cells}</tr></table>`;
+  return `<table role="presentation" class="email-actions" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr>${cells}</tr></table>`;
 }
 
 function renderApprovedBookingAccessNotice(): string {
-  return `<div style="margin:20px 0 0 0;padding:16px;background:#fff7f6;border-left:4px solid #d92d20;border-radius:6px;font-family:Arial,sans-serif;font-size:14px;line-height:1.7">
+  return `<div style="margin:20px 0 0 0;padding:16px;background:#fff7f6;border-left:4px solid #d92d20;border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.7">
     <p style="margin:0 0 8px 0;color:#333">${escapeHtml(APPROVED_BOOKING_ACCESS_NOTICE)}</p>
     <p style="margin:0;color:#b42318;font-weight:700">${escapeHtml(APPROVED_BOOKING_SHUTDOWN_NOTICE)}</p>
   </div>`;
@@ -680,14 +680,43 @@ function renderEmailTemplate(input: EmailTemplateInput): string {
       )}</p>`
     : "";
 
+  // Inbox preview line: the subtitle or first sentence, padded so mail apps
+  // don't pull body text (like the logo alt) into the preview.
+  const preheader = escapeHtml(
+    input.subtitle || input.introLines.find(Boolean) || input.title,
+  );
+
   return `<!doctype html>
-<html>
-  <head><meta name="viewport" content="width=device-width, initial-scale=1"><style>@media(max-width:640px){.email-action{display:block!important;padding:0 0 12px!important}.email-action a{display:block!important;text-align:center}.email-content{padding-left:18px!important;padding-right:18px!important}}</style></head>
-  <body style="margin:0;padding:0;background:#f3f1ff;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f1ff;border-collapse:collapse;">
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="x-apple-disable-message-reformatting">
+    <meta name="format-detection" content="telephone=no,date=no,address=no,email=no,url=no">
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
+    <style>
+      body{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+      body,table,td,p,a,span,h1{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+      @media(max-width:640px){
+        .email-card{border-radius:0!important}
+        .email-outer{padding:0 0 20px!important}
+        .email-content{padding-left:20px!important;padding-right:20px!important}
+        .email-actions{width:100%!important}
+        .email-action{display:block!important;padding:0 0 12px!important}
+        .email-action a{display:block!important;text-align:center}
+        .email-detail-label{display:block!important;width:auto!important;padding:14px 0 2px!important;border-bottom:0!important;font-size:13px!important}
+        .email-detail-value{display:block!important;width:auto!important;padding:0 0 14px!important;font-size:15px!important}
+        .email-intro p{font-size:15px!important}
+      }
+    </style>
+  </head>
+  <body style="margin:0;padding:0;background:#f3f1ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f3f1ff;opacity:0">${preheader}&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;</div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f1ff;border-collapse:collapse;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
       <tr>
-        <td align="center" style="padding:16px 12px 28px;">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;max-width:620px;background:#ffffff;border-collapse:collapse;">
+        <td align="center" class="email-outer" style="padding:24px 12px 32px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="email-card" style="width:100%;max-width:620px;background:#ffffff;border-collapse:separate;border-radius:16px;overflow:hidden;">
             <tr>
               <td align="center" style="padding:16px 28px 8px;">
                 <img src="${escapeHtml(LWMC_LOGO_URL)}" alt="Living Waters Methodist Church" style="display:block;width:360px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;">
@@ -695,14 +724,14 @@ function renderEmailTemplate(input: EmailTemplateInput): string {
             </tr>
             <tr>
               <td class="email-content" style="padding:0 40px 12px;">
-                <h1 style="margin:0;font-family:Arial,sans-serif;font-size:22px;line-height:1.25;color:#1d2e67;font-weight:700;text-align:left;">${escapeHtml(
+                <h1 style="margin:0;letter-spacing:-0.01em;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:22px;line-height:1.25;color:#1d2e67;font-weight:700;text-align:left;">${escapeHtml(
                   input.title,
                 )}</h1>
-                ${input.subtitle ? `<p style="margin:8px 0 0 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#4d5686;font-weight:700">${escapeHtml(input.subtitle)}</p>` : ""}
+                ${input.subtitle ? `<p style="margin:8px 0 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#4d5686;font-weight:700">${escapeHtml(input.subtitle)}</p>` : ""}
               </td>
             </tr>
             <tr>
-              <td class="email-content" style="padding:0 40px 6px;">
+              <td class="email-content email-intro" style="padding:0 40px 6px;">
                 ${renderIntroParagraphs(input.introLines)}
               </td>
             </tr>
@@ -2284,7 +2313,7 @@ async function withSubmitterBookings(ctx: ActionCtx, email: string, message: {su
   const heading=`Your outstanding bookings (from ${today}, ${timezone})`;
   const snapshotLabel=snapshot ? `Snapshot when your change was saved (${new Date(now).toISOString()}).` : "Snapshot at email sending time.";
   const text=`${message.text}\n\n${heading}\nPending and approved meetings. ${snapshotLabel}\n${table.text}\n\nView the public booking calendar: ${link}\nNo sign-in required.`;
-  const footer=`<section style="max-width:640px;margin:24px auto;padding:24px;background:#fff;font-family:Arial,sans-serif"><h2 style="font-size:18px">${escapeBookingHtml(heading)}</h2><p>Pending and approved meetings. ${snapshotLabel}</p>${table.html}<p><a href="${escapeBookingHtml(link)}">View the public booking calendar</a> · No sign-in required.</p></section>`;
+  const footer=`<section style="max-width:640px;margin:24px auto;padding:24px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"><h2 style="font-size:18px">${escapeBookingHtml(heading)}</h2><p>Pending and approved meetings. ${snapshotLabel}</p>${table.html}<p><a href="${escapeBookingHtml(link)}">View the public booking calendar</a> · No sign-in required.</p></section>`;
   return {...message,text,html:message.html.includes("</body>")?message.html.replace("</body>",`${footer}</body>`):`${message.html}${footer}`};
 }
 
@@ -2318,7 +2347,7 @@ export const sendBookingNotice=internalAction({args:{noticeId:v.id("bookingNotic
     const message=await withSubmitterBookings(ctx,notice.recipientEmail,{
       subject:`Room booking ${notice.kind==="deleted"?"cancelled":"updated"}: ${notice.bookingReference}`,
       text:`${summary}\n${calendar}\n${notice.detailChanges}\n\n${notice.kind==="deleted"?"Cancelled meetings":"Previous details"}\n${before.text}${notice.kind==="edited"?`\n\nUpdated details\n${after.text}`:""}`,
-      html:`<html><body><main style="max-width:640px;margin:auto;padding:24px;font-family:Arial,sans-serif"><h1 style="font-size:22px">${escapeBookingHtml(summary)}</h1><p>${escapeBookingHtml(calendar)}</p>${notice.detailChanges?`<p style="white-space:pre-wrap">${escapeBookingHtml(notice.detailChanges)}</p>`:""}<h2>${notice.kind==="deleted"?"Cancelled meetings":"Previous details"}</h2>${before.html}${notice.kind==="edited"?`<h2>Updated details</h2>${after.html}`:""}</main></body></html>`,
+      html:`<html><body><main style="max-width:640px;margin:auto;padding:24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"><h1 style="font-size:22px">${escapeBookingHtml(summary)}</h1><p>${escapeBookingHtml(calendar)}</p>${notice.detailChanges?`<p style="white-space:pre-wrap">${escapeBookingHtml(notice.detailChanges)}</p>`:""}<h2>${notice.kind==="deleted"?"Cancelled meetings":"Previous details"}</h2>${before.html}${notice.kind==="edited"?`<h2>Updated details</h2>${after.html}`:""}</main></body></html>`,
     },notice.outstandingJson);
     await sendGmail({...message,to:notice.recipientEmail,messageKey:`booking-change-${args.noticeId}`});
     }
