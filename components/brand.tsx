@@ -1,13 +1,20 @@
 import Image from "next/image";
 import Link from "next/link";
 
-export function Brand({ compact = false }: { compact?: boolean }) {
+export function Brand({
+  compact = false,
+  newTab = false,
+}: {
+  compact?: boolean;
+  newTab?: boolean;
+}) {
   const size = compact ? 34 : 38;
   return (
     <Link
       href="/"
       className={`brand${compact ? " brand-compact" : ""}`}
       aria-label="RoomOps, Living Waters Methodist Church, home"
+      {...(newTab ? { target: "_blank", rel: "noopener" } : {})}
     >
       <Image
         className="brand-mark"

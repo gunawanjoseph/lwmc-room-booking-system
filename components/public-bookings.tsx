@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { filterPublicMeetings } from "@/convex/lib/publicBookings";
@@ -15,6 +15,9 @@ import { BookingList } from "@/components/booking-list";
 function FilterGroup({label,options,selected,onChange}:{label:string;options:{value:string;label:string}[];selected:string[];onChange:(values:string[])=>void}) {
   return <fieldset className="public-booking-filter"><legend>{label}</legend>{options.map(option=><label key={option.value}><input type="checkbox" checked={selected.includes(option.value)} onChange={event=>onChange(event.target.checked?[...selected,option.value]:selected.filter(value=>value!==option.value))}/>{option.label}</label>)}</fieldset>;
 }
+const noSubscribe=()=>()=>{};
+function isFramed(){try{return window.self!==window.top;}catch{return true;}}
+
 export function PublicBookings() {
   const settings=useQuery(api.myBookings.publicSettings,{});
   const [month,setMonth]=useState(()=>dateKey(Date.now(),"Asia/Singapore").slice(0,7));
@@ -35,7 +38,11 @@ export function PublicBookings() {
   const today=dateKey(now,timezone);
   const focusDay=month===today.slice(0,7)?today:`${month}-01`;
   function reset(){setMinistries([]);setRooms([]);}
-  return <main className="page my-bookings-page"><header className="my-bookings-header"><Brand/><Link className="button button-secondary" href="/sign-in">Administrator sign in</Link></header>
+  // When framed (e.g. the leaders' portal on Google Sites), links to Clerk-protected
+  // pages open in a new tab: sign-in cannot work inside a third-party frame on iOS.
+  const framed=useSyncExternalStore(noSubscribe,isFramed,()=>false);
+  const outbound=framed?{target:"_blank",rel:"noopener"}:{};
+  return <main className="page my-bookings-page"><header className="my-bookings-header"><Brand newTab={framed}/><Link className="button button-secondary" href="/sign-in" {...outbound}>Administrator sign in</Link></header>
     <h1>Booking calendar</h1>
     <section className="panel my-bookings-panel">
       <div className="booking-filter-heading"><p>{!ministries.length&&!rooms.length?"All Bookings":"Filtered Bookings"}</p><button className="button button-secondary" onClick={reset}>Reset filters</button></div>

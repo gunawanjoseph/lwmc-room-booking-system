@@ -5,7 +5,10 @@ import { clerkMiddleware } from "@clerk/nextjs/server";
 import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
 const clerk = clerkMiddleware();
 export default function proxy(request: NextRequest, event: NextFetchEvent) {
-  if (request.nextUrl.pathname.replace(/\/$/, "") === "/booking-request") return NextResponse.next();
+  // Public pages never touch Clerk, so they load inside third-party frames
+  // (Google Sites) where iOS blocks cookies.
+  const path = request.nextUrl.pathname.replace(/\/$/, "");
+  if (path === "/booking-request" || path === "/booking-calendar") return NextResponse.next();
   return clerk(request, event);
 }
 
