@@ -226,9 +226,9 @@ Recurrence supports no repeat, daily, weekly, every two weeks, ordinal-weekday
 monthly, and same-date monthly patterns, with optional last dates. Self-overlap,
 UTC-offset transitions, and a 2,000 reservation-claim-slot limit are checked.
 
-### Edit and delete recurring bookings
+### Edit and cancel recurring bookings
 
-In-app editors and the removal panel offer **This event**, **This and following
+In-app editors and the cancellation panel offer **This event**, **This and following
 events**, and **All events**. Following means the selected occurrence and meetings
 whose current start times are at or after it. Scoped edits apply room, time,
 title, purpose, and ministry changes while retaining unselected occurrences.
@@ -241,11 +241,20 @@ than recreating cancelled meetings. Changing the recurrence definition can
 regenerate occurrences. Preview/save enforce overlap limits, and revision guards
 reject stale edits.
 
-Partial deletion saves remaining occurrences and queues Calendar reconciliation.
-Full deletion verifies removal of managed Google events before removing the
-booking, reservation claims, and decision links. Failed cleanup preserves the
-booking for retry. If a partial scope covers every remaining occurrence, it uses
-full deletion. Reconciliation discovers managed events, cleans obsolete events,
+Cancelling a booking keeps its record in **Bookings** and **Booking Data** with
+status **Cancelled**. Cancelled records are read-only: editing and resynchronizing
+are disabled on the server and in the UI. The only remaining action is **Erase
+data**, which permanently removes that booking record after Calendar cleanup.
+Audit logs and notification/request history are retained; this is not a full
+personal-data purge. Erasing a record also revokes its private management links.
+
+Partial cancellation keeps a separate cancelled record for the selected meetings,
+retains the active meetings, and queues Calendar reconciliation. The cancelled
+record cannot be erased until cleanup succeeds. Retry synchronization on the
+remaining active booking if cleanup fails. Full cancellation verifies removal of
+managed Google events before marking the booking cancelled and releasing room
+reservations. Failed cleanup preserves the active booking for retry. If a partial
+scope covers every remaining occurrence, it uses full cancellation. Reconciliation discovers managed events, cleans obsolete events,
 recreates retained occurrences, and verifies them. Google event IDs can change.
 
 Convex and Google Calendar are not one atomic transaction. Pending or failed
@@ -266,8 +275,8 @@ fields, with an in-app warning when capped.
 ## Submitter emails
 
 Gmail sends receipts, decisions, and no-login email approval links. Administrators
-can select **Email the submitter** when editing or deleting; it is off by default.
-Notices describe scope, changed fields, and previous/updated or removed meetings.
+can select **Email the submitter** when editing or cancelling; it is off by default.
+Notices describe scope, changed fields, and previous/updated or cancelled meetings.
 Only changed table rows generate notices. Correcting the requester email sends
 the notice to the newly saved address.
 
@@ -277,9 +286,9 @@ calendar link. The emailed table remains recipient-specific even though the
 linked calendar shows everyone's published bookings. Administrator approval/conflict
 emails, developer alerts, and Support notifications do not receive this footer.
 
-Edit/delete notices preserve an outstanding-bookings snapshot in the successful
+Edit/cancellation notices preserve an outstanding-bookings snapshot in the successful
 change transaction; batch edits capture the completed batch. Retries use that
-snapshot even after subsequent changes. Full deletion queues its notice only
+snapshot even after subsequent changes. Full cancellation queues its notice only
 after verified Calendar cleanup. Scoped notices explain that Calendar or room
 control changes may still be pending. Receipts, decision emails, and legacy
 notices without saved snapshots use the schedule at sending time.
@@ -352,3 +361,189 @@ troubleshooting and refresh old browser tabs after deployment.
 - `shared/roles.ts`: role labels and capability matrix.
 - `tests/`: regression coverage.
 - `docs/`: integration setup and operational guides.
+
+## Requester changes and cancellations
+
+Approval emails contain **Request Changes** and **Cancel Booking** buttons. Both
+open `/booking-request` without an account. Each link uses a private 244-bit random
+bearer token in the URL fragment; booking IDs, user IDs and email addresses are not
+in the URL. Convex validates the token and current requester on every operation.
+Treat the link like a password. Changing the requester email invalidates the old
+link, and administrators with booking-edit permission can revoke links through
+`bookingRequests.revokeLink`. A completed full cancellation leaves a read-only
+receipt at the same link.
+
+The management page shows the approved booking first. Requesters can then edit the
+room, date, start/end time, title, purpose and ministry using native controls, review
+highlighted differences, and submit a note. Requester identity stays fixed to the
+verified email recipient. Additional text, number, email and phone answers are editable and stored per
+occurrence. File uploads, signatures, payment fields and recurrence frequency/count
+remain administrator-managed. The room choices use the existing bookable venue
+rules, including combined Ministry Centre rooms. Desktop and mobile layouts share
+the same steps and clear progress/error states.
+
+Choose **This event only** or **This event and following events**. Following edits
+keep the frequency unchanged (daily, weekly, fortnightly or monthly). Changing the
+start re-anchors the remaining concrete meetings to the new calendar day while
+keeping their identities and count; earlier meetings are preserved. Monthly rules
+use calendar dates/ordinal weekdays, not a fixed number of milliseconds. Months
+without the required day are skipped. Previously deleted meetings are not recreated.
+The remaining meetings adopt the selected times and details. Availability is
+checked for every affected occurrence. Existing occurrence exceptions are used;
+sequence numbers are not assumed to be chronological.
+
+Requests and confirmed cancellations must begin more than two hours before every
+affected original meeting. Proposed edit starts must also stay outside that window.
+The server checks again before an edit enters approval and when approval begins.
+An outdated booking snapshot or an expired cutoff prevents the change. One active
+operation is allowed per booking, with idempotent submission handling and version-checked approval.
+A pending edit can be updated in place or superseded by a confirmed cancellation.
+Each edit submission, including an update to a pending request, uses one of three
+lifetime edits per booking. Rejected and completed edits count; cancellation does
+not. Historical requests seed the counter when it is first used. Previous pending
+versions remain in request history. The server checks both the booking revision and
+the exact request revision reviewed by the approver. The first committed conflicting
+operation wins; stale actions cannot silently overwrite it. This is transaction
+commit ordering, not a guarantee of which network request arrives first.
+
+### Edit approval
+
+Booking approvers, managers, the head admin and the developer use **Edit Requests**
+at `/booking-requests`. Compare current and requested details, then approve or
+reject, with an optional reason included in the requester email. The searchable
+list uses the same cards, status badges and controls as the booking page. Opening a
+request captures its reviewed version; close and reopen it after a stale-state message.
+Approval automatically applies the change; no manual booking edit is needed.
+Older free-text requests remain visible but cannot be automatically approved; ask
+the requester to resubmit a structured request using their existing link.
+
+Submission checks the same Convex reservation claims as ordinary bookings and
+reads Google Calendar events, excluding only the booking's own verified events.
+Unavailable edits are rejected automatically, with a requester email and no approval
+work. Valid edits leave the original booking unchanged while awaiting approval.
+Approval checks availability again and holds both old and proposed reservation
+claims during synchronization, blocking competing RoomOps bookings.
+
+Google replacement events are created and verified before originals are removed.
+Another check before removal detects conflicts introduced during creation and
+rolls back replacements if needed. Ordinary unaffected occurrences retain their
+Google event IDs. Legacy recurring parents are rebuilt as the retained concrete
+schedule so obsolete recurrence rules cannot recreate cancelled meetings.
+
+Calendar work uses durable phases, deterministic event IDs and 31-minute worker
+leases. Failed attempts retry with backoff; after repeated failure, use **Needs
+attention → Retry synchronization** in Edit Requests. Original database details and
+reservation protection remain until Calendar success. After partial external writes,
+Calendar may temporarily show an incomplete transition: a failure is never reported
+as a completed approval or cancellation. Suspicious/failure logs use the existing
+`DEVELOPER_EMAIL` notification system.
+
+Google Calendar does not offer a transaction spanning its API and Convex. Direct
+external Calendar edits can still race the final check; make booking changes through
+RoomOps where possible. Direct Google edits are not imported into the admin booking
+record by this feature. Building controls are not directly operated by this code;
+their existing integration consumes the resulting Calendar schedule.
+
+### Cancellation and notifications
+
+Cancellation has its own confirmation step and does not require administrator
+approval. Confirmation immediately starts verified Calendar cleanup. When cleanup
+succeeds, RoomOps releases the selected reservations, updates or removes the active
+booking using its existing lifecycle, and cancels obsolete queued booking emails.
+Request history retains the original details, scope, requester, reason and outcome,
+even after full cancellation. A failed cleanup keeps reservations protected and shows
+that cancellation has not completed.
+
+Valid edit submissions send a receipt to the requester and a comparison/review link
+to active entries in **Approver Emails**. Rejection, automatic unavailability and
+successful approval each send the appropriate requester message. Successful
+cancellation sends a requester receipt and an informational approver notification.
+Approver review requires signing in with booking-approval permission; notification
+recipient settings do not grant that permission. Email delivery uses the existing
+Gmail outbox, leases and retry controls. Submitter emails include a snapshot of their
+outstanding bookings captured in the lifecycle transaction; approver messages do not.
+
+### Deployment
+
+Deploy Convex schema/functions and the frontend together, then refresh old tabs.
+Set `BOOKING_MINISTRIES_JSON` in the **Convex deployment environment variables**
+to this JSON array of ministries:
+
+```json
+["Children's Ministry","Church Archivist","Church Governance","Church Office","Communications","Discipleship & Nurture","Finance","Hospitality","LCEC","Mandarin Ministry","Missions","Others (Please Specify)","Outreach & Social Concerns","Pastor's Office","PPRSC","Prayer","Property Management","Seniors Ministry","Springs-WSCS","Witness & Evangelism + ACSI Ministry","Worship & Music","Young Adults Ministry","Youth Ministry"]
+```
+
+Selecting **Others (Please Specify)** reveals a required ministry name field
+(1–120 characters). The server validates it and stores `Others (Please Specify): <name>` in the affected meetings. Reviews and emails
+show the full value. Google Calendar event titles and descriptions, and the public
+calendar, show only `<name>`, without the `Others (Please Specify):` prefix.
+Reopening the editor restores both fields.
+
+This is the authoritative dropdown and server
+allowlist; it is not inferred from historical free-text submissions. Configure it
+separately in dev and production. Missing or invalid configuration disables edit
+submission with a helpful message; cancellations remain available. Legacy bookings
+with unlisted ministries must select a valid ministry before submitting changes.
+
+Phone fields accept Singapore eight-digit numbers beginning with 3, 6, 8 or 9 and
+store them as `(65) 8123 4567`. Numbers from other countries are accepted when they
+start with a country code, as `+44 20 7946 0958` or `(44) 20 7946 0958`
+(8–15 digits in total), and are stored as entered. Legacy `full:` values are
+normalized when edited.
+Start and end times define duration; no separate Duration input is shown.
+Administrator edits, bulk table edits and cancellations have optional comments,
+stored in the audit log and included when an email notification is selected.
+
+Configure the existing Calendar service
+account, venue map and `GOOGLE_CALENDAR_ENABLED=true`, Gmail credentials, active
+Approver Emails, and Convex `APP_BASE_URL` for the intended frontend deployment.
+The Calendar identity needs full event read/write access to each mapped calendar;
+free/busy-only access cannot distinguish the booking being edited from conflicts.
+Keep the public `/booking-request` route outside the Clerk-authenticated layout.
+
+Schema additions are optional for existing rows: request proposal/version, original
+and candidate snapshots, idempotency key, processing phase, lease and event targets;
+a booking operation lock; link revocation; and request-specific fields in the existing
+booking-notice outbox. Existing records need no backfill. Request revisions and the lifetime edit counter
+are initialized lazily; do not reset these fields to grant additional attempts. Histories retain the previous
+`pending`, `completed` and `declined` states and add `checking`, `applying` and `failed`.
+Do not remove the requester operation fields while a synchronization is in flight.
+
+Regression coverage includes single/recurring changes, room and time validation,
+cutoffs, invalid/revoked tokens, duplicate requests, authorization, conflicts at
+submission and approval, automatic cancellation, Calendar rollback/recovery, and
+requester-only email snapshots. Run the validation commands above, then exercise
+approval, rejection and cancellation against the intended test Calendar and mailbox
+before using a deployment for live bookings.
+
+### Booking reminders
+
+Approved bookings receive email reminders for each meeting, including recurring
+meetings, using the latest confirmed room, title and times:
+
+- **48 hours before:** booking details and private links to request changes or
+  cancel the selected meeting. The requester can also choose following meetings.
+- **2 hours before:** booking details and a notice that online changes and
+  cancellations are closed. No edit/cancel links are included.
+
+Eligibility starts when the meeting is successfully added to Google Calendar.
+A meeting added less than 48 hours before its start receives only the 2-hour
+reminder; one added less than 2 hours before its start receives neither. Changed
+times invalidate old reminders and use the newly confirmed schedule. Metadata-only
+changes do not duplicate reminders. Cancelled meetings receive no reminders.
+The two-hour cutoff is enforced by the server, including at the exact deadline.
+
+Deploy both Convex and the frontend together. Reminders use the existing Gmail
+settings and `APP_BASE_URL`; no new environment variables are required. Convex
+scheduled functions send the messages, and an hourly cron enrolls existing
+approved bookings. Past reminder deadlines are not backfilled. Email delivery
+is asynchronous and may be delayed; jobs more than 15 minutes late are skipped.
+Brief Calendar activity defers delivery within that window. A reminder in flight
+briefly blocks edits/cancellation to keep its details consistent. Delivery failures
+are audited and retried up to five attempts within the window. An expired delivery
+lease is logged as uncertain without another automatic send. Gmail does not offer
+an exactly-once delivery guarantee.
+
+Emails use a narrow-screen layout and a two-column outstanding-bookings table.
+The private management page provides a cancellation receipt, separate confirmation
+for cancellation, and inline errors without clearing entered edits.

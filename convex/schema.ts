@@ -26,6 +26,7 @@ export const userStatusValidator = v.union(
 );
 
 export const bookingStatusValidator = v.union(
+  v.literal("cancelled"),
   v.literal("pending"),
   v.literal("approved"),
   v.literal("rejected"),
@@ -42,6 +43,7 @@ export const recurrenceFrequencyValidator = v.union(
 );
 
 export const occurrenceDetailsValidator = v.object({
+  responses: v.optional(v.array(v.object({ qid: v.string(), value: v.string() }))),
   eventName: v.optional(v.string()),
   purpose: v.optional(v.string()),
   ministry: v.optional(v.string()),
@@ -105,8 +107,29 @@ export const jotformResponseValidator = v.object({
 });
 
 export default defineSchema({
+  requesterLinks: defineTable({
+    bookingId: v.id("bookings"), token: v.string(), email: v.string(), createdAt: v.number(), revokedAt: v.optional(v.number()),
+  }).index("by_token", ["token"]).index("by_booking", ["bookingId"]),
+  bookingRequests: defineTable({
+    bookingId: v.id("bookings"), requesterEmail: v.string(), requesterName: v.string(),
+    kind: v.union(v.literal("change"), v.literal("cancel")),
+    scope: v.union(v.literal("occurrence"), v.literal("following")),
+    sequence: v.number(), snapshot: v.string(), message: v.string(), timezone: v.string(),
+    status: v.union(v.literal("pending"), v.literal("completed"), v.literal("declined"), v.literal("checking"), v.literal("applying"), v.literal("failed")),
+    requestRevision: v.optional(v.number()),
+    revisions: v.optional(v.array(v.object({ revision: v.number(), snapshot: v.optional(v.string()), version: v.optional(v.string()), operationKey: v.string(), proposal: v.optional(v.string()), message: v.string(), sequence: v.number(), scope: v.union(v.literal("occurrence"),v.literal("following")), createdAt: v.number() }))),
+    proposal: v.optional(v.string()), version: v.optional(v.string()), operationKey: v.optional(v.string()),
+    original: v.optional(v.string()), candidate: v.optional(v.string()),
+    phase: v.optional(v.union(v.literal("validate"), v.literal("create"), v.literal("delete"), v.literal("rollback"))),
+    retained: v.optional(v.array(calendarEventRefValidator)), targets: v.optional(v.array(calendarEventRefValidator)), replacements: v.optional(v.array(calendarEventRefValidator)),
+    workerToken: v.optional(v.string()), leaseUntil: v.optional(v.number()), attempts: v.optional(v.number()),
+    outstandingJson: v.optional(v.string()),
+    createdAt: v.number(), resolvedAt: v.optional(v.number()), resolvedBy: v.optional(v.string()),
+    response: v.optional(v.string()),
+  }).index("by_booking", ["bookingId"]).index("by_status", ["status"]),
   publicCalendarCache:defineTable({key:v.string(),json:v.optional(v.string()),fetchedAt:v.optional(v.number()),retryAt:v.number(),token:v.optional(v.string()),leaseUntil:v.optional(v.number()),error:v.optional(v.string())}).index("by_key",["key"]).index("by_retry",["retryAt"]),
   bookingNotices: defineTable({
+    requestSubject:v.optional(v.string()), requestText:v.optional(v.string()), approverNotice:v.optional(v.boolean()),
     bookingReference:v.string(),recipientEmail:v.string(),kind:v.union(v.literal("edited"),v.literal("deleted")),
     outstandingJson:v.optional(v.string()),
     scope:v.string(),detailChanges:v.string(),beforeJson:v.string(),afterJson:v.string(),calendarPending:v.boolean(),
@@ -173,7 +196,16 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_email", ["email"]),
 
+  bookingReminders: defineTable({
+    bookingId:v.id("bookings"),key:v.string(),kind:v.union(v.literal("two_days"),v.literal("two_hours")),sequence:v.number(),startAt:v.number(),dueAt:v.number(),addedAt:v.number(),
+    status:v.union(v.literal("pending"),v.literal("sending"),v.literal("sent"),v.literal("skipped"),v.literal("failed")),attempts:v.number(),token:v.optional(v.string()),leaseUntil:v.optional(v.number()),sentAt:v.optional(v.number()),
+  }).index("by_booking",["bookingId"]),
   bookings: defineTable({
+    cancelledAt: v.optional(v.number()), cancelledBy: v.optional(v.string()), cancellationReason: v.optional(v.string()),
+    cancelledFromBookingId: v.optional(v.id("bookings")), sourceSubmissionId: v.optional(v.string()), cancellationPending: v.optional(v.boolean()),
+    reminderLeaseToken: v.optional(v.string()), reminderLeaseExpiresAt: v.optional(v.number()),
+    requesterEditCount: v.optional(v.number()),
+    requesterOperationId: v.optional(v.id("bookingRequests")),
     source: v.literal("jotform"),
     jotformFormId: v.string(),
     jotformSubmissionId: v.string(),
@@ -259,14 +291,24 @@ export default defineSchema({
     revision: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    // Set once planReminders (direct call or the hourly sweep) has run for
+    // this booking, so the sweep never has to re-read bookings it has
+    // already enrolled — see convex/bookingReminders.ts.
+    remindersSweptAt: v.optional(v.number()),
   })
+    .index("by_cancelled_from", ["cancelledFromBookingId"])
     .index("by_submission_id", ["jotformSubmissionId"])
     .index("by_requester_email", ["requesterEmail"])
     .index("by_room_start", ["roomKey", "startAt"])
     .index("by_status", ["status"])
+    .index("by_status_reminders_swept", ["status", "remindersSweptAt"])
     .index("by_conflict_booking", ["conflictBookingId"])
     .index("by_created_at", ["createdAt"])
-    .index("by_updated_at", ["updatedAt"]),
+    .index("by_updated_at", ["updatedAt"])
+    // Lets the always-mounted conflict-toast subscription read only active
+    // pending work and recent conflict outcomes, instead of its old global
+    // 300-row updated-booking scan.
+    .index("by_status_updated_at", ["status", "updatedAt"]),
 
   // Form-level metadata lets an editor add a value for a known optional
   // question even when that particular submission had no stored response.
@@ -451,4 +493,19 @@ export default defineSchema({
   })
     .index("by_created_at", ["createdAt"])
     .index("by_category_created_at", ["category", "createdAt"]),
+
+  // Singleton cache for the dashboard "overview" tile. Refreshed on a cron
+  // (see convex/crons.ts) instead of being computed reactively on every
+  // booking write — see convex/bookingOverviewCache.ts for why.
+  overviewCountsCache: defineTable({
+    pending: v.number(),
+    availabilityChecking: v.number(),
+    approved: v.number(),
+    unavailable: v.number(),
+    detectedConflictRequests: v.number(),
+    pendingConflictRequests: v.number(),
+    pendingConflictPairs: v.number(),
+    unavailableConflictRequests: v.number(),
+    computedAt: v.number(),
+  }),
 });

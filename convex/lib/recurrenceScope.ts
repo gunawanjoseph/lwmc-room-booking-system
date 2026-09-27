@@ -2,6 +2,7 @@ import type { EditableOccurrence } from "./bookingEdit";
 
 export type RecurrenceScope = "occurrence" | "following" | "series";
 export type OccurrenceDetails = {
+  responses?: Array<{ qid: string; value: string }>;
   eventName?: string;
   purpose?: string;
   ministry?: string;
@@ -41,6 +42,6 @@ export function editScopedOccurrences(
     endAt: item.startAt + shift + duration,
     room: edit.room,
     resolvedVenues: [...edit.resolvedVenues],
-    details: { ...edit.details },
+    details: { ...item.details, ...edit.details },
   } : { ...item }).sort((a, b) => a.startAt - b.startAt);
 }

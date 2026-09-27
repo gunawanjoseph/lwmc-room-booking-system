@@ -78,7 +78,7 @@ export type BookingExportRow = {
   formResponsesTruncated?: boolean;
   formResponseCapturedCount?: number;
   formResponseFieldCount?: number;
-  status: "pending" | "approved" | "rejected" | "unavailable";
+  status: "pending" | "approved" | "rejected" | "unavailable" | "cancelled";
   reviewNote?: string;
   reviewedAt?: number;
   createdAt: number;
@@ -111,11 +111,11 @@ const LOCAL_DATE_ONLY_FORMAT = "yyyy-mm-dd";
 const UTC_DATE_FORMAT = "yyyy-mm-dd hh:mm:ss";
 
 const HEADER_STYLE = {
-  backgroundColor: "#255F53",
+  backgroundColor: "#265784",
   textColor: "#FFFFFF",
   fontWeight: "bold" as const,
   alignVertical: "center" as const,
-  bottomBorderColor: "#19483E",
+  bottomBorderColor: "#1B4266",
   bottomBorderStyle: "thin" as const,
   height: 28,
   wrap: true,
@@ -123,7 +123,7 @@ const HEADER_STYLE = {
 
 const SUBHEADER_STYLE = {
   ...HEADER_STYLE,
-  backgroundColor: "#3A7568",
+  backgroundColor: "#4280CF",
 };
 
 const BODY_STYLE = {
@@ -135,6 +135,7 @@ const STATUS_BACKGROUND: Record<BookingExportRow["status"], string> = {
   approved: "#D9EAD3",
   rejected: "#F4CCCC",
   unavailable: "#E6E6E6",
+  cancelled: "#EAD1DC",
 };
 
 function recurrenceLabel(

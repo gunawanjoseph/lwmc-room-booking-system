@@ -625,10 +625,10 @@ function renderDetailRows(rows: EmailDetailRow[]): string {
     .map(
       (row) => `
         <tr>
-          <td style="padding:12px 0 12px 0;width:210px;vertical-align:top;font-size:14px;line-height:1.5;color:#6b78bb;font-weight:400">${escapeHtml(
+          <td class="email-detail-label" style="padding:12px 0 12px 0;width:190px;vertical-align:top;font-size:14px;line-height:1.5;color:#6b78bb;font-weight:400;border-bottom:1px solid #f1f2f7">${escapeHtml(
             row.label,
           )}</td>
-          <td style="padding:12px 0 12px 12px;vertical-align:top;font-size:14px;line-height:1.5">${renderDetailValue(
+          <td class="email-detail-value" style="padding:12px 0 12px 12px;vertical-align:top;font-size:14px;line-height:1.5;border-bottom:1px solid #f1f2f7">${renderDetailValue(
             row,
           )}</td>
         </tr>`,
@@ -636,16 +636,33 @@ function renderDetailRows(rows: EmailDetailRow[]): string {
     .join("");
 }
 
-function renderActionButton(label: string, href: string): string {
-  return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr><td><a href="${escapeHtml(
+function actionButtonLink(label: string, href: string): string {
+  return `<a href="${escapeHtml(
     href,
-  )}" style="display:inline-block;background:#2f6fdd;color:#fff;text-decoration:none;font-family:Arial,sans-serif;font-size:14px;font-weight:700;padding:12px 18px;border-radius:8px">${escapeHtml(
+  )}" style="display:inline-block;background:#2f6fdd;color:#fff;text-decoration:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;line-height:20px;padding:13px 22px;border-radius:10px;mso-padding-alt:0">${escapeHtml(
     label,
-  )}</a></td></tr></table>`;
+  )}</a>`;
+}
+
+function renderActionButton(label: string, href: string): string {
+  return `<table role="presentation" class="email-actions" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr><td class="email-action">${actionButtonLink(label, href)}</td></tr></table>`;
+}
+
+// Buttons share one table row so they sit side by side in email clients.
+function renderActionButtonRow(
+  buttons: ReadonlyArray<{ label: string; href: string }>,
+): string {
+  const cells = buttons
+    .map(
+      (button, index) =>
+        `<td class="email-action" style="padding:0 ${index < buttons.length - 1 ? 12 : 0}px 0 0">${actionButtonLink(button.label, button.href)}</td>`,
+    )
+    .join("");
+  return `<table role="presentation" class="email-actions" cellspacing="0" cellpadding="0" style="margin:24px 0 0 0"><tr>${cells}</tr></table>`;
 }
 
 function renderApprovedBookingAccessNotice(): string {
-  return `<div style="margin:20px 0 0 0;padding:16px;background:#fff7f6;border-left:4px solid #d92d20;border-radius:6px;font-family:Arial,sans-serif;font-size:14px;line-height:1.7">
+  return `<div style="margin:20px 0 0 0;padding:16px;background:#fff7f6;border-left:4px solid #d92d20;border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.7">
     <p style="margin:0 0 8px 0;color:#333">${escapeHtml(APPROVED_BOOKING_ACCESS_NOTICE)}</p>
     <p style="margin:0;color:#b42318;font-weight:700">${escapeHtml(APPROVED_BOOKING_SHUTDOWN_NOTICE)}</p>
   </div>`;
@@ -663,38 +680,68 @@ function renderEmailTemplate(input: EmailTemplateInput): string {
       )}</p>`
     : "";
 
+  // Inbox preview line: the subtitle or first sentence, padded so mail apps
+  // don't pull body text (like the logo alt) into the preview.
+  const preheader = escapeHtml(
+    input.subtitle || input.introLines.find(Boolean) || input.title,
+  );
+
   return `<!doctype html>
-<html>
-  <body style="margin:0;padding:0;background:#f3f1ff;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f1ff;border-collapse:collapse;">
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="x-apple-disable-message-reformatting">
+    <meta name="format-detection" content="telephone=no,date=no,address=no,email=no,url=no">
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
+    <style>
+      body{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+      body,table,td,p,a,span,h1{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+      @media(max-width:640px){
+        .email-card{border-radius:0!important}
+        .email-outer{padding:0 0 20px!important}
+        .email-content{padding-left:20px!important;padding-right:20px!important}
+        .email-actions{width:100%!important}
+        .email-action{display:block!important;padding:0 0 12px!important}
+        .email-action a{display:block!important;text-align:center}
+        .email-detail-label{display:block!important;width:auto!important;padding:14px 0 2px!important;border-bottom:0!important;font-size:13px!important}
+        .email-detail-value{display:block!important;width:auto!important;padding:0 0 14px!important;font-size:15px!important}
+        .email-intro p{font-size:15px!important}
+      }
+    </style>
+  </head>
+  <body style="margin:0;padding:0;background:#f3f1ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f3f1ff;opacity:0">${preheader}&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;&#8199;&#65279;&#847;</div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f1ff;border-collapse:collapse;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
       <tr>
-        <td align="center" style="padding:16px 12px 28px;">
-          <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="width:620px;max-width:620px;background:#ffffff;border-collapse:collapse;">
+        <td align="center" class="email-outer" style="padding:24px 12px 32px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="email-card" style="width:100%;max-width:620px;background:#ffffff;border-collapse:separate;border-radius:16px;overflow:hidden;">
             <tr>
               <td align="center" style="padding:16px 28px 8px;">
                 <img src="${escapeHtml(LWMC_LOGO_URL)}" alt="Living Waters Methodist Church" style="display:block;width:360px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;">
               </td>
             </tr>
             <tr>
-              <td style="padding:0 40px 12px;">
-                <h1 style="margin:0;font-family:Arial,sans-serif;font-size:22px;line-height:1.25;color:#1d2e67;font-weight:700;text-align:left;">${escapeHtml(
+              <td class="email-content" style="padding:0 40px 12px;">
+                <h1 style="margin:0;letter-spacing:-0.01em;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:22px;line-height:1.25;color:#1d2e67;font-weight:700;text-align:left;">${escapeHtml(
                   input.title,
                 )}</h1>
-                ${input.subtitle ? `<p style="margin:8px 0 0 0;font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#4d5686;font-weight:700">${escapeHtml(input.subtitle)}</p>` : ""}
+                ${input.subtitle ? `<p style="margin:8px 0 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#4d5686;font-weight:700">${escapeHtml(input.subtitle)}</p>` : ""}
               </td>
             </tr>
             <tr>
-              <td style="padding:0 40px 6px;">
+              <td class="email-content email-intro" style="padding:0 40px 6px;">
                 ${renderIntroParagraphs(input.introLines)}
               </td>
             </tr>
             <tr>
-              <td style="padding:8px 40px 0;">
+              <td class="email-content" style="padding:8px 40px 0;">
                 <div style="border-top:1px solid #eef0f4;font-size:0;line-height:0;height:1px">&nbsp;</div>
               </td>
             </tr>
             <tr>
-              <td style="padding:12px 40px 40px;">
+              <td class="email-content" style="padding:12px 40px 40px;">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
                   ${rowsHtml}
                 </table>
@@ -1327,7 +1374,7 @@ export const dispatchDelivery = internalMutation({
     }
     const now = Date.now();
     const booking = await ctx.db.get(delivery.bookingId);
-    if (!booking || bookingDeletionInProgress(booking, now)) {
+    if (!booking || booking.requesterOperationId || bookingDeletionInProgress(booking, now)) {
       await cancelDeliveryRecord(
         ctx,
         delivery,
@@ -1512,7 +1559,7 @@ export const getDeliveryContext = internalQuery({
     }
     const now = Date.now();
     const booking = await ctx.db.get(delivery.bookingId);
-    if (!booking || bookingDeletionInProgress(booking, now)) {
+    if (!booking || booking.requesterOperationId || bookingDeletionInProgress(booking, now)) {
       return {
         state: "cancel",
         reason: booking
@@ -1646,7 +1693,7 @@ ${details}`;
         text,
         html: renderEmailTemplate({
           detailRows,
-          extraHtml: renderApprovedBookingAccessNotice(),
+          extraHtml: renderApprovedBookingAccessNotice() + "<!--booking-management-->",
           introLines: [
             `Hi, ${booking.requesterName}`,
             "Your booking request has been approved.",
@@ -1782,7 +1829,18 @@ export const sendDelivery = internalAction({
     }
     const context = lookup.context;
     try {
-      const composed = composeDelivery(context);
+      let composed = composeDelivery(context);
+      if (context.delivery.kind === "requester_approved") {
+        const token = await ctx.runMutation(internal.bookingRequests.issueLink, args);
+        if (!token) throw new CancelDeliveryError("BOOKING_CHANGED:Approval recipient or status changed.");
+        // Fragment tokens are not sent in HTTP requests or Referer headers.
+        const link = `${gmailConfiguration().appBaseUrl}/booking-request#token=${token}`;
+        const explanation = "Request changes or cancel at least two hours before the selected meeting starts. Changes require approval. Cancellation takes effect after you confirm and Calendar cleanup succeeds. Keep these private links to yourself.";
+        const cancelLink = `${link}&action=cancel`;
+        const section = `<div style="margin-top:24px;padding-top:20px;border-top:1px solid #eef0f4">${renderActionButtonRow([{ label: "Request Changes", href: link }, { label: "Cancel Booking", href: cancelLink }])}<p style="font-size:13px;line-height:1.6;color:#667085">${explanation}</p></div>`;
+        composed = { ...composed, text: `${composed.text}\n\nRequest Changes: ${link}\nCancel Booking: ${cancelLink}\n${explanation}`,
+          html: composed.html.replace("<!--booking-management-->", section) };
+      }
       const message = context.delivery.kind.startsWith("requester_")
         ? await withSubmitterBookings(ctx,context.delivery.recipientEmail,composed)
         : composed;
@@ -1843,7 +1901,7 @@ export const completeDelivery = internalMutation({
     }
     const now = Date.now();
     const booking = await ctx.db.get(delivery.bookingId);
-    if (!booking || bookingDeletionInProgress(booking, now)) {
+    if (!booking || booking.requesterOperationId || bookingDeletionInProgress(booking, now)) {
       await cancelDeliveryRecord(
         ctx,
         delivery,
@@ -2255,7 +2313,7 @@ async function withSubmitterBookings(ctx: ActionCtx, email: string, message: {su
   const heading=`Your outstanding bookings (from ${today}, ${timezone})`;
   const snapshotLabel=snapshot ? `Snapshot when your change was saved (${new Date(now).toISOString()}).` : "Snapshot at email sending time.";
   const text=`${message.text}\n\n${heading}\nPending and approved meetings. ${snapshotLabel}\n${table.text}\n\nView the public booking calendar: ${link}\nNo sign-in required.`;
-  const footer=`<section style="max-width:640px;margin:24px auto;padding:24px;background:#fff;font-family:Arial,sans-serif"><h2 style="font-size:18px">${escapeBookingHtml(heading)}</h2><p>Pending and approved meetings. ${snapshotLabel}</p>${table.html}<p><a href="${escapeBookingHtml(link)}">View the public booking calendar</a> · No sign-in required.</p></section>`;
+  const footer=`<section style="max-width:640px;margin:24px auto;padding:24px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"><h2 style="font-size:18px">${escapeBookingHtml(heading)}</h2><p>Pending and approved meetings. ${snapshotLabel}</p>${table.html}<p><a href="${escapeBookingHtml(link)}">View the public booking calendar</a> · No sign-in required.</p></section>`;
   return {...message,text,html:message.html.includes("</body>")?message.html.replace("</body>",`${footer}</body>`):`${message.html}${footer}`};
 }
 
@@ -2265,19 +2323,55 @@ export const sendBookingNotice=internalAction({args:{noticeId:v.id("bookingNotic
   if(!notice)return;
   let error:string|undefined;
   try {
+    if (notice.requestSubject) {
+      const before = meetingTable(JSON.parse(notice.beforeJson) as SubmitterMeeting[]);
+      const after = meetingTable(JSON.parse(notice.afterJson) as SubmitterMeeting[]);
+      const reviewLink = `${gmailConfiguration().appBaseUrl}/booking-requests`;
+      const details = notice.detailChanges;
+      let message = { subject: notice.requestSubject,
+        text: `${notice.requestText}\n${details}\n\nOriginal booking\n${before.text}\n\nRequested / updated booking\n${after.text}${notice.approverNotice ? `\nReview in RoomOps: ${reviewLink}` : ""}`,
+        html: renderEmailTemplate({ title: notice.requestSubject, introLines: [notice.requestText ?? ""], detailRows: [],
+          extraHtml: `<p style="white-space:pre-wrap;background:#eef5f0;padding:14px;border-radius:8px">${escapeBookingHtml(details)}</p><h2 style="font-size:16px">Original booking</h2>${before.html}${notice.kind === "edited" ? `<h2 style="font-size:16px">Requested / updated booking</h2>${after.html}` : ""}`,
+          ...(notice.approverNotice ? { actionHref: reviewLink, actionLabel: "View Edit Requests" } : {}) }),
+      };
+      if (!notice.approverNotice) message = await withSubmitterBookings(ctx, notice.recipientEmail, message, notice.outstandingJson);
+      await sendGmail({ ...message, to: notice.recipientEmail, messageKey: `booking-request-${args.noticeId}` });
+    } else {
     const before=meetingTable(JSON.parse(notice.beforeJson) as SubmitterMeeting[]);
     const after=meetingTable(JSON.parse(notice.afterJson) as SubmitterMeeting[]);
     const scope=notice.scope==="occurrence"?"This event":notice.scope==="following"?"This and following events":"All events";
     const summary=notice.kind==="deleted"&&notice.scope!=="series"
-      ? `Selected meetings in booking ${notice.bookingReference} were removed. Scope: ${scope}.`
-      : `Your booking ${notice.bookingReference} was ${notice.kind}. Scope: ${scope}.`;
+      ? `Selected meetings in booking ${notice.bookingReference} were cancelled. Scope: ${scope}.`
+      : `Your booking ${notice.bookingReference} was ${notice.kind==="deleted"?"cancelled":"updated"}. Scope: ${scope}.`;
     const calendar=notice.calendarPending?"The change is saved in RoomOps. Google Calendar synchronization may still be pending; this email does not confirm room-control changes.":"Please check the latest booking status in the booking calendar.";
     const message=await withSubmitterBookings(ctx,notice.recipientEmail,{
-      subject:`Room booking ${notice.kind}: ${notice.bookingReference}`,
-      text:`${summary}\n${calendar}\n${notice.detailChanges}\n\n${notice.kind==="deleted"?"Removed meetings":"Previous details"}\n${before.text}${notice.kind==="edited"?`\n\nUpdated details\n${after.text}`:""}`,
-      html:`<html><body><main style="max-width:640px;margin:auto;padding:24px;font-family:Arial,sans-serif"><h1 style="font-size:22px">${escapeBookingHtml(summary)}</h1><p>${escapeBookingHtml(calendar)}</p>${notice.detailChanges?`<p style="white-space:pre-wrap">${escapeBookingHtml(notice.detailChanges)}</p>`:""}<h2>${notice.kind==="deleted"?"Removed meetings":"Previous details"}</h2>${before.html}${notice.kind==="edited"?`<h2>Updated details</h2>${after.html}`:""}</main></body></html>`,
+      subject:`Room booking ${notice.kind==="deleted"?"cancelled":"updated"}: ${notice.bookingReference}`,
+      text:`${summary}\n${calendar}\n${notice.detailChanges}\n\n${notice.kind==="deleted"?"Cancelled meetings":"Previous details"}\n${before.text}${notice.kind==="edited"?`\n\nUpdated details\n${after.text}`:""}`,
+      html:`<html><body><main style="max-width:640px;margin:auto;padding:24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"><h1 style="font-size:22px">${escapeBookingHtml(summary)}</h1><p>${escapeBookingHtml(calendar)}</p>${notice.detailChanges?`<p style="white-space:pre-wrap">${escapeBookingHtml(notice.detailChanges)}</p>`:""}<h2>${notice.kind==="deleted"?"Cancelled meetings":"Previous details"}</h2>${before.html}${notice.kind==="edited"?`<h2>Updated details</h2>${after.html}`:""}</main></body></html>`,
     },notice.outstandingJson);
     await sendGmail({...message,to:notice.recipientEmail,messageKey:`booking-change-${args.noticeId}`});
+    }
   }catch(caught){error=caught instanceof Error?caught.message:"Booking change email failed.";}
   await ctx.runMutation(internal.bookingNotices.finish,{...args,token,error});
+}});
+
+export const sendBookingReminder=internalAction({args:{reminderId:v.id("bookingReminders")},handler:async(ctx,args):Promise<void>=>{
+  const token=crypto.randomUUID();
+  const context=await ctx.runMutation(internal.bookingReminders.claim,{...args,token});
+  if(!context)return;
+  let error:string|undefined;
+  try {
+    const {booking,meeting,kind,linkToken}=context;
+    const early=kind==="two_days";
+    const subject=early?"Booking reminder: in 2 days":"Booking reminder: in 2 hours";
+    const intro=early?"Your booking starts in two days. Need to make a change? Use the buttons below before the two-hour deadline.":"Your booking starts in two hours. Online changes and cancellations are now closed. Contact the booking administrator if you need help.";
+    const href=linkToken?`${gmailConfiguration().appBaseUrl}/booking-request#token=${linkToken}&meeting=${meeting.sequence}`:undefined;
+    const details=[{label:"Event",value:meeting.title},{label:"Room",value:meeting.room},{label:"Starts",value:formatLocalDateTime(meeting.startAt,booking.timezone)},{label:"Ends",value:formatLocalDateTime(meeting.endAt,booking.timezone)},{label:"Ministry",value:meeting.ministry}];
+    const message=await withSubmitterBookings(ctx,booking.requesterEmail,{
+      subject,text:`${intro}\n\n${details.map(row=>`${row.label}: ${row.value}`).join("\n")}${href?`\n\nRequest changes: ${href}\nCancel booking: ${href}&action=cancel\nKeep this private link to yourself.`:""}`,
+      html:renderEmailTemplate({title:subject,introLines:[intro],detailRows:details,extraHtml:href?`${renderActionButtonRow([{label:"Request changes",href},{label:"Cancel booking",href:`${href}&action=cancel`}])}<p style="font-size:13px;color:#667085">Keep these private links to yourself.</p>`:"",footerNote:`Times shown in ${booking.timezone}.`}),
+    });
+    await sendGmail({...message,to:booking.requesterEmail,messageKey:`booking-reminder-${args.reminderId}`});
+  } catch(caught) {error=caught instanceof Error?caught.message:"Reminder delivery failed.";}
+  await ctx.runMutation(internal.bookingReminders.finish,{...args,token,error});
 }});

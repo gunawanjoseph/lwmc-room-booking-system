@@ -389,6 +389,26 @@ describe("Google Calendar event metadata", () => {
     );
   });
 
+  it("shows only the specified name when the ministry is Others (Please Specify)", () => {
+    expect(
+      buildGoogleCalendarTitle({
+        eventName: "234sdfsfd",
+        ministry: "Others (Please Specify): testing",
+        venue: "Counselling / Music Room",
+      }),
+    ).toBe("[Counselling / Music Room] 234sdfsfd testing");
+
+    const text = buildGoogleCalendarEventText({
+      eventName: "234sdfsfd",
+      ministry: "Others (Please Specify): testing",
+      requesterName: "Joseph",
+      venue: "Counselling / Music Room",
+    });
+    expect(text.summary).toBe("[Counselling / Music Room] 234sdfsfd testing");
+    expect(text.description.startsWith("<b>Ministry:</b><br>testing<br>")).toBe(true);
+    expect(text.description).not.toContain("Others");
+  });
+
   it("builds deterministic private properties for reconciliation", () => {
     expect(
       buildGoogleCalendarPrivateProperties({

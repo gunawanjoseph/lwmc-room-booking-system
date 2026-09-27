@@ -12,6 +12,7 @@ dist
 *.orig
 *.rej
 test.patch
+.claude
 
 # Google credentials and deployment-specific calendar maps must never be
 # committed. Store their JSON contents in Convex environment variables.
@@ -20,3 +21,9 @@ production-service-account.json
 google-calendar-map.json
 production-google-calendar-map.json
 google-calendar-map.json
+
+# clerk configuration (can include secrets)
+/.clerk/
+
+# Security audit reports describe live weaknesses; never commit them.
+security-audit-report-*.md

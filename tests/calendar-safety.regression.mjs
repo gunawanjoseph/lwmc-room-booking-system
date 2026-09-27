@@ -62,7 +62,7 @@ test('running meetings are reconciled, completed events retained',()=>{
 });
 function dbContext(booking) {
   const scheduled=[];const logs=[];
-  return {scheduled,logs, db:{query:()=>({withIndex:()=>({take:async()=>[]})}),get:async()=>booking,patch:async(_,patch)=>Object.assign(booking,patch),insert:async(_,row)=>logs.push(row)},scheduler:{runAfter:async(...args)=>scheduled.push(args)}};
+  return {scheduled,logs, db:{query:()=>({withIndex:()=>({take:async()=>[],collect:async()=>[]})}),get:async()=>booking,patch:async(_,patch)=>Object.assign(booking,patch),insert:async(_,row)=>logs.push(row)},scheduler:{runAfter:async(...args)=>scheduled.push(args)}};
 }
 test('metadata-only series edit preserves all occurrence time/venue exceptions',async()=>{
   const savedEnv=process.env.GOOGLE_CALENDAR_ENABLED;
@@ -168,4 +168,23 @@ test('reconciliation rebuilds only retained meetings and uses their scoped title
     await actions.reconcileApprovedBooking.handler(ctx,{bookingId:'booking',expectedRevision:1,syncToken:'scope'});
     assert.match(titles[0],/Base title/);assert.match(titles[1],/Only later/);assert.match(titles[1],/Board Room/);assert.equal(titles.length,2);
   });
+});
+
+test('edit availability excludes verified own events and expanded owned recurrence',async()=>{
+  const c=client([json({accessRole:'writer',items:[owned]}),json({accessRole:'writer',items:[owned,{id:'instance',recurringEventId:'event'}]})]);
+  assert.equal(await c.client.availableExceptBooking({calendarId:'calendar',bookingId:'booking',startAt:Date.now(),endAt:Date.now()+3600000,timeZone:'Asia/Singapore'}),true);
+  assert.match(c.calls[1].url,/singleEvents=true/);
+});
+test('edit availability checks all pages and blocks an external recurring/private event',async()=>{
+  const c=client([json({accessRole:'owner',items:[owned]}),json({accessRole:'owner',items:[owned],nextPageToken:'two'}),json({accessRole:'owner',items:[{id:'private-instance',recurringEventId:'external'}]})]);
+  assert.equal(await c.client.availableExceptBooking({calendarId:'calendar',bookingId:'booking',startAt:Date.now(),endAt:Date.now()+3600000,timeZone:'Asia/Singapore'}),false);
+  assert.match(c.calls[2].url,/pageToken=two/);
+});
+test('transparent and cancelled calendar entries do not block requester edits',async()=>{
+  const c=client([json({accessRole:'writer',items:[]}),json({accessRole:'writer',items:[{id:'free',transparency:'transparent'},{id:'gone',status:'cancelled'}]})]);
+  assert.equal(await c.client.availableExceptBooking({calendarId:'calendar',bookingId:'booking',startAt:Date.now(),endAt:Date.now()+3600000,timeZone:'Asia/Singapore'}),true);
+});
+test('availability fails closed on partial permissions or missing Calendar access',async()=>{
+  const c=client([json({accessRole:'reader',items:[]})]);
+  await assert.rejects(c.client.availableExceptBooking({calendarId:'calendar',bookingId:'booking',startAt:Date.now(),endAt:Date.now()+3600000,timeZone:'Asia/Singapore'}),/write access/);
 });

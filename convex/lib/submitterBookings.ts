@@ -1,5 +1,5 @@
 export type SubmitterBooking = {
-  _id: string; jotformSubmissionId: string; requesterEmail: string;
+  _id: string; jotformSubmissionId: string; sourceSubmissionId?: string; requesterEmail: string;
   room: string; eventName?: string; status: string; timezone: string;
   startAt: number; endAt: number; createdAt: number; submittedAt?: number;
   calendarSyncStatus?: string;
@@ -21,7 +21,7 @@ export function bookingWindow(now: number, timezone = "Asia/Singapore") {
 export function submitterMeetings(booking: SubmitterBooking): SubmitterMeeting[] {
   const occurrences: NonNullable<SubmitterBooking["occurrences"]> = booking.occurrences ?? [{sequence:0,startAt:booking.startAt,endAt:booking.endAt}];
   return occurrences.map(item=>({
-    key:`${booking._id}:${item.sequence}`,reference:booking.jotformSubmissionId,
+    key:`${booking._id}:${item.sequence}`,reference:booking.sourceSubmissionId??booking.jotformSubmissionId,
     title:item.details?.eventName ?? booking.eventName ?? "Room booking",room:item.room??booking.room,
     status:booking.status,startAt:item.startAt,endAt:item.endAt,submittedAt:booking.submittedAt??booking.createdAt,submissionDateEstimated:booking.submittedAt===undefined,
     timezone:booking.timezone,calendarSyncStatus:booking.calendarSyncStatus,
@@ -50,6 +50,8 @@ export function meetingTable(rows: SubmitterMeeting[]): {html:string;text:string
     `${new Intl.DateTimeFormat("en-SG",{dateStyle:"medium",timeStyle:"short",timeZone:row.timezone}).format(row.endAt)} (${row.timezone})`,row.status,
   ]);
   const headers=["Reference","Event","Room","Booking date / start","End","Status"];
-  const cell='style="padding:9px;border:1px solid #dce3df;text-align:left;font-size:12px;overflow-wrap:anywhere"';
-  return {html:rows.length?`<table style="width:100%;border-collapse:collapse"><thead><tr>${headers.map(x=>`<th ${cell}>${x}</th>`).join("")}</tr></thead><tbody>${lines.map(line=>`<tr>${line.map(x=>`<td ${cell}>${escapeBookingHtml(x)}</td>`).join("")}</tr>`).join("")}</tbody></table>`:"<p>No bookings in this view.</p>",text:rows.length?[headers.join(" | "),...lines.map(line=>line.join(" | "))].join("\n"):"No bookings in this view."};
+  const cell='style="padding:12px;border:1px solid #dce3df;text-align:left;vertical-align:top;font-size:14px;line-height:1.5;overflow-wrap:anywhere;word-break:break-word"';
+  // Two columns keep the complete meeting details readable on narrow email clients.
+  const html=rows.length ? `<table style="width:100%;table-layout:fixed;border-collapse:collapse"><thead><tr><th ${cell}>Booking</th><th ${cell}>When</th></tr></thead><tbody>${lines.map(line=>`<tr><td ${cell}><strong>${escapeBookingHtml(line[1])}</strong><br>${escapeBookingHtml(line[2])}<br>${escapeBookingHtml(line[5])}<br><small>Reference: ${escapeBookingHtml(line[0])}</small></td><td ${cell}>Starts ${escapeBookingHtml(line[3])}<br>Ends ${escapeBookingHtml(line[4])}</td></tr>`).join("")}</tbody></table>` : "<p>No bookings in this view.</p>";
+  return {html,text:rows.length?[headers.join(" | "),...lines.map(line=>line.join(" | "))].join("\n"):"No bookings in this view."};
 }

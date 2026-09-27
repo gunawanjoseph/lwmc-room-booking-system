@@ -1,6 +1,6 @@
 export type ConflictOverviewBooking = {
   _id: string;
-  status: "pending" | "approved" | "rejected" | "unavailable";
+  status: "pending" | "approved" | "rejected" | "unavailable" | "cancelled";
   conflictBookingId?: string;
   conflictWarningBookingIds?: readonly string[];
   calendarAvailabilityStatus?: "unchecked" | "available" | "conflict";

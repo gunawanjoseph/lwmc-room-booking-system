@@ -12,6 +12,7 @@ import {
   JOTFORM_VENUE_ALIASES,
   JOTFORM_VENUES,
 } from "../../shared/jotformConstants";
+import { ministryCalendarLabel } from "../../shared/requestFields";
 
 export const GOOGLE_CALENDAR_VENUES = JOTFORM_VENUES;
 
@@ -133,13 +134,23 @@ const individualVenueSelections = Object.fromEntries(
   ]),
 ) as Record<string, VenueSelection>;
 
+// Every spelling of a combined room displays under one canonical name.
+const combinedVenueDisplayNames: Record<string, string> = {
+  "Ministry Centre A|Ministry Centre B": "Ministry Centre A & B",
+  "Ministry Centre A|Ministry Centre B|Ministry Centre C":
+    "Ministry Centre A, B & C",
+};
+
 const venueAliases: Record<string, VenueSelection> = {
   ...individualVenueSelections,
   ...Object.fromEntries(
     Object.entries(JOTFORM_VENUE_ALIASES).map(([alias, venues]) => [
       venueKey(alias),
       {
-        displayName: venues.length === 1 ? venues[0] : alias,
+        displayName:
+          venues.length === 1
+            ? venues[0]
+            : combinedVenueDisplayNames[venues.join("|")] ?? alias,
         venues: venues as readonly GoogleCalendarVenue[],
       },
     ]),
@@ -392,7 +403,10 @@ export function buildGoogleCalendarTitle(input: {
     cleanSingleLine(input.eventName ?? "", 500) ||
     cleanSingleLine(input.purpose ?? "", 500) ||
     "Room Booking";
-  const ministry = cleanSingleLine(input.ministry ?? "", 300);
+  const ministry = cleanSingleLine(
+    ministryCalendarLabel(input.ministry ?? ""),
+    300,
+  );
   return cleanSingleLine(
     `[${venue}] ${eventNameOrPurpose}${ministry ? ` ${ministry}` : ""}`,
   );
@@ -410,7 +424,9 @@ export function buildGoogleCalendarEventText(input: {
   summary: string;
 } {
   const venue = resolveVenueSelection(input.venue).displayName;
-  const ministry = cleanSingleLine(input.ministry ?? "", 300) || "-";
+  const ministry =
+    cleanSingleLine(ministryCalendarLabel(input.ministry ?? ""), 300) ||
+    "-";
   const eventNameOrPurpose =
     cleanSingleLine(input.eventName ?? "", 500) ||
     cleanSingleLine(input.purpose ?? "", 2_000) ||
@@ -1351,6 +1367,34 @@ export class GoogleCalendarClient {
       status:
         typeof event.status === "string" ? event.status : undefined,
     };
+  }
+
+  /** Free/busy cannot exclude the booking itself. Expand events and exclude
+   * only verified RoomOps ownership, retaining manual/private/recurring conflicts. */
+  async availableExceptBooking(input: { calendarId: string; bookingId: string; startAt: number; endAt: number; timeZone: string }): Promise<boolean> {
+    const owned = new Set((await this.listManagedEvents(input.bookingId, input.calendarId)).map(event => event.eventId));
+    let pageToken: string | undefined;
+    const seen = new Set<string>();
+    do {
+      const query = new URLSearchParams({ timeMin: new Date(input.startAt).toISOString(), timeMax: new Date(input.endAt).toISOString(),
+        timeZone: input.timeZone, singleEvents: "true", showDeleted: "false", maxResults: "2500",
+        fields: "accessRole,nextPageToken,items(id,recurringEventId,status,transparency,extendedProperties/private)" });
+      if (pageToken) query.set("pageToken", pageToken);
+      const response = await this.request(`/calendars/${encodeURIComponent(input.calendarId)}/events?${query}`, { method: "GET" });
+      if (!response.ok) throw Error("Google Calendar availability could not be checked.");
+      const result = await response.json() as { accessRole?: string; nextPageToken?: string; items?: Array<{ id?: string; recurringEventId?: string; status?: string; transparency?: string; extendedProperties?: { private?: Record<string, string> } }> };
+      if (!["writer", "owner"].includes(result.accessRole ?? "")) throw Error("Full Calendar read/write permission is required.");
+      for (const event of result.items ?? []) {
+        if (event.status === "cancelled" || event.transparency === "transparent") continue;
+        const properties = event.extendedProperties?.private;
+        const own = properties?.roomopsManaged === "true" && properties.roomopsBookingId === input.bookingId;
+        if (!own && !owned.has(event.recurringEventId ?? event.id ?? "")) return false;
+      }
+      pageToken = result.nextPageToken;
+      if (pageToken && (seen.has(pageToken) || seen.size >= 100)) throw Error("Calendar pagination exceeded safe limits.");
+      if (pageToken) seen.add(pageToken);
+    } while (pageToken);
+    return true;
   }
 
   /** Read the actual schedule, including externally-created and expanded recurring events. */
