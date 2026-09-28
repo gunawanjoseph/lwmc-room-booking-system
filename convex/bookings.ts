@@ -1,4 +1,5 @@
 import { planReminders } from "./bookingReminders";
+import { markOverviewStale } from "./bookingOverviewCache";
 import { queueBookingNotice } from "./lib/bookingNotice";
 import { writeAuditLog } from "./lib/auditLog";
 import { editScopedOccurrences, scopedSequences, type ScopedOccurrence } from "./lib/recurrenceScope";
@@ -2022,6 +2023,7 @@ export async function deleteBookingRecord(
     const links = await ctx.db.query("requesterLinks").withIndex("by_booking", q => q.eq("bookingId", booking._id)).collect();
     for (const link of links) await ctx.db.patch(link._id, {revokedAt:now});
     await ctx.db.delete(booking._id);
+    await markOverviewStale(ctx);
   }
   else {
     await ctx.db.patch(booking._id, {status:"cancelled",cancelledAt:now,cancelledBy:actorId,revision:(booking.revision??0)+1,updatedAt:now,

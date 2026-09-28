@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
   ArrowRight,
   CalendarClock,
@@ -14,6 +14,7 @@ import {
 import { api } from "@/convex/_generated/api";
 import { formatDateTime } from "@/lib/ui";
 import { StatusBadge } from "@/components/status-badge";
+import { useVisibleInterval } from "@/components/use-visible-interval";
 
 import { JOTFORM_FORM_URL } from "@/shared/jotformConstants";
 type Booking = {
@@ -44,6 +45,13 @@ export default function HomePage() {
   const overview = useQuery(
     api.bookings.overviewCounts,
   ) as OverviewCounts | undefined;
+  const requestOverviewRefresh = useMutation(
+    api.bookingOverviewCache.requestRefresh,
+  );
+  // Counts are recounted on demand; the server ignores extra requests.
+  useVisibleInterval(() => {
+    void requestOverviewRefresh().catch(() => undefined);
+  }, 60_000);
   const counts: OverviewCounts = overview ?? {
     pending: 0,
     availabilityChecking: 0,

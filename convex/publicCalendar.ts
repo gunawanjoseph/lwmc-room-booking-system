@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
 import { action, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { BOOKABLE_GOOGLE_CALENDAR_VENUES, googleCalendarRuntimeFromEnv } from "./lib/googleCalendar";
@@ -7,41 +8,58 @@ import type { PublicMeeting } from "./lib/publicBookings";
 import { writeAuditLog } from "./lib/auditLog";
 import { ministryCalendarLabel } from "../shared/requestFields";
 
-type Cache={json?:string;fetchedAt?:number;error?:string};
-type Result={rows:PublicMeeting[];fetchedAt:number|null;error:string|null;refreshing:boolean};
+type Cache=Doc<'publicCalendarCache'>;
+// `unchanged` means the caller's copy (fetchedAt === since) is current, so the
+// schedule is not re-read or re-sent; older clients never pass `since`.
+type Result={rows:PublicMeeting[];fetchedAt:number|null;error:string|null;refreshing:boolean;unchanged?:boolean};
 // The public calendar is a read-only convenience view. Refreshing a full
 // schedule every minute causes the complete JSON cache to be read and written
 // continuously, even while nobody changes a booking. Keep the schedule fresh
 // enough for normal use while making its storage I/O proportional to actual
 // booking activity instead of open browser tabs.
 const CACHE_TTL_MS=15*60*1000;
-function result(cache:Cache|null,refreshing=false):Result{return {rows:cache?.json?JSON.parse(cache.json):[],fetchedAt:cache?.fetchedAt??null,error:cache?.error??null,refreshing};}
+const empty:Result={rows:[],fetchedAt:null,error:null,refreshing:false};
+async function snapshot(ctx:QueryCtx,cache:Cache|null,since:number|undefined,refreshing:boolean):Promise<Result>{
+  if(!cache)return {rows:[],fetchedAt:null,error:null,refreshing};
+  const base={fetchedAt:cache.fetchedAt??null,error:cache.error??null,refreshing};
+  if(since!==undefined&&cache.fetchedAt===since)return {...base,rows:[],unchanged:true};
+  const json=cache.payloadId?(await ctx.db.get(cache.payloadId))?.json:cache.json;
+  return {...base,rows:json?JSON.parse(json):[]};
+}
 async function hash(value:string){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(x=>x.toString(16).padStart(2,'0')).join('');}
 
-export const claim=internalMutation({args:{key:v.string(),token:v.string()},handler:async(ctx,args)=>{
+export const claim=internalMutation({args:{key:v.string(),token:v.string(),since:v.optional(v.number())},handler:async(ctx,args):Promise<{fetch:true}|{fetch:false;result:Result}>=>{
   const now=Date.now();
   const expired=await ctx.db.query('publicCalendarCache').withIndex('by_retry',q=>q.lt('retryAt',now-86400000)).take(20);
-  for(const row of expired)if(row.key!=='global'&&row.key!==args.key&&(row.leaseUntil??0)<now)await ctx.db.delete(row._id);
-  let cache=await ctx.db.query('publicCalendarCache').withIndex('by_key',q=>q.eq('key',args.key)).unique();
-  if(cache&&(cache.retryAt>now||(cache.leaseUntil??0)>now))return {fetch:false,cache,refreshing:!!cache.token};
+  for(const row of expired)if(row.key!=='global'&&row.key!==args.key&&(row.leaseUntil??0)<now){
+    if(row.payloadId)await ctx.db.delete(row.payloadId);
+    await ctx.db.delete(row._id);
+  }
+  const cache=await ctx.db.query('publicCalendarCache').withIndex('by_key',q=>q.eq('key',args.key)).unique();
+  if(cache&&(cache.retryAt>now||(cache.leaseUntil??0)>now))return {fetch:false,result:await snapshot(ctx,cache,args.since,!!cache.token)};
   const gate=await ctx.db.query('publicCalendarCache').withIndex('by_key',q=>q.eq('key','global')).unique();
-  if(gate&&gate.retryAt>now)return {fetch:false,cache,refreshing:true};
+  if(gate&&gate.retryAt>now)return {fetch:false,result:await snapshot(ctx,cache,args.since,true)};
   if(gate)await ctx.db.patch(gate._id,{retryAt:now+3000});else await ctx.db.insert('publicCalendarCache',{key:'global',retryAt:now+3000});
   const lease={token:args.token,leaseUntil:now+5*60000,retryAt:now};
-  if(cache)await ctx.db.patch(cache._id,lease);else {const id=await ctx.db.insert('publicCalendarCache',{key:args.key,...lease});cache=await ctx.db.get(id);}
-  return {fetch:true,cache,refreshing:true};
+  if(cache)await ctx.db.patch(cache._id,lease);else await ctx.db.insert('publicCalendarCache',{key:args.key,...lease});
+  return {fetch:true};
 }});
-export const finish=internalMutation({args:{key:v.string(),token:v.string(),json:v.optional(v.string()),error:v.optional(v.string())},handler:async(ctx,args)=>{
+export const finish=internalMutation({args:{key:v.string(),token:v.string(),since:v.optional(v.number()),json:v.optional(v.string()),error:v.optional(v.string())},handler:async(ctx,args):Promise<Result|null>=>{
   const cache=await ctx.db.query('publicCalendarCache').withIndex('by_key',q=>q.eq('key',args.key)).unique();
   if(!cache||cache.token!==args.token)return null;
   const now=Date.now();
-  const next={token:undefined,leaseUntil:undefined,retryAt:now+CACHE_TTL_MS,error:args.error,...(args.json!==undefined?{json:args.json,fetchedAt:now}:{})};
+  let payloadId=cache.payloadId;
+  if(args.json!==undefined){
+    if(payloadId)await ctx.db.patch(payloadId,{json:args.json});
+    else payloadId=await ctx.db.insert('publicCalendarPayloads',{json:args.json});
+  }
+  const next={token:undefined,leaseUntil:undefined,retryAt:now+CACHE_TTL_MS,error:args.error,...(args.json!==undefined?{payloadId,json:undefined,fetchedAt:now}:{})};
   await ctx.db.patch(cache._id,next);
   if(args.error)await writeAuditLog(ctx,{level:'error',category:'google_calendar',action:'public_calendar_read_failed',actorType:'system',message:'Public Google Calendar refresh failed. Check calendar sharing, credentials and response limits.',createdAt:now});
-  // `cache` already contains the current JSON. Returning a constructed value
-  // avoids rereading that potentially large document immediately after writing
-  // it just to send the same schedule back to this action.
-  return {...cache,...next};
+  // On success the action already holds the new rows, so do not read them
+  // back; on failure fall back to the last good schedule.
+  if(args.json!==undefined)return {rows:[],fetchedAt:now,error:args.error??null,refreshing:false};
+  return await snapshot(ctx,{...cache,...next},args.since,false);
 }});
 // Only use metadata from a verified, approved RoomOps row. Never override Google times/titles.
 async function linkedMinistry(ctx:QueryCtx,args:{bookingId:string;startAt:number}):Promise<string>{
@@ -57,7 +75,7 @@ export const ministries=internalQuery({args:{items:v.array(v.object({bookingId:v
   return await Promise.all(args.items.map(item=>linkedMinistry(ctx,item)));
 }});
 
-export const read=action({args:{month:v.string()},handler:async(ctx,args):Promise<Result>=>{
+export const read=action({args:{month:v.string(),since:v.optional(v.number())},handler:async(ctx,args):Promise<Result>=>{
   const range=publicCalendarRange(args.month);
   const timezone=process.env.BOOKING_TIME_ZONE||'Asia/Singapore';
   let runtime:ReturnType<typeof googleCalendarRuntimeFromEnv>;
@@ -68,8 +86,8 @@ export const read=action({args:{month:v.string()},handler:async(ctx,args):Promis
   if(!targets.size)return {rows:[],fetchedAt:null,error:'No venue calendars are configured.',refreshing:false};
   const key=await hash(JSON.stringify([args.month,timezone,[...targets],runtime.credentials.clientEmail]));
   const token=crypto.randomUUID();
-  const claimed=await ctx.runMutation(internal.publicCalendar.claim,{key,token});
-  if(!claimed.fetch)return result(claimed.cache,claimed.refreshing);
+  const claimed=await ctx.runMutation(internal.publicCalendar.claim,{key,token,since:args.since});
+  if(!claimed.fetch)return claimed.result;
   try{
     const rows:PublicMeeting[]=[];
     // A single RoomOps booking can be represented in more than one venue
@@ -99,9 +117,10 @@ export const read=action({args:{month:v.string()},handler:async(ctx,args):Promis
     }
     const json=JSON.stringify(rows.sort((a,b)=>a.startAt-b.startAt||a.key.localeCompare(b.key)));
     if(new TextEncoder().encode(json).length>750000)throw Error('Schedule too large.');
-    return result(await ctx.runMutation(internal.publicCalendar.finish,{key,token,json}));
+    const saved=await ctx.runMutation(internal.publicCalendar.finish,{key,token,json});
+    return saved?{...saved,rows}:empty;
   }catch{
-    const cache=await ctx.runMutation(internal.publicCalendar.finish,{key,token,error:'Google Calendar could not be refreshed. Any displayed events are from the last successful refresh.'});
-    return result(cache);
+    const saved=await ctx.runMutation(internal.publicCalendar.finish,{key,token,since:args.since,error:'Google Calendar could not be refreshed. Any displayed events are from the last successful refresh.'});
+    return saved??empty;
   }
 }});

@@ -27,7 +27,7 @@ function context(initial={}) {
         order:direction=>{selected.sort((a,b)=>direction==='desc'?b.createdAt-a.createdAt:a.createdAt-b.createdAt);return chain;},
         filter:fn=>{selected=selected.filter(row=>fn({eq:(a,b)=>a===b,field:key=>row[key]}));return chain;},
         paginate:async opts=>({page:selected.slice(0,opts.numItems),isDone:selected.length<=opts.numItems,continueCursor:""}),
-        collect:async()=>selected,take:async n=>selected.slice(0,n),unique:async()=>selected[0]??null,
+        collect:async()=>selected,take:async n=>selected.slice(0,n),unique:async()=>selected[0]??null,first:async()=>selected[0]??null,
       };return chain;
     },
   };
