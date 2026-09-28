@@ -25,7 +25,7 @@ const modules = {
     export const requireHeadAdmin=async ctx=>globalThis.__roomopsRealAuth?real.requireHeadAdmin(ctx):requireCapability(ctx);
     export const userBySubject=async(ctx,subject)=>{if(globalThis.__roomopsRealAuth)return real.userBySubject(ctx,subject);const u=await ctx.db.query('users').withIndex('by_clerk_user_id',q=>q.eq('clerkUserId',subject)).unique();return u?normalizeUser(u):null;};`,
   actionAuth: 'export const requireActionCapability=async()=>({clerkUserId:"admin"}); export const requireActionHeadAdmin=requireActionCapability;',
-  schema: 'export const calendarEventRefValidator={}, jotformResponseValidator={}, recurrenceFrequencyValidator={}, nonHeadRoleValidator={};',
+  schema: 'export const bookingStatusValidator={}, calendarEventRefValidator={}, jotformResponseValidator={}, recurrenceFrequencyValidator={}, nonHeadRoleValidator={};',
 };
 registerHooks({
   resolve(specifier, context, next) {

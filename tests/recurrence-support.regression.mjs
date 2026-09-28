@@ -21,7 +21,7 @@ function context(initial={}) {
       let selected=[...rows(name)];const chain={
         withIndex:(_,fn)=>{const range={eq:(key,value)=>{selected=selected.filter(row=>row[key]===value);return range;},lt:(key,value)=>{selected=selected.filter(row=>row[key]<value);return range;}};fn?.(range);return chain;},
         order:direction=>{selected.sort((a,b)=>direction==='desc'?b.createdAt-a.createdAt:a.createdAt-b.createdAt);return chain;},
-        collect:async()=>selected,take:async n=>selected.slice(0,n),unique:async()=>selected[0]??null,
+        collect:async()=>selected,take:async n=>selected.slice(0,n),unique:async()=>selected[0]??null,first:async()=>selected[0]??null,
       };return chain;
     },
   };

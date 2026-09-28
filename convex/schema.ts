@@ -127,7 +127,10 @@ export default defineSchema({
     createdAt: v.number(), resolvedAt: v.optional(v.number()), resolvedBy: v.optional(v.string()),
     response: v.optional(v.string()),
   }).index("by_booking", ["bookingId"]).index("by_status", ["status"]),
-  publicCalendarCache:defineTable({key:v.string(),json:v.optional(v.string()),fetchedAt:v.optional(v.number()),retryAt:v.number(),token:v.optional(v.string()),leaseUntil:v.optional(v.number()),error:v.optional(v.string())}).index("by_key",["key"]).index("by_retry",["retryAt"]),
+  // Small lease/freshness row per month; the schedule itself lives in
+  // publicCalendarPayloads so polling does not re-read it. `json` is legacy.
+  publicCalendarCache:defineTable({key:v.string(),payloadId:v.optional(v.id("publicCalendarPayloads")),json:v.optional(v.string()),fetchedAt:v.optional(v.number()),retryAt:v.number(),token:v.optional(v.string()),leaseUntil:v.optional(v.number()),error:v.optional(v.string())}).index("by_key",["key"]).index("by_retry",["retryAt"]),
+  publicCalendarPayloads:defineTable({json:v.string()}),
   bookingNotices: defineTable({
     requestSubject:v.optional(v.string()), requestText:v.optional(v.string()), approverNotice:v.optional(v.boolean()),
     bookingReference:v.string(),recipientEmail:v.string(),kind:v.union(v.literal("edited"),v.literal("deleted")),
@@ -301,6 +304,8 @@ export default defineSchema({
     .index("by_requester_email", ["requesterEmail"])
     .index("by_room_start", ["roomKey", "startAt"])
     .index("by_status", ["status"])
+    // Requests page status filter, newest first (bookings.listPage).
+    .index("by_status_created_at", ["status", "createdAt"])
     .index("by_status_reminders_swept", ["status", "remindersSweptAt"])
     .index("by_conflict_booking", ["conflictBookingId"])
     .index("by_created_at", ["createdAt"])
@@ -494,9 +499,8 @@ export default defineSchema({
     .index("by_created_at", ["createdAt"])
     .index("by_category_created_at", ["category", "createdAt"]),
 
-  // Singleton cache for the dashboard "overview" tile. Refreshed on a cron
-  // (see convex/crons.ts) instead of being computed reactively on every
-  // booking write — see convex/bookingOverviewCache.ts for why.
+  // Singleton cache for the dashboard "overview" tile, recounted only when
+  // bookings change — see convex/bookingOverviewCache.ts for why.
   overviewCountsCache: defineTable({
     pending: v.number(),
     availabilityChecking: v.number(),
@@ -507,5 +511,10 @@ export default defineSchema({
     pendingConflictPairs: v.number(),
     unavailableConflictRequests: v.number(),
     computedAt: v.number(),
+    // When the last cheap "anything changed?" check ran (see refresh).
+    checkedAt: v.optional(v.number()),
+    refreshQueuedAt: v.optional(v.number()),
+    // Set by booking deletions, which do not bump any updatedAt.
+    stale: v.optional(v.boolean()),
   }),
 });

@@ -57,6 +57,9 @@ export type GoogleCalendarEventInput = {
   description?: string;
   location?: string;
   sourceSubmissionId?: string;
+  // Public-calendar label, stored on the event so the public calendar can
+  // show it without reading the booking. See PUBLIC_MINISTRY_NONE.
+  ministry?: string;
   recurrence?: readonly string[];
 };
 
@@ -465,15 +468,30 @@ export function buildGoogleCalendarEventText(input: {
   };
 }
 
+// Stored instead of an empty ministry, matching the "-" in event titles, so
+// "no ministry" is distinguishable from events written before the property.
+export const PUBLIC_MINISTRY_NONE = "-";
+
+export function publicMinistryProperty(ministry: string | undefined): string {
+  return (
+    cleanSingleLine(ministryCalendarLabel(ministry ?? ""), 300) ||
+    PUBLIC_MINISTRY_NONE
+  );
+}
+
 export function buildGoogleCalendarPrivateProperties(input: {
   bookingId: string;
   requestedVenue: string;
   targetVenue: GoogleCalendarVenue;
   sourceSubmissionId?: string;
+  ministry?: string;
 }): Record<string, string> {
   const properties: Record<string, string> = {
     roomopsBookingId: cleanSingleLine(input.bookingId, 1_024),
     roomopsManaged: "true",
+    ...(input.ministry !== undefined
+      ? { roomopsMinistry: publicMinistryProperty(input.ministry) }
+      : {}),
     roomopsRequestedVenue: resolveVenueSelection(
       input.requestedVenue,
     ).displayName,
@@ -811,6 +829,7 @@ function eventBody(
         requestedVenue: input.requestedVenue,
         sourceSubmissionId: input.sourceSubmissionId,
         targetVenue: input.venue,
+        ministry: input.ministry,
       }),
     },
     id: eventId,
@@ -1296,6 +1315,28 @@ export class GoogleCalendarClient {
       status:
         typeof event.status === "string" ? event.status : undefined,
     };
+  }
+
+  /** Merges private properties into an existing event (PATCH merges keys). */
+  async setPrivateProperties(
+    calendarId: string,
+    eventId: string,
+    properties: Record<string, string>,
+  ): Promise<void> {
+    const response = await this.request(
+      `/calendars/${encodeURIComponent(
+        calendarId,
+      )}/events/${encodeURIComponent(eventId)}?sendUpdates=none`,
+      {
+        body: JSON.stringify({ extendedProperties: { private: properties } }),
+        method: "PATCH",
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `GOOGLE_CALENDAR_UPDATE_FAILED:${await responseMessage(response)}`,
+      );
+    }
   }
 
   /**

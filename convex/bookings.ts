@@ -1,4 +1,5 @@
 import { planReminders } from "./bookingReminders";
+import { markOverviewStale } from "./bookingOverviewCache";
 import { queueBookingNotice } from "./lib/bookingNotice";
 import { writeAuditLog } from "./lib/auditLog";
 import { editScopedOccurrences, scopedSequences, type ScopedOccurrence } from "./lib/recurrenceScope";
@@ -18,6 +19,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireCapability, requireHeadAdmin } from "./lib/auth";
 import {
+  bookingStatusValidator,
   calendarEventRefValidator,
   jotformResponseValidator,
   recurrenceFrequencyValidator,
@@ -804,6 +806,45 @@ export const list = query({
       .order("desc")
       .take(300);
     return bookings.map(publicBooking);
+  },
+});
+
+// `list` above re-reads (and re-sends) up to 300 full bookings whenever any
+// of them changes. The Requests page reads it a page at a time instead, so a
+// write only re-runs the page containing that booking. `list` stays for
+// clients deployed before this change.
+export const listPage = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    status: v.optional(bookingStatusValidator),
+  },
+  handler: async (ctx, args) => {
+    await requireCapability(ctx, "bookings.view");
+    const numItems = Math.min(
+      100,
+      Math.max(1, Math.floor(args.paginationOpts.numItems)),
+    );
+    const status = args.status;
+    const bookings = status
+      ? ctx.db
+          .query("bookings")
+          .withIndex("by_status_created_at", (q) => q.eq("status", status))
+      : ctx.db.query("bookings").withIndex("by_created_at");
+    const result = await bookings
+      .order("desc")
+      .paginate({ ...args.paginationOpts, numItems });
+    return { ...result, page: result.page.map(publicBooking) };
+  },
+});
+
+// A link that opens one booking (?booking=<id>) may point past the loaded pages.
+export const getOne = query({
+  args: { bookingId: v.string() },
+  handler: async (ctx, args) => {
+    await requireCapability(ctx, "bookings.view");
+    const id = ctx.db.normalizeId("bookings", args.bookingId);
+    const booking = id ? await ctx.db.get(id) : null;
+    return booking ? publicBooking(booking) : null;
   },
 });
 
@@ -2022,6 +2063,7 @@ export async function deleteBookingRecord(
     const links = await ctx.db.query("requesterLinks").withIndex("by_booking", q => q.eq("bookingId", booking._id)).collect();
     for (const link of links) await ctx.db.patch(link._id, {revokedAt:now});
     await ctx.db.delete(booking._id);
+    await markOverviewStale(ctx);
   }
   else {
     await ctx.db.patch(booking._id, {status:"cancelled",cancelledAt:now,cancelledBy:actorId,revision:(booking.revision??0)+1,updatedAt:now,

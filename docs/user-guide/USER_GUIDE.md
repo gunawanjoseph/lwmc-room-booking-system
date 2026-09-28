@@ -1,6 +1,6 @@
 # Room Booking User Guide
 
-Living Waters Methodist Church · Last updated 24 September 2026
+Living Waters Methodist Church · Last updated 28 September 2026
 
 This guide explains everything you can do with the church's room booking system, in plain language. It is updated whenever a new feature is added; see **What's new** at the end.
 
@@ -149,7 +149,7 @@ On a computer, the menu is down the left side. On a phone, use the bar along the
 | Page | What it's for |
 | --- | --- |
 | Overview | Counts of requests awaiting a decision, approved and unavailable bookings, and conflicts; the latest requests |
-| Bookings | Every request, with search and status filters. Approve, reject, edit or cancel from here |
+| Bookings | Every request, newest first, with search and status filters. Approve, reject, edit or cancel from here |
 | Edit Requests | Changes and cancellations sent in by requesters |
 | Calendar | Each venue's Google Calendar, one venue at a time |
 | Booking data | A spreadsheet-style table of all booking details, for editing and exporting |
@@ -174,7 +174,7 @@ Booking Approvers, Booking Managers and the Head Administrator can decide on new
 
 **In the dashboard**
 
-1. Open **Bookings** and find the request (it's marked **Pending**).
+1. Open **Bookings** and find the request (it's marked **Pending**). The page shows the newest 25 requests; choose **Load more** at the bottom to see older ones. Searching and the status filter always cover every request.
 2. Choose **Approve** or **Reject**, and add a note if you like. The note goes into the email to the requester.
 3. If the request overlaps another pending request, you'll see a warning. Tick the box to confirm you've checked it, then approve again.
 4. After you approve, the system checks the calendars once more and adds the booking to Google Calendar in the background. The booking's buttons are locked until that finishes.
@@ -338,6 +338,7 @@ Changes to Room Booking, newest first. Features marked **Coming soon** are finis
 
 | Date | Change | Status |
 | --- | --- | --- |
+| 28 Sep 2026 | Bookings page opens faster: it shows the newest 25 requests with a **Load more** button | Coming soon |
 | 24 Sep 2026 | New church look and logo; dashboard works like an app on phones; calendar swipes between dates and now loads on iPhone in the Leaders' Portal; clearer emails on phones; Ministry Centre room names standardised; calendar entries no longer repeat a separate Purpose line | Coming soon |
 | 23 Sep 2026 | Public calendar refreshes every 15 minutes | Coming soon |
 | 20 Sep 2026 | Reminder emails 2 days and 2 hours before each meeting | Coming soon |
