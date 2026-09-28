@@ -412,6 +412,12 @@ test('public Google action displays external events, reuses cache and never publ
     calls=0;googleClientModule.GoogleCalendarClient.prototype.listPublicSchedule=async function(){if(++calls===2)throw Error('private details must not escape');return [googleEvent({summary:'PARTIAL'})];};
     const failed=await googleSchedule.read.handler(ctx,{month:'2026-09'});
     assert.ok(failed.error);assert.equal(failed.rows.length,7);assert.equal(failed.fetchedAt,result.fetchedAt);assert.doesNotMatch(JSON.stringify(failed),/PARTIAL|private details/);
+    // RoomOps events carrying the label need no booking read; "-" means none.
+    for(const row of ctx.rows('publicCalendarCache'))await ctx.db.patch(row._id,{retryAt:0,leaseUntil:undefined,token:undefined});
+    const labelled=[['Youth Ministry','Youth Ministry'],['-','']];let next=0;
+    googleClientModule.GoogleCalendarClient.prototype.listPublicSchedule=async function(){const [stored]=labelled[next++%2];return [googleEvent({id:`e${next}`,extendedProperties:{private:{roomopsManaged:'true',roomopsBookingId:'b1',roomopsMinistry:stored}}})];};
+    const labelledResult=await googleSchedule.read.handler(ctx,{month:'2026-09'});
+    assert.equal(labelledResult.error,null);assert.deepEqual([...new Set(labelledResult.rows.map(row=>row.ministry))].sort(),['','Youth Ministry']);
   }finally{googleClientModule.GoogleCalendarClient.prototype.listPublicSchedule=original;for(const name of names){if(old[name]===undefined)delete process.env[name];else process.env[name]=old[name];}}
 });
 test('Google-linked ministry lookup respects scoped overrides and avoids guessing after an external move',async()=>{

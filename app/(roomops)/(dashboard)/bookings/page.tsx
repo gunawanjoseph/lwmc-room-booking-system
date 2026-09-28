@@ -5,6 +5,7 @@ import {
   useAction,
   useConvex,
   useMutation,
+  usePaginatedQuery,
   useQuery,
 } from "convex/react";
 import { DateTime } from "luxon";
@@ -884,13 +885,35 @@ export default function BookingsPage() {
   const profile = useQuery(api.users.me) as
     | { capabilities: Capability[] }
     | undefined;
-  const bookings = useQuery(api.bookings.list) as
-    | Booking[]
-    | undefined;
   const [query, setQuery] = useState("");
   const [requestedBooking, setRequestedBooking] = useState<string | null>(null);
   useEffect(() => { setRequestedBooking(new URLSearchParams(window.location.search).get("booking")); }, []);
   const [status, setStatus] = useState("all");
+  // Read a page at a time: every booking write re-runs only the page that
+  // holds it, instead of re-reading every booking for every open tab.
+  const pages = usePaginatedQuery(
+    api.bookings.listPage,
+    status === "all" ? {} : { status: status as Booking["status"] },
+    { initialNumItems: 25 },
+  );
+  const requested = useQuery(
+    api.bookings.getOne,
+    requestedBooking ? { bookingId: requestedBooking } : "skip",
+  ) as Booking | null | undefined;
+  const searching = query.trim() !== "";
+  const { status: pageStatus, loadMore } = pages;
+  // Search covers every request, so load the rest only while searching.
+  useEffect(() => {
+    if (searching && pageStatus === "CanLoadMore") loadMore(100);
+  }, [searching, pageStatus, loadMore]);
+  const pageResults = pages.results as Booking[];
+  const bookings = useMemo<Booking[] | undefined>(
+    () =>
+      requestedBooking
+        ? requested === undefined ? undefined : requested ? [requested] : []
+        : pageStatus === "LoadingFirstPage" ? undefined : pageResults,
+    [requestedBooking, requested, pageStatus, pageResults],
+  );
   const [decision, setDecision] = useState<{
     booking: Booking;
     decision: "approve" | "reject";
@@ -1347,6 +1370,25 @@ export default function BookingsPage() {
             </tbody>
           </table>
         </div>
+        {!requestedBooking && bookings && pageStatus !== "Exhausted" && (
+          <footer className="sheet-table-footer">
+            <span>
+              {searching
+                ? "Searching older requests…"
+                : `Showing the newest ${bookings.length.toLocaleString()} requests.`}
+            </span>
+            {!searching && (
+              <button
+                type="button"
+                className="button button-secondary button-small"
+                onClick={() => loadMore(25)}
+                disabled={pageStatus === "LoadingMore"}
+              >
+                {pageStatus === "LoadingMore" ? "Loading…" : "Load more"}
+              </button>
+            )}
+          </footer>
+        )}
       </section>
 
       {removing && <BookingRemovalPanel booking={removing} close={(notice) => { setRemoving(null); if (notice) setPageNotice(notice); }} />}

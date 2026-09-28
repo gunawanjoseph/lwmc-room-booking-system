@@ -304,6 +304,8 @@ export default defineSchema({
     .index("by_requester_email", ["requesterEmail"])
     .index("by_room_start", ["roomKey", "startAt"])
     .index("by_status", ["status"])
+    // Requests page status filter, newest first (bookings.listPage).
+    .index("by_status_created_at", ["status", "createdAt"])
     .index("by_status_reminders_swept", ["status", "remindersSweptAt"])
     .index("by_conflict_booking", ["conflictBookingId"])
     .index("by_created_at", ["createdAt"])

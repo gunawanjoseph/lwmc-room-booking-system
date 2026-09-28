@@ -5,6 +5,7 @@ import {
   GoogleCalendarClient,
   buildGoogleCalendarEventText,
   buildGoogleCalendarPrivateProperties,
+  PUBLIC_MINISTRY_NONE,
   buildGoogleCalendarTitle,
   calendarTargetsForVenue,
   deterministicGoogleCalendarEventId,
@@ -425,6 +426,25 @@ describe("Google Calendar event metadata", () => {
       roomopsSubmissionId: "submission_456",
       roomopsTargetVenue: "Ministry Centre A",
     });
+  });
+
+  it("stores the public ministry label, with a marker when there is none", () => {
+    const base = {
+      bookingId: "booking_123",
+      requestedVenue: "Board Room",
+      targetVenue: "Board Room" as const,
+    };
+    expect(
+      buildGoogleCalendarPrivateProperties({ ...base, ministry: "Youth Ministry" })
+        .roomopsMinistry,
+    ).toBe("Youth Ministry");
+    expect(
+      buildGoogleCalendarPrivateProperties({ ...base, ministry: "  " })
+        .roomopsMinistry,
+    ).toBe(PUBLIC_MINISTRY_NONE);
+    expect(
+      buildGoogleCalendarPrivateProperties(base).roomopsMinistry,
+    ).toBeUndefined();
   });
 
   it("uses stable, target-specific Google event IDs", async () => {

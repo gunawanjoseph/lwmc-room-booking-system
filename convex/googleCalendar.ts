@@ -123,6 +123,7 @@ function eventInput(
     description: eventText.description,
     location: eventText.location,
     sourceSubmissionId: booking.jotformSubmissionId,
+    ministry: occurrence.details?.ministry ?? booking.ministry ?? "",
   };
 }
 

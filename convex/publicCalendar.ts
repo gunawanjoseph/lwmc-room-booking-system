@@ -1,8 +1,8 @@
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { action, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { BOOKABLE_GOOGLE_CALENDAR_VENUES, googleCalendarRuntimeFromEnv } from "./lib/googleCalendar";
+import { BOOKABLE_GOOGLE_CALENDAR_VENUES, PUBLIC_MINISTRY_NONE, googleCalendarRuntimeFromEnv, publicMinistryProperty } from "./lib/googleCalendar";
 import { publicCalendarRange, projectGoogleEvent, isInPublicRange } from "./lib/googlePublicCalendar";
 import type { PublicMeeting } from "./lib/publicBookings";
 import { writeAuditLog } from "./lib/auditLog";
@@ -61,7 +61,8 @@ export const finish=internalMutation({args:{key:v.string(),token:v.string(),sinc
   if(args.json!==undefined)return {rows:[],fetchedAt:now,error:args.error??null,refreshing:false};
   return await snapshot(ctx,{...cache,...next},args.since,false);
 }});
-// Only use metadata from a verified, approved RoomOps row. Never override Google times/titles.
+// Fallback for events written before roomopsMinistry existed: only use
+// metadata from a verified, approved RoomOps row. Never override Google times/titles.
 async function linkedMinistry(ctx:QueryCtx,args:{bookingId:string;startAt:number}):Promise<string>{
   const id=ctx.db.normalizeId('bookings',args.bookingId);if(!id)return '';
   const booking=await ctx.db.get(id);if(!booking||booking.status!=='approved')return '';
@@ -101,6 +102,9 @@ export const read=action({args:{month:v.string(),since:v.optional(v.number())},h
         if(!row||!isInPublicRange(row,args.month,timezone))continue;
         const props=event.extendedProperties?.private;
         if(event.visibility!=='private'&&event.visibility!=='confidential'&&props?.roomopsManaged==='true'&&props.roomopsBookingId){
+          // RoomOps writes the label onto the event; only events written
+          // before that need the booking read below.
+          if(props.roomopsMinistry!==undefined){row.ministry=props.roomopsMinistry===PUBLIC_MINISTRY_NONE?'':props.roomopsMinistry;rows.push(row);continue;}
           const linkKey=`${props.roomopsBookingId}\u0000${row.startAt}`;
           const entry=linked.get(linkKey)??{bookingId:props.roomopsBookingId,startAt:row.startAt,rows:[]};
           entry.rows.push(row);
@@ -123,4 +127,33 @@ export const read=action({args:{month:v.string(),since:v.optional(v.number())},h
     const saved=await ctx.runMutation(internal.publicCalendar.finish,{key,token,since:args.since,error:'Google Calendar could not be refreshed. Any displayed events are from the last successful refresh.'});
     return saved??empty;
   }
+}});
+
+// One-off: adds roomopsMinistry to events synced before it existed, so the
+// public calendar never needs the booking fallback for them. Safe to rerun.
+//   npx convex run publicCalendar:backfillEventMinistries
+const BACKFILL_LOOKBACK_MS=62*86400000;
+export const approvedEventMinistries=internalQuery({args:{cursor:v.union(v.string(),v.null())},handler:async(ctx,args)=>{
+  const since=Date.now()-BACKFILL_LOOKBACK_MS;
+  const page=await ctx.db.query('bookings').withIndex('by_status',q=>q.eq('status','approved')).paginate({numItems:25,cursor:args.cursor});
+  const events=page.page.flatMap(booking=>(booking.calendarEvents??[]).filter(ref=>(ref.endAt??Infinity)>=since).map(ref=>{
+    const occurrence=booking.occurrences?.find(row=>row.sequence===ref.occurrenceSequence);
+    return {calendarId:ref.calendarId,eventId:ref.eventId,ministry:occurrence?.details?.ministry??booking.ministry??''};
+  }));
+  return {events,isDone:page.isDone,cursor:page.continueCursor};
+}});
+export const backfillEventMinistries=internalAction({args:{},handler:async(ctx):Promise<{updated:number;failed:number}>=>{
+  const runtime=googleCalendarRuntimeFromEnv(process.env);
+  if(!runtime)return {updated:0,failed:0};
+  let cursor:string|null=null,updated=0,failed=0;
+  for(;;){
+    const page:{events:{calendarId:string;eventId:string;ministry:string}[];isDone:boolean;cursor:string}=await ctx.runQuery(internal.publicCalendar.approvedEventMinistries,{cursor});
+    for(const event of page.events){
+      try{await runtime.client.setPrivateProperties(event.calendarId,event.eventId,{roomopsMinistry:publicMinistryProperty(event.ministry)});updated++;}
+      catch{failed++;}
+    }
+    if(page.isDone)break;
+    cursor=page.cursor;
+  }
+  return {updated,failed};
 }});
