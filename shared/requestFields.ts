@@ -33,7 +33,7 @@ export function isPhoneField(field: {type?: string; label: string}): boolean {
   return field.type === "control_phone" || /phone|mobile|contact number/i.test(field.label);
 }
 export function recurrenceLabel(frequency?: string): string {
-  return ({daily:"Daily", weekly_same_day:"Weekly", biweekly_same_day:"Every two weeks", monthly_same_day:"Monthly on the same ordinal weekday", monthly_same_date:"Monthly on the same date"} as Record<string,string>)[frequency ?? ""] ?? "Existing schedule";
+  return ({none:"No repeat", daily:"Daily", weekly_same_day:"Every week", biweekly_same_day:"Every 2 weeks", monthly_same_day:"Monthly on the same day", monthly_same_date:"Monthly on the same date"} as Record<string,string>)[frequency ?? ""] ?? "Existing schedule";
 }
 
 export function recurrenceDescription(startAt: number, frequency: string | undefined, timezone: string): string {
