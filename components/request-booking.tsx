@@ -10,6 +10,21 @@ import { BookingChangeComparison, requestStatusLabel, type ProposedEdit } from "
 
 import { isPhoneField, normalizePhone, phoneForEdit, phoneInput, PHONE_ERROR, PHONE_INPUT_PATTERN, PHONE_PLACEHOLDER, recurrenceLabel, recurrenceDescription, OTHER_MINISTRY, ministrySelection } from "@/shared/requestFields";
 type Step = "summary" | "edit" | "review" | "cancel";
+
+type CancelledMeeting = { title: string; room: string; startAt: number; endAt: number };
+
+function cancelledMeetings(before: string): CancelledMeeting[] {
+  try {
+    const value = JSON.parse(before) as unknown;
+    return Array.isArray(value) ? value.filter((item): item is CancelledMeeting =>
+      !!item && typeof item === "object" && typeof item.title === "string" && typeof item.room === "string"
+      && typeof item.startAt === "number" && Number.isFinite(item.startAt)
+      && typeof item.endAt === "number" && Number.isFinite(item.endAt)) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function RequestBooking() {
   const [token, setToken] = useState<string | null>(null);
   const [sequence, setSequence] = useState("");
@@ -44,6 +59,14 @@ export function RequestBooking() {
   const pending = data?.requests.find(row => row.status === "pending");
   const processing = data?.busy || data?.requests.some(row => ["checking", "applying", "failed"].includes(row.status));
   const closed = !selected || now >= selected.deadline;
+  const firstBookingAt = data ? Math.min(...data.meetings.map(row => row.startAt),
+    ...data.requests.filter(row => row.kind === "cancel" && row.status === "completed")
+      .flatMap(row => cancelledMeetings(row.before).map(meeting => meeting.startAt))) : undefined;
+  const nextMeeting = data?.meetings.find(row => row.startAt > now);
+  const recurring = !!data?.recurrenceFrequency && data.recurrenceFrequency !== "none";
+  const recurrenceText = recurring ? recurrenceLabel(data?.recurrenceFrequency) : "One-time booking";
+  const noFutureMeetings = !!data && !nextMeeting;
+  const selectedIsPast = !!selected && selected.startAt <= now;
   const stale = step !== "summary" && editVersion !== data?.version;
   function go(next: Step) { setStep(next); setError(""); requestAnimationFrame(() => heading.current?.focus()); }
   function begin(next: "edit" | "cancel") {
@@ -99,22 +122,29 @@ export function RequestBooking() {
       {step === "summary" ? <>
         {selected ? <section className="panel requester-form" aria-label="Approved booking">
           {data.meetings.length > 1 && <label>Meeting<select value={selected.sequence} onChange={e => { setSequence(e.target.value); setNotice(""); }}>
-            {data.meetings.map(row => <option key={row.sequence} value={row.sequence}>{formatDateTime(row.startAt, data.timezone)} · {row.title}</option>)}
+            {data.meetings.map(row => <option key={row.sequence} value={row.sequence}>{row.endAt <= now ? "Past · " : row.startAt <= now ? "In progress · " : "Upcoming · "}{formatDateTime(row.startAt, data.timezone)} · {row.title}</option>)}
           </select></label>}
           <div><span className="request-status">Approved booking</span><h2 className="request-title">{selected.title}</h2></div>
           <div className="request-summary"><p><MapPin size={18} aria-hidden="true"/>{selected.room}</p><p><CalendarDays size={18} aria-hidden="true"/>{formatDateTime(selected.startAt, data.timezone)}</p><p><Clock3 size={18} aria-hidden="true"/>Ends {formatDateTime(selected.endAt, data.timezone)}</p></div>
           {(selected.ministry || selected.purpose) && <p className="request-description">{[selected.ministry, selected.purpose].filter(Boolean).join(" · ")}</p>}
-          <p className="request-muted">{closed ? "Changes and cancellations are only available up to 2 hours before the booking starts." : `Changes and cancellations close ${formatDateTime(selected.deadline, data.timezone)}.`}</p>
+          <section className="request-series" aria-label="Booking schedule">
+            <div className="request-series-heading"><span className="request-series-kicker">{recurring ? "Recurring booking" : "Booking schedule"}</span><strong>{recurrenceText}</strong></div>
+            <dl className="request-series-facts">
+              <div><dt>First booking</dt><dd>{firstBookingAt !== undefined && Number.isFinite(firstBookingAt) ? formatDateTime(firstBookingAt, data.timezone) : "—"}</dd></div>
+              <div><dt>Next meeting</dt><dd>{nextMeeting ? formatDateTime(nextMeeting.startAt, data.timezone) : "No upcoming meetings"}</dd></div>
+            </dl>
+          </section>
+          {noFutureMeetings ? <p className="request-closed-state" role="status"><strong>No upcoming meetings.</strong><br/>There are no future meetings left to edit or cancel. Past meetings cannot be changed or cancelled.</p> : selectedIsPast ? <p className="request-closed-state" role="status"><strong>{selected.endAt <= now ? "This meeting has already ended." : "This meeting has already started."}</strong><br/>Select an upcoming meeting above to edit or cancel. Past meetings cannot be changed or cancelled.</p> : closed ? <p className="request-closed-state" role="status"><strong>Changes are closed for this meeting.</strong><br/>Meetings cannot be edited or cancelled within two hours of their start time.</p> : <p className="request-muted">You can edit or cancel this meeting until {formatDateTime(selected.deadline, data.timezone)}.</p>}
           {pending && <p className="request-notice">An edit request is awaiting approval. You can update it or cancel the booking.</p>}
           {processing && <p className="request-notice" role="status">An operation is being processed. Check its status below.</p>}
           <p className="request-muted">Edit requests used: {data.editCount} / 3{data.editCount >= 3 ? ". The edit limit has been reached. Eligible cancellations are still available." : ". Each update to a pending request counts toward this limit."}</p>
-          <div className="request-actions"><button className="button" disabled={closed || processing || data.editCount >= 3} onClick={() => begin("edit")}>{pending ? "Update pending request" : "Request changes"}</button><button className="button button-secondary request-danger-text" disabled={closed || processing} onClick={() => begin("cancel")}>Cancel booking</button></div>
+          <div className="request-actions"><button className="button" disabled={closed || selectedIsPast || processing || data.editCount >= 3} onClick={() => begin("edit")}>{pending ? "Update pending request" : "Request changes"}</button><button className="button button-secondary request-danger-text" disabled={closed || selectedIsPast || processing} onClick={() => begin("cancel")}>Cancel booking</button></div>
         </section> : <section className="panel requester-form"><CheckCircle2 aria-hidden="true"/><h2>Booking cancelled</h2><p>This booking is cancelled. No further changes can be made.</p>{data.cancellationReason && <p>{data.cancellationReason}</p>}</section>}
       </> : step === "edit" ? <form className="panel requester-form" onSubmit={review}>
         {scopeControl}
         <label>Event title<input required maxLength={300} value={draft.eventName} onChange={e => setDraft({ ...draft, eventName: e.target.value })}/></label>
         <label>Room<select value={draft.room} onChange={e => setDraft({ ...draft, room: e.target.value })}>{data.rooms.map(room => <option key={room}>{room}</option>)}</select></label>
-        {scope === "following" && selected && <p className="request-muted"><strong>{recurrenceLabel(data.recurrenceFrequency)} frequency stays unchanged.</strong><br/>Current: {recurrenceDescription(selected.startAt,data.recurrenceFrequency,data.timezone)}{draft.start && DateTime.fromISO(draft.start,{zone:data.timezone}).isValid && <><br/>Requested: {recurrenceDescription(DateTime.fromISO(draft.start,{zone:data.timezone}).toMillis(),data.recurrenceFrequency,data.timezone)}</>}</p>}
+        {scope === "following" && selected && <p className="request-muted"><strong>Repeats: {recurrenceLabel(data.recurrenceFrequency)}.</strong><br/>Current: {recurrenceDescription(selected.startAt,data.recurrenceFrequency,data.timezone)}{draft.start && DateTime.fromISO(draft.start,{zone:data.timezone}).isValid && <><br/>Requested: {recurrenceDescription(DateTime.fromISO(draft.start,{zone:data.timezone}).toMillis(),data.recurrenceFrequency,data.timezone)}</>}</p>}
         <div className="request-field-grid"><label>Starts<input type="datetime-local" required value={draft.start} onChange={e => setDraft({ ...draft, start: e.target.value })}/></label><label>Ends<input type="datetime-local" required value={draft.end} onChange={e => setDraft({ ...draft, end: e.target.value })}/></label></div>
         <label>Ministry<select required value={data.ministries.includes(draft.ministry) ? draft.ministry : ""} onChange={e => setDraft({ ...draft, ministry: e.target.value })}><option value="" disabled>Select a ministry</option>{data.ministries.map(value => <option key={value}>{value}</option>)}</select></label>
         {draft.ministry === OTHER_MINISTRY && <label>Specify ministry<input required maxLength={120} value={draft.otherMinistry} placeholder="Enter your ministry" onChange={e => setDraft({...draft,otherMinistry:e.target.value})}/></label>}
@@ -123,7 +153,7 @@ export function RequestBooking() {
         <label>Purpose<textarea rows={3} maxLength={2000} value={draft.purpose} onChange={e => setDraft({ ...draft, purpose: e.target.value })}/></label>
         {selected?.fields.map(field => <label key={field.qid}>{field.label}<input onInvalid={e => { if (isPhoneField(field)) e.currentTarget.setCustomValidity(PHONE_ERROR); }} onInput={e => e.currentTarget.setCustomValidity("")} required={isPhoneField(field)} placeholder={isPhoneField(field) ? PHONE_PLACEHOLDER : undefined} pattern={isPhoneField(field) ? PHONE_INPUT_PATTERN : undefined} inputMode={isPhoneField(field) ? "tel" : undefined} type={field.type === "control_number" ? "number" : field.type === "control_email" ? "email" : field.type === "control_phone" ? "tel" : "text"} step={field.type === "control_number" ? "any" : undefined} maxLength={4000} value={responses.find(row => row.qid === field.qid)?.value ?? ""} onChange={e => setResponses(responses.map(row => row.qid === field.qid ? { ...row, value: isPhoneField(field) ? phoneInput(e.target.value) : e.target.value } : row))}/></label>)}
         <label>Note to the approver (optional)<textarea rows={2} maxLength={4000} value={message} onChange={e => setMessage(e.target.value)}/></label>
-        {scope === "following" && <p className="request-muted">{recurrenceLabel(data.recurrenceFrequency)} frequency stays unchanged. Changing the date re-anchors the remaining meetings to the new day, keeping the same number of meetings. Earlier meetings are kept. The room, times and details apply to all selected meetings.</p>}
+        {scope === "following" && <p className="request-muted">The booking will repeat as before. Changing the date moves the remaining meetings to the new schedule, keeping the same number of meetings. Earlier meetings stay unchanged. The room, times and details apply to all selected meetings.</p>}
         <div className="request-actions"><button type="button" className="button button-secondary" onClick={() => go("summary")}><ArrowLeft size={16}/>Back</button><button className="button" disabled={stale || closed}>Review changes</button></div>
       </form> : step === "review" ? <section className="panel requester-form" aria-label="Review changes">
         {selected && proposed ? <BookingChangeComparison before={selected} after={proposed} timezone={data.timezone}/> : <p role="alert">The proposed start is now within two hours. Go back and choose a later time.</p>}
@@ -138,7 +168,13 @@ export function RequestBooking() {
       {data.requests.length > 0 && <section className="request-history" aria-label="Request history"><h2>Activity</h2>{data.requests.map((row, i) => <article className="panel requester-form" key={row.createdAt + ":" + i}>
         <div className="request-history-heading"><strong>{requestStatusLabel(row.status, row.kind)}</strong><time dateTime={new Date(row.createdAt).toISOString()}>{formatDateTime(row.createdAt, data.timezone)}</time></div>
         {row.message && <p>{row.message}</p>}{row.response && <p role={row.status === "failed" ? "alert" : "status"}>{row.response}</p>}
-        {row.status === "completed" && row.kind === "cancel" && <details><summary>Cancelled meetings</summary><ul>{(JSON.parse(row.before) as Array<{title:string;room:string;startAt:number;endAt:number}>).map((meeting, j) => <li key={j}>{meeting.title} · {meeting.room}<br/>{formatDateTime(meeting.startAt, data.timezone)} – {formatDateTime(meeting.endAt, data.timezone)}</li>)}</ul></details>}
+        {row.status === "completed" && row.kind === "cancel" && (() => {
+          const meetings = cancelledMeetings(row.before);
+          return meetings.length > 0 ? <details className="cancelled-meetings">
+            <summary><span><span className="disclosure-closed-label">View cancelled meetings</span><span className="disclosure-open-label">Hide cancelled meetings</span></span><strong>{meetings.length}</strong></summary>
+            <ul>{meetings.map((meeting, j) => <li key={j}>{meeting.title} · {meeting.room}<br/>{formatDateTime(meeting.startAt, data.timezone)} – {formatDateTime(meeting.endAt, data.timezone)}</li>)}</ul>
+          </details> : <p className="request-muted">Cancelled meeting details are unavailable.</p>;
+        })()}
       </article>)}</section>}
     </>}
   </main>;
