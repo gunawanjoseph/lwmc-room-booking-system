@@ -66,20 +66,28 @@ test('email-only internal query projects just recipient booking details',async()
   const ctx=context({bookings:[booking({reviewedBy:'private-admin',formResponses:[{value:'private'}]}),booking({_id:'other',requesterEmail:'other@example.com'})]});
   const result=await own.emailPage.handler(ctx,{email:'PERSON@example.com',paginationOpts:{numItems:20,cursor:null}});assert.equal(result.page.length,3);assert.equal(result.page[0].formResponses,undefined);assert.equal(result.page[0].reviewedBy,undefined);
 });
+// Model approval before cancellation; background Calendar jobs are not executed.
+async function cancelAfterApproval(ctx, args) {
+  await ctx.db.patch(args.bookingId, {status:'approved'});
+  const previous=process.env.GOOGLE_CALENDAR_ENABLED;
+  process.env.GOOGLE_CALENDAR_ENABLED='true';
+  try { return await bookings.removeOccurrences.handler(ctx,args); }
+  finally { if(previous===undefined)delete process.env.GOOGLE_CALENDAR_ENABLED;else process.env.GOOGLE_CALENDAR_ENABLED=previous; }
+}
 test('partial cancellation queues a snapshot only when opted in and never for a failed revision',async()=>{
-  for(const notifySubmitter of [false,true]){const ctx=context({bookings:[booking()]});await bookings.removeOccurrences.handler(ctx,{bookingId:'booking',expectedRevision:1,scope:'occurrence',occurrenceSequence:1,notifySubmitter});assert.equal(ctx.rows('bookingNotices').length,notifySubmitter?1:0);if(notifySubmitter){const row=ctx.rows('bookingNotices')[0];assert.equal(JSON.parse(row.beforeJson).length,1);assert.equal(JSON.parse(row.afterJson).length,0);assert.equal(row.kind,'deleted');}}
-  const ctx=context({bookings:[booking()]});await assert.rejects(bookings.removeOccurrences.handler(ctx,{bookingId:'booking',expectedRevision:999,scope:'occurrence',occurrenceSequence:1,notifySubmitter:true}));assert.equal(ctx.rows('bookingNotices').length,0);
+  for(const notifySubmitter of [false,true]){const ctx=context({bookings:[booking()]});await cancelAfterApproval(ctx,{bookingId:'booking',expectedRevision:1,scope:'occurrence',occurrenceSequence:1,notifySubmitter});assert.equal(ctx.rows('bookingNotices').length,notifySubmitter?1:0);if(notifySubmitter){const row=ctx.rows('bookingNotices')[0];assert.equal(JSON.parse(row.beforeJson).length,1);assert.equal(JSON.parse(row.afterJson).length,0);assert.equal(row.kind,'deleted');}}
+  const ctx=context({bookings:[booking({status:'approved'})]});await assert.rejects(bookings.removeOccurrences.handler(ctx,{bookingId:'booking',expectedRevision:999,scope:'occurrence',occurrenceSequence:1,notifySubmitter:true}),/changed/);assert.equal(ctx.rows('bookingNotices').length,0);
 });
 test('full-series fallback queues no premature cancellation message',async()=>{
-  const ctx=context({bookings:[booking()]});const result=await bookings.removeOccurrences.handler(ctx,{bookingId:'booking',expectedRevision:1,scope:'following',occurrenceSequence:0,notifySubmitter:true});assert.equal(result.deleteAllRequired,true);assert.equal(ctx.rows('bookingNotices').length,0);
+  const ctx=context({bookings:[booking()]});const result=await cancelAfterApproval(ctx,{bookingId:'booking',expectedRevision:1,scope:'following',occurrenceSequence:0,notifySubmitter:true});assert.equal(result.deleteAllRequired,true);assert.equal(ctx.rows('bookingNotices').length,0);
 });
 test('full cancellation queues one email at commit and preserves its snapshot',async()=>{
-  const ctx=context({bookings:[booking({deletionToken:'lease',deletionLeaseExpiresAt:Date.now()+60000})]});
+  const ctx=context({bookings:[booking({status:'approved',deletionToken:'lease',deletionLeaseExpiresAt:Date.now()+60000})]});
   await bookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'lease',notifySubmitter:true});assert.equal((await ctx.db.get('booking')).status,'cancelled');assert.equal(ctx.rows('bookingNotices').length,1);assert.equal(JSON.parse(ctx.rows('bookingNotices')[0].beforeJson).length,3);
   await bookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'lease',notifySubmitter:true});assert.equal(ctx.rows('bookingNotices').length,1);
 });
 test('lost deletion lease never queues a submitter notification',async()=>{
-  const ctx=context({bookings:[booking({deletionToken:'new',deletionLeaseExpiresAt:Date.now()+60000})]});await assert.rejects(bookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'old',notifySubmitter:true}));assert.equal(ctx.rows('bookingNotices').length,0);assert.ok(await ctx.db.get('booking'));
+  const ctx=context({bookings:[booking({status:'approved',deletionToken:'new',deletionLeaseExpiresAt:Date.now()+60000})]});await assert.rejects(bookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'old',notifySubmitter:true}),/no longer owns/);assert.equal(ctx.rows('bookingNotices').length,0);assert.ok(await ctx.db.get('booking'));
 });
 test('edited notification uses updated recipient and records metadata/scope changes',async()=>{
   const ctx=context();const before=booking(),after={...before,requesterEmail:'corrected@example.com',purpose:'New purpose',calendarSyncStatus:'creating'};
@@ -160,7 +168,7 @@ test('repeated single and following edits keep the latest persisted occurrences 
   assert.equal(ctx.rows('bookingNotices')[1].outstandingJson,frozen);
   assert.deepEqual(JSON.parse(frozen).rows.map(row=>row.title),['First exception','Meeting','Third and later','Third and later','Third and later']);
   const current=await ctx.db.get(b._id);
-  await bookings.removeOccurrences.handler(ctx,{bookingId:b._id,expectedRevision:current.revision,scope:'following',occurrenceSequence:2,notifySubmitter:true});
+  await cancelAfterApproval(ctx,{bookingId:b._id,expectedRevision:current.revision,scope:'following',occurrenceSequence:2,notifySubmitter:true});
   const remaining=await own.list.handler(ctx,{email:b.requesterEmail,paginationOpts:{numItems:20,cursor:null}});
   assert.equal(remaining.page.find(row=>row.id===b._id).meetings.length,2);
   assert.equal(JSON.parse(ctx.rows('bookingNotices').at(-1).outstandingJson).rows.length,2);
@@ -176,7 +184,7 @@ test('bulk edits snapshot every changed booking after the whole batch, including
 });
 test('successful full deletion snapshot excludes deleted series and preserves other bookings',async()=>{
   const startAt=Date.now()+3*86400000;
-  const ctx=context({bookings:[booking({deletionToken:'lease',deletionLeaseExpiresAt:Date.now()+60000}),booking({_id:'survivor',eventName:'Retained',startAt,endAt:startAt+3600000,occurrences:undefined})]});
+  const ctx=context({bookings:[booking({status:'approved',deletionToken:'lease',deletionLeaseExpiresAt:Date.now()+60000}),booking({_id:'survivor',eventName:'Retained',startAt,endAt:startAt+3600000,occurrences:undefined})]});
   await bookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'lease',notifySubmitter:true});
   assert.deepEqual(JSON.parse(ctx.rows('bookingNotices')[0].outstandingJson).rows.map(row=>row.title),['Retained']);
 });
@@ -215,7 +223,7 @@ test('whole-series edit replaces earlier title exceptions and a later single can
   let current=await ctx.db.get(b._id);
   assert.ok(rules.submitterMeetings(current).every(row=>row.title==='New entire series'));
   const removedDay=rules.dateKey(current.occurrences[1].startAt,'Asia/Singapore');
-  await bookings.removeOccurrences.handler(ctx,{bookingId:b._id,expectedRevision:current.revision,scope:'occurrence',occurrenceSequence:current.occurrences[1].sequence,notifySubmitter:true});
+  await cancelAfterApproval(ctx,{bookingId:b._id,expectedRevision:current.revision,scope:'occurrence',occurrenceSequence:current.occurrences[1].sequence,notifySubmitter:true});
   current=await ctx.db.get(b._id);
   const rows=rules.submitterMeetings(current);
   assert.equal(rows.length,2);assert.equal(calendar.meetingsOnDay(rows,removedDay,'Asia/Singapore').length,0);

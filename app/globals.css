@@ -2279,6 +2279,10 @@ textarea:focus-visible {
   background: var(--rose-soft);
 }
 
+.log-success { color: var(--success); background: var(--success-soft); }
+.log-processing-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 12px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.log-processing-status .status-badge { white-space: normal; }
+
 .log-main {
   min-width: 0;
   flex: 1;
@@ -2287,7 +2291,8 @@ textarea:focus-visible {
 .log-title-line {
   display: flex;
   justify-content: space-between;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: 6px 20px;
 }
 
 .log-title-line strong {

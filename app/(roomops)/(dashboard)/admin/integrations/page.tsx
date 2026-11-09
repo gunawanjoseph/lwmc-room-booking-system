@@ -304,7 +304,7 @@ export default function IntegrationsPage() {
       setRetryMessage(
         result.alreadyProcessed
           ? "That submission was already processed."
-          : "The submission was queued for processing.",
+          : "The submission was queued. Follow its progress in System logs; automatic retries continue for up to one hour.",
       );
       setRetryId("");
     } catch (caught) {
@@ -761,7 +761,9 @@ export default function IntegrationsPage() {
           <h2>Retry a failed Jotform submission</h2>
           <p>
             Use the submission ID shown in the system log. Successful
-            and duplicate submissions remain idempotent.
+            submissions will not be duplicated. Automatic attempts run
+            immediately, then at 1, 6, 15, 30, and 60 minutes. A manual
+            retry starts a fresh run.
           </p>
         </div>
         <form onSubmit={retry}>

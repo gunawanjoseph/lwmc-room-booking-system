@@ -454,8 +454,29 @@ test('friendly errors preserve natural at phrases and remove Convex diagnostics'
  assert.match(ui.messageFromError({data:{code:'BOOKING_EDIT_CONFLICT',message:'The booking changed.'}}),/review the latest/i);
 });
 test('admin comments are audited and included in scoped cancellation notice',async()=>{
- const ctx=setup({status:'pending'});await adminBookings.removeOccurrences.handler(ctx,{bookingId:'booking',expectedRevision:0,scope:'occurrence',occurrenceSequence:3,notifySubmitter:true,reason:'Room needed for church event'});
+ const ctx=setup();const previous=process.env.GOOGLE_CALENDAR_ENABLED;process.env.GOOGLE_CALENDAR_ENABLED='true';
+ try {await adminBookings.removeOccurrences.handler(ctx,{bookingId:'booking',expectedRevision:0,scope:'occurrence',occurrenceSequence:3,notifySubmitter:true,reason:'Room needed for church event'});}
+ finally {if(previous===undefined)delete process.env.GOOGLE_CALENDAR_ENABLED;else process.env.GOOGLE_CALENDAR_ENABLED=previous;}
  assert.match(ctx.rows('bookingNotices')[0].detailChanges,/Room needed for church event/);assert.ok(ctx.rows('auditLogs').some(row=>row.detailsJson?.includes('Room needed for church event')));
+});
+test('unapproved bookings cannot be cancelled through any admin cancellation path',async()=>{
+ for(const status of ['pending','rejected','unavailable']){
+  for(const operation of ['whole','partial','complete','record']){
+   const ctx=setup({status,...(operation==='complete'?{deletionToken:'lease',deletionLeaseExpiresAt:Date.now()+60000}:{})});const before=await ctx.db.get('booking');
+   const run=operation==='whole'?()=>adminBookings.beginBookingDeletion.handler(ctx,{bookingId:'booking',expectedRevision:0,actorId:'admin',deletionToken:'delete'})
+    :operation==='partial'?()=>adminBookings.removeOccurrences.handler(ctx,{bookingId:'booking',expectedRevision:0,scope:'occurrence',occurrenceSequence:3,notifySubmitter:true})
+    :operation==='complete'?()=>adminBookings.completeBookingDeletion.handler(ctx,{bookingId:'booking',actorId:'admin',deletionToken:'lease',notifySubmitter:true})
+    :()=>adminBookings.deleteBookingRecord(ctx,before,'admin');
+   await assert.rejects(run,/Only approved bookings/);
+   assert.deepEqual(await ctx.db.get('booking'),before);assert.equal(ctx.rows('bookingNotices').length,0);assert.equal(ctx.jobs.length,0);
+  }
+ }
+});
+test('pending booking links cannot read or submit requester cancellation',async()=>{
+ const ctx=setup({status:'pending'});
+ assert.equal(await requests.view.handler(ctx,{token}),null);
+ await assert.rejects(requests.submit.handler(ctx,{token,sequence:7,scope:'occurrence',kind:'cancel',message:'',version:'',operationKey:crypto.randomUUID(),confirmed:true}),/unavailable/);
+ assert.equal(ctx.rows('bookingRequests').length,0);
 });
 test('admin edit comment reaches audit and email',async()=>{
  const ctx=setup();const b=await ctx.db.get('booking');await adminBookings.edit.handler(ctx,{...adminInput(b),notifySubmitter:true,reason:'Meeting moved by office'});

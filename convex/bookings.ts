@@ -2,6 +2,7 @@ import { planReminders } from "./bookingReminders";
 import { markOverviewStale } from "./bookingOverviewCache";
 import { queueBookingNotice } from "./lib/bookingNotice";
 import { writeAuditLog } from "./lib/auditLog";
+import { completeJotformProcessing } from "./lib/jotformProcessing";
 import { editScopedOccurrences, scopedSequences, type ScopedOccurrence } from "./lib/recurrenceScope";
 import { DateTime } from "luxon";
 import { JOTFORM_LEGACY_COMBINED_VENUE_ALIASES } from "../shared/jotformConstants";
@@ -1226,12 +1227,7 @@ export const stageJotformSubmission = internalMutation({
           );
         }
         if (existing.availabilityCheckPending !== true) {
-          await ctx.db.patch(receipt._id, {
-            state: "processed",
-            lastError: undefined,
-            processingStartedAt: undefined,
-            processingToken: undefined,
-          });
+          await completeJotformProcessing(ctx, receipt, now);
         }
         await ctx.scheduler.runAfter(
           0,
@@ -1251,20 +1247,8 @@ export const stageJotformSubmission = internalMutation({
     if (existingBySubmission) {
       const availabilityCompleted =
         existingBySubmission.availabilityCheckPending !== true;
-      await ctx.db.patch(
-        receipt._id,
-        availabilityCompleted
-          ? {
-              state: "processed",
-              bookingId: existingBySubmission._id,
-              lastError: undefined,
-              processingStartedAt: undefined,
-              processingToken: undefined,
-            }
-          : {
-              bookingId: existingBySubmission._id,
-            },
-      );
+      await ctx.db.patch(receipt._id, { bookingId: existingBySubmission._id });
+      if (availabilityCompleted) await completeJotformProcessing(ctx, receipt, now);
       await ctx.scheduler.runAfter(
         0,
         internal.emailNotifications.notifyBookingReceipt,
@@ -1416,21 +1400,11 @@ export const finalizeJotformSubmission = internalMutation({
     requireBookingDeletionIdle(booking,now);
     if (booking.requesterOperationId) bookingError("REQUEST_IN_PROGRESS", "A requester operation is in progress. Review it in Edit Requests.");
     if (bookingDeletionInProgress(booking, now)) {
-      await ctx.db.patch(receipt._id, {
-        state: "processed",
-        lastError: undefined,
-        processingStartedAt: undefined,
-        processingToken: undefined,
-      });
+      await completeJotformProcessing(ctx, receipt, now);
       return booking;
     }
     if (booking.availabilityCheckPending !== true) {
-      await ctx.db.patch(receipt._id, {
-        state: "processed",
-        lastError: undefined,
-        processingStartedAt: undefined,
-        processingToken: undefined,
-      });
+      await completeJotformProcessing(ctx, receipt, now);
       return booking;
     }
 
@@ -1514,12 +1488,7 @@ export const finalizeJotformSubmission = internalMutation({
       }
     }
 
-    await ctx.db.patch(receipt._id, {
-      state: "processed",
-      lastError: undefined,
-      processingStartedAt: undefined,
-      processingToken: undefined,
-    });
+    await completeJotformProcessing(ctx, receipt, now);
     const snapshotCapped =
       booking.formResponsesTruncated === true;
     const hasPendingWarning =
@@ -1960,6 +1929,9 @@ export async function deleteBookingRecord(
   actorId: string,
   erase = false,
 ) {
+  if (!erase && booking.status !== "approved") {
+    bookingError("BOOKING_NOT_APPROVED", "Only approved bookings can be cancelled. Pending requests can be edited, rejected, or approved.");
+  }
   const decisionTokens = await ctx.db
     .query("emailDecisionTokens")
     .withIndex("by_booking", (query) =>
@@ -2086,6 +2058,7 @@ export const beginBookingDeletion = internalMutation({
     if (!booking) bookingError("BOOKING_NOT_FOUND", "This booking has already been cancelled or is no longer available. Review the latest booking list.");
     const now = Date.now();
     requireBookingDeletionIdle(booking,now);
+    if (booking.status !== "approved") bookingError("BOOKING_NOT_APPROVED", "Only approved bookings can be cancelled. Pending requests can be edited, rejected, or approved.");
     if (booking.requesterOperationId) bookingError("REQUEST_IN_PROGRESS", "A requester operation is in progress. Review it in Edit Requests.");
     if (bookingDeletionInProgress(booking, now)) {
       bookingError(
@@ -2209,6 +2182,7 @@ export const completeBookingDeletion = internalMutation({
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return { deleted: false };
     if (booking.status === "cancelled") return { deleted: true };
+    if (booking.status !== "approved") bookingError("BOOKING_NOT_APPROVED", "Only approved bookings can be cancelled. Pending requests can be edited, rejected, or approved.");
     if (booking.deletionToken !== args.deletionToken) {
       bookingError(
         "BOOKING_DELETE_LEASE_LOST",
@@ -2348,28 +2322,20 @@ export const removeOccurrences = mutation({
     if (!booking) bookingError("BOOKING_NOT_FOUND", "This booking no longer exists.");
     requireAvailabilityCheckComplete(booking);
     requireBookingDeletionIdle(booking);
+    if (booking.status !== "approved") bookingError("BOOKING_NOT_APPROVED", "Only approved bookings can be cancelled. Pending requests can be edited, rejected, or approved.");
     if (booking.calendarSyncToken) bookingError("CALENDAR_SYNC_IN_PROGRESS", "Wait for Calendar synchronization to finish.");
     if ((booking.revision ?? 0) !== args.expectedRevision) bookingError("BOOKING_EDIT_CONFLICT", "The booking changed. Reopen the removal panel.");
     const original = booking.occurrences ?? [{ sequence: 0, startAt: booking.startAt, endAt: booking.endAt }];
     const selected = scopedSequences(original, args.scope, args.occurrenceSequence);
     const occurrences = original.filter((item) => !selected.has(item.sequence));
     if (!occurrences.length) return { deleteAllRequired: true, calendarQueued: false };
-    await archiveCancelledOccurrences(ctx,booking,original.filter(row=>selected.has(row.sequence)),user.clerkUserId,args.reason,booking.status === "approved");
-    if (booking.status !== "approved" && (booking.calendarAttemptedEvents?.length ?? 0) > 0) {
-      bookingError("CALENDAR_CLEANUP_REQUIRED", "Resolve the failed Calendar approval before removing part of this booking.");
-    }
+    await archiveCancelledOccurrences(ctx,booking,original.filter(row=>selected.has(row.sequence)),user.clerkUserId,args.reason,true);
     const now = Date.now();
     await clearReciprocalConflictWarnings(ctx, booking, now);
     await clearBlockingConflictReferences(ctx, booking._id, now);
     await removeClaims(ctx, booking._id);
-    if (booking.status === "pending" || booking.status === "approved") {
-      await addClaims(ctx, booking._id, { occurrences, resolvedVenues: booking.resolvedVenues ?? [booking.room] });
-    }
-    const conflicts = booking.status === "pending" ? await findConflicts(ctx, {
-      occurrences, resolvedVenues: booking.resolvedVenues ?? [booking.room], excludeBookingId: booking._id,
-    }) : [];
-    const warningIds = uniqueBookingIds(conflicts.filter((item) => item.booking.status === "pending").map((item) => item.bookingId));
-    await addReciprocalConflictWarnings(ctx, booking._id, warningIds, now);
+    await addClaims(ctx, booking._id, { occurrences, resolvedVenues: booking.resolvedVenues ?? [booking.room] });
+    const warningIds: Id<"bookings">[] = [];
     const revision = (booking.revision ?? 0) + 1;
     const attempt = (booking.calendarSyncAttempts ?? 0) + 1;
     const calendarQueued = booking.status === "approved";

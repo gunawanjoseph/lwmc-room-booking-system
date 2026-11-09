@@ -1144,7 +1144,7 @@ export default function BookingDataPage() {
                       </td>
                       {canEdit && (
                         <td>
-                          <button
+                          {booking.status === "approved" || booking.status === "cancelled" ? <button
                             type="button"
                             className="button button-danger button-tiny"
                             onClick={() => deleteRow(booking)}
@@ -1170,7 +1170,7 @@ export default function BookingDataPage() {
                             {removing?._id === booking._id || booking.cancellationPending
                               ? "Saving…"
                               : booking.status === "cancelled" ? "Erase data" : "Cancel"}
-                          </button>
+                          </button> : <span className="view-only-label">{booking.status === "pending" ? "Awaiting approval" : "—"}</span>}
                         </td>
                       )}
                     </tr>

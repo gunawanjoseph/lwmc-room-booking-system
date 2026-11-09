@@ -632,6 +632,20 @@ Check `/logs` for the submission ID. Confirm that:
 The Head Administrator may retry a failed submission ID from
 `/admin/integrations`.
 
+Automatic processing makes six attempts at 0, 1, 6, 15, 30, and 60
+minutes from the first attempt. System logs show the next retry time;
+early delays are informational. A submission still delayed after 15
+minutes is flagged for attention and uses the existing technical-alert
+delivery mechanism. After the sixth attempt, it needs a manual retry.
+Successful recovery is labelled **Recovered after retry**, including
+on historical error entries. Manual Retry starts a fresh one-hour run;
+jobs from older runs cannot restart or interrupt it. Existing exhausted
+receipts can enter the new schedule through manual Retry.
+
+Only approved bookings may be cancelled, either in full or by meeting.
+Pending requests may be edited, rejected, or approved; cancellation is
+blocked in both the interface and backend, including older clients.
+
 ### A mapped field was deleted and recreated
 
 Its question ID may have changed. Inspect the form again at
