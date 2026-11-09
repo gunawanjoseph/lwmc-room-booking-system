@@ -1272,7 +1272,7 @@ export default function BookingsPage() {
                               <RotateCcw size={16} />
                             </button>
                           )}
-                        {canEdit && (
+                        {canEdit && (booking.status === "approved" || booking.status === "cancelled") && (
                           <button
                             className="icon-button action-reject"
                             aria-label={`${booking.status === "cancelled" ? "Erase data for" : "Cancel"} ${booking.room} booking`}

@@ -9,6 +9,7 @@ import {
   action,
   internalAction,
   internalMutation,
+  type MutationCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
@@ -27,6 +28,7 @@ import {
   MAX_RECURRENCE_OCCURRENCES,
   expandRecurrence,
 } from "./lib/recurrence";
+import { JOTFORM_ATTEMPT_OFFSETS_MS, JOTFORM_ATTENTION_AFTER_MS, nextJotformRetryAt } from "../shared/jotformRetry";
 
 type JotformEnvelope<T> = {
   responseCode?: number;
@@ -67,8 +69,33 @@ type FormInspection = {
 };
 
 const ALLOWED_API_BASES = new Set<string>(JOTFORM_API_BASE_URLS);
-const MAX_PROCESSING_ATTEMPTS = 3;
+const MAX_PROCESSING_ATTEMPTS = JOTFORM_ATTEMPT_OFFSETS_MS.length;
 const PROCESSING_LEASE_MS = 5 * 60_000;
+
+async function recordSubmissionFailure(ctx: MutationCtx, receipt: Doc<"externalSubmissions">, error: string) {
+  const now = Date.now();
+  const retryStartedAt = receipt.retryStartedAt ?? receipt.firstReceivedAt;
+  const nextRetryAt = nextJotformRetryAt(retryStartedAt, receipt.attempts, now);
+  const needsAttention = nextRetryAt === undefined || now - retryStartedAt >= JOTFORM_ATTENTION_AFTER_MS;
+  const firstAttention = needsAttention && receipt.attentionNotifiedAt === undefined;
+  await ctx.db.patch(receipt._id, {
+    state: "failed", lastError: error.slice(0, 500), processingStartedAt: undefined, processingToken: undefined,
+    retryStartedAt, nextRetryAt, failureCount: (receipt.failureCount ?? Math.max(0, receipt.attempts - 1)) + 1,
+    ...(firstAttention ? { attentionNotifiedAt: now } : {}),
+  });
+  await writeAuditLog(ctx, {
+    level: nextRetryAt === undefined ? "error" : firstAttention ? "warning" : "info",
+    category: "jotform", actorType: "system", entityType: "jotform_submission", entityId: receipt.submissionId,
+    action: nextRetryAt === undefined ? "submission_processing_failed" : firstAttention ? "submission_processing_attention" : "submission_retry_scheduled",
+    message: nextRetryAt === undefined ? "Jotform submission needs attention. Automatic retries are exhausted; retry it manually after checking the integration."
+      : firstAttention ? "Jotform submission is still delayed and needs attention. Automatic retries will continue."
+      : "Jotform submission delayed. An automatic retry is scheduled.",
+    detailsJson: JSON.stringify({ error: error.slice(0, 500), attempt: receipt.attempts, nextRetryAt }), createdAt: now,
+  });
+  if (nextRetryAt !== undefined) await ctx.scheduler.runAfter(nextRetryAt - now, internal.jotform.resetAndProcess, {
+    receiptId: receipt._id, failedAttempt: receipt.attempts, retryRun: receipt.retryRun ?? 0,
+  });
+}
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -156,9 +183,13 @@ export const queueSubmission = internalMutation({
         existing.state === "processing" &&
         (!existing.processingStartedAt ||
           existing.processingStartedAt + PROCESSING_LEASE_MS <= now);
-      const shouldRetry =
-        (existing.state === "failed" || processingLeaseExpired) &&
-        existing.attempts < MAX_PROCESSING_ATTEMPTS;
+      if (processingLeaseExpired) {
+        await ctx.db.patch(existing._id, { deliveryCount: existing.deliveryCount + 1, lastReceivedAt: now });
+        await recordSubmissionFailure(ctx, existing, "JOTFORM_PROCESSING_LEASE_EXPIRED");
+        return { accepted: true, duplicate: true, state: "failed" };
+      }
+      const shouldRetry = existing.state === "failed" && existing.attempts < MAX_PROCESSING_ATTEMPTS
+        && (existing.nextRetryAt === undefined || existing.nextRetryAt <= now);
       const shouldDispatch =
         existing.state === "received" || shouldRetry;
       await ctx.db.patch(existing._id, {
@@ -172,12 +203,13 @@ export const queueSubmission = internalMutation({
         processingToken: shouldRetry
           ? undefined
           : existing.processingToken,
+        nextRetryAt: shouldRetry ? undefined : existing.nextRetryAt,
       });
       if (shouldDispatch) {
         await ctx.scheduler.runAfter(
           0,
           internal.jotform.dispatchSubmission,
-          { receiptId: existing._id },
+          { receiptId: existing._id, retryRun: existing.retryRun ?? 0 },
         );
       }
       return {
@@ -205,25 +237,30 @@ export const queueSubmission = internalMutation({
 });
 
 export const dispatchSubmission = internalMutation({
-  args: { receiptId: v.id("externalSubmissions") },
+  args: { receiptId: v.id("externalSubmissions"), retryRun: v.optional(v.number()) },
   handler: async (ctx, args): Promise<void> => {
     const receipt = await ctx.db.get(args.receiptId);
     if (
       !receipt ||
       receipt.state !== "received" ||
+      (receipt.retryRun ?? 0) !== (args.retryRun ?? 0) ||
       receipt.attempts >= MAX_PROCESSING_ATTEMPTS
     ) {
       return;
     }
     const now = Date.now();
-    const processingToken = `${String(receipt._id)}:${receipt.attempts + 1}:${now}`;
+    const processingToken = `${String(receipt._id)}:${receipt.retryRun ?? 0}:${receipt.attempts + 1}:${now}`;
 
     await ctx.db.patch(receipt._id, {
       state: "processing",
       attempts: receipt.attempts + 1,
       processingStartedAt: now,
       processingToken,
-      lastError: undefined,
+      retryStartedAt: receipt.retryStartedAt ?? now,
+      nextRetryAt: undefined,
+    });
+    if (receipt.attempts === 0) await ctx.scheduler.runAfter(JOTFORM_ATTENTION_AFTER_MS, internal.jotform.flagDelayedSubmission, {
+      receiptId: receipt._id, retryRun: receipt.retryRun ?? 0,
     });
     await ctx.scheduler.runAfter(
       0,
@@ -260,39 +297,25 @@ export const markFailed = internalMutation({
     ) {
       return;
     }
-    const message = args.errorMessage.slice(0, 500);
-    await ctx.db.patch(receipt._id, {
-      state: "failed",
-      lastError: message,
-      processingStartedAt: undefined,
-      processingToken: undefined,
-    });
-    await writeAuditLog(ctx, {
-      level: "error",
-      category: "jotform",
-      action: "submission_processing_failed",
-      actorType: "system",
-      entityType: "jotform_submission",
-      entityId: receipt.submissionId,
-      message: "A Jotform submission could not be processed.",
-      detailsJson: JSON.stringify({
-        error: message,
-        attempt: receipt.attempts,
-      }),
-      createdAt: Date.now(),
-    });
+    await recordSubmissionFailure(ctx, receipt, args.errorMessage);
+  },
+});
 
-    if (receipt.attempts < MAX_PROCESSING_ATTEMPTS) {
-      const retryDelayMs = receipt.attempts === 1 ? 60_000 : 300_000;
-      await ctx.scheduler.runAfter(
-        retryDelayMs,
-        internal.jotform.resetAndProcess,
-        {
-          receiptId: receipt._id,
-          failedAttempt: receipt.attempts,
-        },
-      );
-    }
+export const flagDelayedSubmission = internalMutation({
+  args: { receiptId: v.id("externalSubmissions"), retryRun: v.number() },
+  handler: async (ctx, args) => {
+    const receipt = await ctx.db.get(args.receiptId);
+    if (!receipt || receipt.state === "processed" || (receipt.retryRun ?? 0) !== args.retryRun
+      || receipt.attentionNotifiedAt !== undefined || (receipt.failureCount ?? 0) === 0) return;
+    const now = Date.now();
+    if (now < (receipt.retryStartedAt ?? receipt.firstReceivedAt) + JOTFORM_ATTENTION_AFTER_MS) return;
+    await ctx.db.patch(receipt._id, { attentionNotifiedAt: now });
+    await writeAuditLog(ctx, {
+      level: "warning", category: "jotform", action: "submission_processing_attention", actorType: "system",
+      entityType: "jotform_submission", entityId: receipt.submissionId,
+      message: "Jotform submission is still delayed after 15 minutes and needs attention. Automatic retries will continue.",
+      detailsJson: JSON.stringify({ attempt: receipt.attempts, nextRetryAt: receipt.nextRetryAt, error: receipt.lastError }), createdAt: now,
+    });
   },
 });
 
@@ -300,6 +323,7 @@ export const resetAndProcess = internalMutation({
   args: {
     receiptId: v.id("externalSubmissions"),
     failedAttempt: v.number(),
+    retryRun: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<void> => {
     const receipt = await ctx.db.get(args.receiptId);
@@ -307,17 +331,20 @@ export const resetAndProcess = internalMutation({
       !receipt ||
       receipt.state !== "failed" ||
       receipt.attempts !== args.failedAttempt ||
+      (receipt.retryRun ?? 0) !== (args.retryRun ?? 0) ||
       receipt.attempts >= MAX_PROCESSING_ATTEMPTS
     ) {
       return;
     }
+    if (receipt.nextRetryAt !== undefined && receipt.nextRetryAt > Date.now()) return;
     await ctx.db.patch(receipt._id, {
       state: "received",
       processingStartedAt: undefined,
       processingToken: undefined,
+      nextRetryAt: undefined,
     });
     await ctx.scheduler.runAfter(0, internal.jotform.dispatchSubmission, {
-      receiptId: receipt._id,
+      receiptId: receipt._id, retryRun: receipt.retryRun ?? 0,
     });
   },
 });
@@ -340,39 +367,7 @@ export const recoverProcessingLease = internalMutation({
       return;
     }
 
-    if (receipt.attempts < MAX_PROCESSING_ATTEMPTS) {
-      await ctx.db.patch(receipt._id, {
-        state: "received",
-        processingStartedAt: undefined,
-        processingToken: undefined,
-        lastError: "JOTFORM_PROCESSING_LEASE_EXPIRED",
-      });
-      await ctx.scheduler.runAfter(
-        0,
-        internal.jotform.dispatchSubmission,
-        { receiptId: receipt._id },
-      );
-      return;
-    }
-
-    await ctx.db.patch(receipt._id, {
-      state: "failed",
-      processingStartedAt: undefined,
-      processingToken: undefined,
-      lastError: "JOTFORM_PROCESSING_LEASE_EXPIRED",
-    });
-    await writeAuditLog(ctx, {
-      level: "error",
-      category: "jotform",
-      action: "submission_processing_lease_expired",
-      actorType: "system",
-      entityType: "jotform_submission",
-      entityId: receipt.submissionId,
-      message:
-        "A Jotform submission exhausted its processing retries after a worker timeout.",
-      detailsJson: JSON.stringify({ attempt: receipt.attempts }),
-      createdAt: now,
-    });
+    await recordSubmissionFailure(ctx, receipt, "JOTFORM_PROCESSING_LEASE_EXPIRED");
   },
 });
 
@@ -609,12 +604,18 @@ export const retryBySubmissionId = internalMutation({
     await ctx.db.patch(receipt._id, {
       state: "received",
       attempts: 0,
+      failureCount: receipt.failureCount ?? receipt.attempts,
+      retryRun: (receipt.retryRun ?? 0) + 1,
+      retryStartedAt: undefined,
+      nextRetryAt: undefined,
+      attentionNotifiedAt: undefined,
       lastError: undefined,
       processingStartedAt: undefined,
       processingToken: undefined,
     });
     await ctx.scheduler.runAfter(0, internal.jotform.dispatchSubmission, {
       receiptId: receipt._id,
+      retryRun: (receipt.retryRun ?? 0) + 1,
     });
     return { state: "received", alreadyProcessed: false };
   },

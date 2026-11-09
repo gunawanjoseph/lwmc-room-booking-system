@@ -16,6 +16,7 @@ type RemovalBooking = {
 export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking; close: (notice?: string) => void}) {
   const erase = useMutation(api.bookings.eraseCancelled);
   const cancelled = booking.status === "cancelled";
+  const canCancel = booking.status === "approved";
   const removeAll = useAction(api.googleCalendar.deleteBooking);
   const removeSome = useMutation(api.bookings.removeOccurrences);
   const occurrences = booking.occurrences ?? [{sequence:0,startAt:booking.startAt,endAt:booking.endAt}];
@@ -39,7 +40,7 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
     return () => { document.body.style.overflow = overflow; previous?.focus(); };
   }, []);
   async function submit() {
-    if (busy || booking.cancellationPending) return;
+    if (busy || booking.cancellationPending || (!cancelled && !canCancel)) return;
     setBusy(true); setError("");
     try {
       if (cancelled) {
@@ -71,9 +72,9 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
         }
       }}>
       <div className="modal-heading"><span className="panel-kicker">MANAGE MEETINGS</span><button type="button" className="icon-button" disabled={busy} onClick={event=>fromKeyboard(event)?close():dismiss()} aria-label="Close cancellation panel"><X size={20}/></button></div>
-      <h2 id="remove-booking-title">{cancelled ? "Erase booking data?" : "Cancel booking"}</h2>
+      <h2 id="remove-booking-title">{cancelled ? "Erase booking data?" : canCancel ? "Cancel booking" : "Cancellation unavailable"}</h2>
       <div className="removal-summary"><CalendarDays size={24}/><div><strong>{booking.eventName || booking.room}</strong><p>{booking.room} · {occurrences.length} meeting{recurring ? "s" : ""}</p><small>Booking {booking.jotformSubmissionId}</small></div></div>
-      {!cancelled && recurring && <>
+      {canCancel && recurring && <>
         <label className="field"><span>Selected meeting</span><select disabled={busy} value={sequence} onChange={event=>setSequence(Number(event.target.value))}>{occurrences.map(item=><option key={item.sequence} value={item.sequence}>{formatDateTime(item.startAt,booking.timezone)} · {item.room ?? booking.room}</option>)}</select></label>
         <fieldset className="scope-options" disabled={busy}><legend>Which meetings should be cancelled?</legend>{([
           ["occurrence","This event","Keep every other meeting."],
@@ -81,13 +82,13 @@ export function BookingRemovalPanel({ booking, close }: {booking: RemovalBooking
           ["series","All events","Cancel the entire booking, including past dates."],
         ] as const).map(([value,title,description])=><label className={`scope-option ${scope===value?"selected":""}`} key={value}><input type="radio" name="remove-scope" checked={scope===value} onChange={()=>setScope(value)}/><span><strong>{title}</strong><small>{description}</small></span></label>)}</fieldset>
       </>}
-      {cancelled ? <div className="removal-impact"><p>This permanently erases the cancelled booking record. It cannot be undone.</p>{booking.cancellationPending && <p role="status">Google Calendar cleanup must finish before you can erase this record.</p>}</div> : <>
+      {cancelled ? <div className="removal-impact"><p>This permanently erases the cancelled booking record. It cannot be undone.</p>{booking.cancellationPending && <p role="status">Google Calendar cleanup must finish before you can erase this record.</p>}</div> : !canCancel ? <p className="removal-impact">Only approved bookings can be cancelled. Pending requests can be edited, rejected, or approved.</p> : <>
         <div className="removal-impact"><strong>{count} meeting{count===1?"":"s"} will be cancelled</strong><p>The cancelled record will remain read-only. Google Calendar must finish updating before you rely on the room schedule.</p></div>
         <label className="field"><span>Reason (optional)</span><textarea rows={3} maxLength={2000} value={reason} disabled={busy} onChange={e=>setReason(e.target.value)}/></label>
         <label className="notification-choice"><input type="checkbox" checked={notifySubmitter} disabled={busy} onChange={event=>setNotifySubmitter(event.target.checked)}/><span>Email the requester after cancellation</span></label>
       </>}
       {error && <div className="form-error" role="alert">{error}</div>}
-      <div className="drawer-actions"><button type="button" className="button button-secondary" disabled={busy} onClick={event=>fromKeyboard(event)?close():dismiss()}>{cancelled ? "Keep record" : "Go back"}</button><button type="button" className="button button-danger" disabled={busy || booking.cancellationPending} onClick={submit}>{cancelled ? <Trash2 size={16}/> : <CircleSlash2 size={16}/>} {busy ? "Saving…" : cancelled ? "Erase data" : "Cancel booking"}</button></div>
+      <div className="drawer-actions"><button type="button" className="button button-secondary" disabled={busy} onClick={event=>fromKeyboard(event)?close():dismiss()}>{cancelled ? "Keep record" : "Go back"}</button>{(cancelled || canCancel) && <button type="button" className="button button-danger" disabled={busy || booking.cancellationPending} onClick={submit}>{cancelled ? <Trash2 size={16}/> : <CircleSlash2 size={16}/>} {busy ? "Saving…" : cancelled ? "Erase data" : "Cancel booking"}</button>}</div>
     </aside>
   </div>;
 }

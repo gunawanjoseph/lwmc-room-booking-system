@@ -2,6 +2,7 @@ import { writeAuditLog } from "./lib/auditLog";
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { requireCapability } from "./lib/auth";
+import type { Doc } from "./_generated/dataModel";
 
 const logLevel = v.union(
   v.literal("info"),
@@ -46,11 +47,28 @@ export const list = query({
     await requireCapability(ctx, "logs.view");
     const requestedLimit = Math.floor(args.limit ?? 100);
     const limit = Math.min(Math.max(requestedLimit, 1), 250);
-    return await ctx.db
+    const logs = await ctx.db
       .query("auditLogs")
       .withIndex("by_created_at")
       .order("desc")
       .take(limit);
+    const formId = process.env.JOTFORM_FORM_ID?.trim();
+    const receipts = new Map<string, Promise<Doc<"externalSubmissions"> | null>>();
+    return await Promise.all(logs.map(async log => {
+      if (!formId || log.category !== "jotform" || log.entityType !== "jotform_submission" || !log.entityId) return log;
+      const submissionId = log.entityId;
+      let lookup = receipts.get(submissionId);
+      if (!lookup) {
+        lookup = ctx.db.query("externalSubmissions").withIndex("by_provider_submission", q =>
+          q.eq("provider", "jotform").eq("formId", formId).eq("submissionId", submissionId)).unique();
+        receipts.set(submissionId, lookup);
+      }
+      const receipt = await lookup;
+      return receipt ? { ...log, jotformProcessing: {
+        state: receipt.state, attempts: receipt.attempts, nextRetryAt: receipt.nextRetryAt,
+        attentionNotifiedAt: receipt.attentionNotifiedAt, recoveredAt: receipt.recoveredAt,
+      } } : log;
+    }));
   },
 });
 

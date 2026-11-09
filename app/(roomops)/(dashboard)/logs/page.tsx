@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { formatDateTime } from "@/lib/ui";
+import { jotformProcessingLabel, type JotformProcessingStatus } from "@/shared/jotformRetry";
 
 type AuditLog = {
   _id: string;
@@ -23,6 +24,7 @@ type AuditLog = {
   message: string;
   detailsJson?: string;
   createdAt: number;
+  jotformProcessing?: JotformProcessingStatus;
 };
 
 const levelIcons = {
@@ -103,10 +105,15 @@ export default function LogsPage() {
         ) : (
           <div className="log-list">
             {filtered.map((log) => {
-              const Icon = levelIcons[log.level];
+              const processing = log.jotformProcessing;
+              const recovered = processing?.state === "processed";
+              const attention = processing && !recovered && (processing.attentionNotifiedAt !== undefined
+                || (processing.state === "failed" && processing.nextRetryAt === undefined));
+              const currentLevel = processing ? attention ? (processing.state === "failed" && processing.nextRetryAt === undefined ? "error" : "warning") : "info" : log.level;
+              const Icon = recovered ? CheckCircle2 : levelIcons[currentLevel];
               return (
                 <article className="log-row" key={log._id}>
-                  <span className={`log-icon log-${log.level}`}>
+                  <span className={`log-icon ${recovered ? "log-success" : `log-${currentLevel}`}`}>
                     <Icon size={16} />
                   </span>
                   <div className="log-main">
@@ -123,6 +130,12 @@ export default function LogsPage() {
                         </span>
                       )}
                     </div>
+                    {processing && <div className="log-processing-status">
+                      <span className={`status-badge ${recovered ? "status-approved" : attention ? "status-pending" : "log-info"}`}>{jotformProcessingLabel(processing)}</span>
+                      {processing.nextRetryAt !== undefined && processing.state !== "processed" && <span>Submission delayed. Retrying automatically at {formatDateTime(processing.nextRetryAt)}.</span>}
+                      {processing.state === "failed" && processing.nextRetryAt === undefined && <span>Check the integration, then use Retry a failed Jotform submission in Admin → Integrations.</span>}
+                      {processing.recoveredAt !== undefined && recovered && <span>Processed successfully at {formatDateTime(processing.recoveredAt)}. Earlier entries are retained as history.</span>}
+                    </div>}
                     {log.detailsJson && (
                       <details>
                         <summary>Technical details</summary>
